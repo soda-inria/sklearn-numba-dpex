@@ -7,12 +7,12 @@ TODO
 
 
 setup(
-    name="sklearn-numba-dppy",
+    name="sklearn-numba-dpex",
     maintainer="Olivier Grisel",
     maintainer_email="olivier.grisel@ensta.org",
-    description="numba-dppy Computational Engine for scikit-learn",
+    description="Computational Engine for scikit-learn based on numba-dpex",
     license="BSD 3-Clause License",
-    url="https://github.com/ogrisel/sklearn-numba-dppy",
+    url="https://github.com/ogrisel/sklearn-numba-dpex",
     version="0.1.0",
     long_description=LONG_DESCRIPTION,
     classifiers=[
@@ -34,10 +34,11 @@ setup(
         "Programming Language :: Python :: Implementation :: CPython",
     ],
     python_requires=">=3.8",
+    # TODO: replace "numba-dppy" by "numba-dpex" once released
     install_requires=["scikit-learn", "numba-dppy", "dpnp"],
     entry_points={
         "sklearn_engines": [
-            "kmeans=sklearn_numba_dppy.cluster.kmeans:KMeansEngine"
+            "kmeans=sklearn_numba_dpex.cluster.kmeans:KMeansEngine"
         ]
     }
 )
