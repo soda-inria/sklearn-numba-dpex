@@ -113,6 +113,14 @@ conda install cython
 pip install -e . --no-build-isolation
 ```
 
+Important: in order to use `numba-dpex`, the `llvm-spirv` compiler is required
+to be in the PATH. This can be achieved with:
+
+```
+$ export PATH=/opt/intel/oneapi/compiler/latest/linux/bin-llvm:$PATH
+```
+
+
 ### Step 3: install the `wip-engines` branch of scikit-learn
 
 In the same conda env:
