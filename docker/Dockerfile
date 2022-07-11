@@ -35,21 +35,21 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
 ARG BASE_PYPI_URL=https://pypi.org/simple
 
-# /!\ the following version must exist in intel pypi. It is recommended to
+# /!\ the following versions must exist in intel pypi. It is recommended to
 # not use version ranges, because if a higher version exists in pypi.org it
 # will be preferred over the versions in the intel pypi.
 
 ARG INTEL_NUMPY_VERSION="==1.22.3"
+ARG INTEL_SCIPY_VERSION="==1.7.3"
 
 # XXX: This can be fixed if intel can host the whole the dependency tree
 # in the INTEL_PYPI_URL instead of having to rely in pypi.org for the main part
 # of the dependency tree.
 
-# ???: it is not clear so far if those versions should also be limited to the 
+# ???: it is not clear so far if this version should also be limited to the 
 # content of the intel pypi or not. (this Dockerfile currently assumes that
 # it is not limited to intel pypi. The opposite assumption seems to create 
 # impossible build conditions.)
-ARG INTEL_SCIPY_VERSION=""
 ARG INTEL_NUMBA_VERSION="<0.56"
 
 
@@ -108,7 +108,7 @@ ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler"
 RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
-    && chmod +x $ONEAPI_DOWNLOAD_DIR/l_BaseKit_p_2022.2.0.262.sh \
+    && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
         --action install --components $ONEAPI_COMPONENTS  \
         --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
@@ -127,7 +127,7 @@ ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
 RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
-    && chmod +x $ONEAPI_DOWNLOAD_DIR/l_BaseKit_p_2022.2.0.262.sh \
+    && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
         --action modify --components $ONEAPI_COMPONENTS  \
         --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
@@ -232,7 +232,8 @@ COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 # pypi.
 # The proper fix is for intel to host all the dependency tree.
 # see https://stackoverflow.com/questions/67253141/python-pip-priority-order-with-index-url-and-extra-index-url
-RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" --no-deps \
+RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
+        "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" \ 
@@ -333,7 +334,8 @@ ARG PACKAGING_VERSION
 COPY --from=dpctl_builder $TMPDIR/dpctl*.whl $TMPDIR
 COPY --from=dpnp_builder $TMPDIR/dpnp*.whl $TMPDIR
 COPY --from=numba_dpex_builder $TMPDIR/numba_dppy*.whl $TMPDIR
-RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" --no-deps \
+RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
+        "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl*.whl $TMPDIR/dpnp*.whl \
