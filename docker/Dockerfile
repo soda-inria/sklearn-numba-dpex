@@ -106,7 +106,7 @@ ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
 ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
 ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler"
-RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR ONEAPI_LOG_DIR \
+RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
@@ -125,7 +125,7 @@ ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
 ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
 ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
-RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR ONEAPI_LOG_DIR \
+RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
@@ -180,7 +180,7 @@ RUN curl -L \
     https://github.com/pyenv/pyenv-installer/raw/${PYENV_INSTALLER_REF}/bin/pyenv-installer \
     | bash
 RUN CFLAGS="-O2 -pipe" \
-    CONFIGURE_OPTS="--enable-shared --with-computed-gotos" \
+    CONFIGURE_OPTS="--enable-shared" \
     # --enable-optimizations # possible performance improvements if building for local use
     pyenv install -v $PYTHON_VERSION && \
     pyenv global $PYTHON_VERSION
@@ -205,7 +205,7 @@ ARG CYTHON_VERSION
 ARG SCIKIT_BUILD_VERSION
 ARG ONEAPI_INSTALL_DIR
 # Install an up-to-date cmake that is necessary for some builds
-RUN  apt-get update --quiet \
+RUN apt-get update --quiet \
     && apt-get install -y --no-install-recommends \
         build-essential \
         libtool \
@@ -340,6 +340,9 @@ RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl*.whl $TMPDIR/dpnp*.whl \
         $TMPDIR/numba_dppy*.whl packaging${PACKAGING_VERSION} \
+        # HACK this package is not in the dependency tree of any of the top
+        # packages but probably should, in the meantime we add it manually
+        mkl-dpcpp \
     && pip cache purge
 
 FROM runtime_environment AS numba_dpex_dev
