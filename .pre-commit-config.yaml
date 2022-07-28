@@ -18,5 +18,5 @@ repos:
     rev: v0.961
     hooks:
      -  id: mypy
-        files: sklearn/
+        files: sklearn_numba_dpex/
         additional_dependencies: [pytest==6.2.4]
