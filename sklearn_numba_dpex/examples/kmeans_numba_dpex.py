@@ -12,7 +12,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 from numpy.random import default_rng
 import numba_dppy as dpex
-from numba import float32, uint32
+from numba import float32, uint32, int32
 
 import dpctl
 import numpy as np
@@ -146,6 +146,7 @@ def get_assignment_step_regs_kernel(rp, rq, p, q, n, dim, n_clusters):
 
     return n_cluster_groups, assignment_step_regs[n_threads, thread_group_size]
 
+
 def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters):
     n_cluster_groups = math.ceil(n_clusters/r)
     n_threads = n * math.ceil(n_clusters / r)
@@ -235,268 +236,213 @@ def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters
     return n_cluster_groups, assignment_step_fixed[n_threads, thread_group_size]
 
 
-# WIP: assignment reduction and centroid update
-# @dpex.kernel
-# def fine_assignment_step(coarse_assignments_dist, coarse_assignments_idx,
-#                          fine_assignments_dist, fine_assignments_idx):
-#     thread_i = dpex.get_global_id(0)
-#     n = coarse_assignments_dist.shape[0]
-#     if thread_i > n:
-#         return
+def get_fine_assignment_step_kernel(thread_group_size, n, n_cluster_groups):
 
-#     nb_coarse = coarse_assignments_dist.shape[1]
-#     # TODO:
-#     # 1 thread = 1 pt
-#     # thread lit n
-#     fine_dist = coarse_assignments_dist[thread_i, 0]
-#     fine_idx = coarse_assignments_idx[thread_i, 0]
-#     for i in range(1, nb_coarse):
-#         current_dist = coarse_assignments_dist[thread_i, i]
-#         smaller_dist = current_dist < fine_dist
-#         fine_dist = current_dist if smaller_dist else fine_dist
-#         fine_idx = coarse_assignments_idx[thread_i, i] if smaller_dist else fine_idx
-#     fine_assignments_dist[thread_i] = fine_dist
-#     fine_assignments_idx[thread_i] = fine_idx
+    n_threads = math.ceil(n / thread_group_size) * thread_group_size
 
-#     # TODO: use atomic add to also count the number of point per cluster
+    @dpex.kernel
+    def fine_assignment_step(coarse_assignments_dist, coarse_assignments_idx,
+                              fine_assignments_dist, fine_assignments_idx):
 
-# @dpex.kernel
-# def update_means_step_fine(x, assignments_dist, assignments_idx, centroids):
-#     return
+        thread_i = dpex.get_global_id(0)
 
-# def get_update_means_step_shm_kernel():
+        if thread_i >= n:
+            return
+
+        fine_dist = coarse_assignments_dist[thread_i, 0]
+        fine_idx = coarse_assignments_idx[thread_i, 0]
+        for i in range(1, n_cluster_groups):
+            current_dist = coarse_assignments_dist[thread_i, i]
+            smaller_dist = current_dist < fine_dist
+            fine_dist = current_dist if smaller_dist else fine_dist
+            fine_idx = coarse_assignments_idx[thread_i, i] if smaller_dist else fine_idx
+        fine_assignments_dist[thread_i] = fine_dist
+        fine_assignments_idx[thread_i] = fine_idx
+
+    return fine_assignment_step[n_threads, thread_group_size]
 
 
-#     @dpex.kernel
-#     def update_means_step_shm(x, assignments_dist, assignments_idx, centroid_counts,
-#                               centroids):
-#         '''
-#         NB: here we do not implement exactly what is given in the paper
-#         At this point we don't want to mindlessly trigger the caching of "centroids"
-#         in each work group, because we might not have enough shared memory for it.
-#         In fact, the paper implements a finer mechanism: it caches the maximum
-#         amount of centroids, and for those that can't fit in, caching is ignored
-#         and results are directly written to global memory. This requires at least
-#         having the information of how much shared memory is available for the current
-#         gpu. It seems possible (since clinfo gives it, maybe see pyopencl ?) but is
-#         left for a future TODO.
+def get_initialize_to_zeros_kernel_1(thread_group_size, n):
 
-#         What we do instead to limit the amount of shared memory is to locally remap
-#         the indexes of the centroids that are accessed by the current workgroup, so
-#         that only the relevant centroids are loaded in cache, rather than the whole
-#         array of centroids.
+    n_threads = math.ceil(n / thread_group_size) * thread_group_size
 
-#         Shared memory footprint is decreased at the cost of storing two additional
-#         arrays of size (n_clusters) per work group, and a few computations for the
-#         remapping.
-#         '''
-#         # TODO: overall, explicit castings (does a/b works if a,b ints ?)
+    @dpex.kernel
+    def initialize_to_zeros(x):
+        thread_i = dpex.get_global_id(0)
 
-#         # TOOD: is it better to define as much as we can the variables as constants
-#         # out of the function ? it seems to because it allows the compiler to
-#         # "unroll the loops" ?
-#         p = 128
-#         n = x.shape[0]
-#         dim = centroids.shape[0]
-#         n_clusters = centroids.shape[0]
-#         group_size = dpex.get_local_size(0)
+        if thread_i >= n:
+            return
 
-#         group = dpex.get_group_id(0)
+        x[thread_i] = int32(0.)
 
-#         group_nb_previous_entries = group * p
-#         group_starting_pt = math.floor(group_nb_previous_entries/dim) + 1
-#         group_end_pt = math.floor((group_nb_previous_entries + p * group_size)/dim) + 1
-#         group_nb_points_covered = group_end_pt - group_starting_pt + 1
-
-#         group_nb_clusters = dpex.local.array(shape=1, dtype=uint32)
-#         local_assignments_idx = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
-#         # ???: define those two later when nb of unique centroids is known ?
-#         local_cluster_to_global = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
-#         global_cluster_to_local = dpex.local.array(shape=n_clusters, dtype=uint32)
-#         local_cluster_count = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
-
-#         thread = dpex.get_local_id(0)
-#         thread_nb_previous_entries = group_nb_previous_entries + thread * p
-#         thread_starting_pt = math.floor(thread_nb_previous_entries/dim) + 1
-#         thread_end_pt = math.floor((thread_nb_previous_entries + p)/dim) + 1
-#         thread_starting_dim = thread_nb_previous_entries % dim
-#         thread_alloc_start = thread_starting_pt if ((thread == 0) or thread_starting_dim == 0) else (thread_starting_pt + 1)
-
-#         for i in range(thread_alloc_start, thread_end_pt + 1):
-#             cluster_idx = assignments_idx[i]
-#             cluster_count = dpex.atomic.add(local_cluster_count, cluster_idx, 1)
-#             if cluster_count == 0:
-#                 local_cluster_idx = dpex.atomic.add(group_nb_clusters, 0, 1)
-#                 local_cluster_to_global[local_cluster_idx] = cluster_idx
-#                 global_cluster_to_local[cluster_idx] = local_cluster_idx
-#             local_assignments_idx[i] = global_cluster_to_local[cluster_idx]
-
-#         dpex.barrier()
-
-#         group_nb_clusters = group_nb_clusters[0]
-#         partial_cluster_count = dpex.local.array(shape=group_nb_clusters, dtype=uint32)
-#         local_centroids = dpex.local.array(shape=(group_nb_clusters, dim), dtype=float32)
-#         nb_centroid_entries_per_thread = math.ceil(float32(group_nb_clusters * dim) / group_size)
-#         starting_entry = nb_centroid_entries_per_thread * thread
-
-#         for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
-#             row = i // dim
-#             if row > group_nb_clusters:
-#                 break
-#             col = i % dim
-#             local_centroids[row, col] = float32(0.)
-
-#         dpex.barrier()
-
-#         current_pt = thread_starting_pt
-#         current_dim = thread_starting_dim
-#         current_cluster_idx = local_assignments_idx[current_pt]
-#         for pi in range(p):
-#             if current_pt >= n:
-#                 break
-#             e = x[current_pt, current_dim]
-#             dpex.atomic.add(local_centroids, (current_cluster_idx, current_dim), e)
-#             if current_dim == 0:
-#                 dpex.atomic.add(partial_cluster_count, current_cluster_idx, 1)
-#             current_dim = (current_dim + 1) % dim
-#             if current_dim == 0:
-#                 current_pt += 1
-#                 current_cluster_idx = local_assignments_idx[current_pt]
-
-#         dpex.barrier()
-# @dpex.kernel
-# def update_means_step_fine(x, assignments_dist, assignments_idx, centroids):
-#     return
-
-# def get_update_means_step_shm_kernel():
+    return initialize_to_zeros[n_threads, thread_group_size]
 
 
-#     @dpex.kernel
-#     def update_means_step_shm(x, assignments_dist, assignments_idx, centroid_counts,
-#                               centroids):
-#         '''
-#         NB: here we do not implement exactly what is given in the paper
-#         At this point we don't want to mindlessly trigger the caching of "centroids"
-#         in each work group, because we might not have enough shared memory for it.
-#         In fact, the paper implements a finer mechanism: it caches the maximum
-#         amount of centroids, and for those that can't fit in, caching is ignored
-#         and results are directly written to global memory. This requires at least
-#         having the information of how much shared memory is available for the current
-#         gpu. It seems possible (since clinfo gives it, maybe see pyopencl ?) but is
-#         left for a future TODO.
+def get_initialize_to_zeros_kernel_2(thread_group_size, n, dim):
 
-#         What we do instead to limit the amount of shared memory is to locally remap
-#         the indexes of the centroids that are accessed by the current workgroup, so
-#         that only the relevant centroids are loaded in cache, rather than the whole
-#         array of centroids.
+    nb_items = n * dim
+    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
 
-#         Shared memory footprint is decreased at the cost of storing two additional
-#         arrays of size (n_clusters) per work group, and a few computations for the
-#         remapping.
-#         '''
-#         # TODO: overall, explicit castings (does a/b works if a,b ints ?)
+    @dpex.kernel
+    def initialize_to_zeros(x):
+        thread_i = dpex.get_global_id(0)
 
-#         # TOOD: is it better to define as much as we can the variables as constants
-#         # out of the function ? it seems to because it allows the compiler to
-#         # "unroll the loops" ?
-#         p = 128
-#         n = x.shape[0]
-#         dim = centroids.shape[0]
-#         n_clusters = centroids.shape[0]
-#         group_size = dpex.get_local_size(0)
+        if thread_i >= nb_items:
+            return
 
-#         group = dpex.get_group_id(0)
+        row = thread_i // dim
+        col = thread_i % dim
+        x[int(row), int(col)] = float32(0.)
 
-#         group_nb_previous_entries = group * p
-#         group_starting_pt = math.floor(group_nb_previous_entries/dim) + 1
-#         group_end_pt = math.floor((group_nb_previous_entries + p * group_size)/dim) + 1
-#         group_nb_points_covered = group_end_pt - group_starting_pt + 1
+    return initialize_to_zeros[n_threads, thread_group_size]
 
-#         group_nb_clusters = dpex.local.array(shape=1, dtype=uint32)
-#         local_assignments_idx = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
-#         # ???: define those two later when nb of unique centroids is known ?
-#         local_cluster_to_global = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
-#         global_cluster_to_local = dpex.local.array(shape=n_clusters, dtype=uint32)
-#         local_cluster_count = dpex.local.array(shape=group_nb_points_covered, dtype=uint32)
+def get_update_means_step_fine_kernel(thread_group_size, n, dim):
 
-#         thread = dpex.get_local_id(0)
-#         thread_nb_previous_entries = group_nb_previous_entries + thread * p
-#         thread_starting_pt = math.floor(thread_nb_previous_entries/dim) + 1
-#         thread_end_pt = math.floor((thread_nb_previous_entries + p)/dim) + 1
-#         thread_starting_dim = thread_nb_previous_entries % dim
-#         thread_alloc_start = thread_starting_pt if ((thread == 0) or thread_starting_dim == 0) else (thread_starting_pt + 1)
+    nb_items = n * dim
+    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
 
-#         for i in range(thread_alloc_start, thread_end_pt + 1):
-#             cluster_idx = assignments_idx[i]
-#             cluster_count = dpex.atomic.add(local_cluster_count, cluster_idx, 1)
-#             if cluster_count == 0:
-#                 local_cluster_idx = dpex.atomic.add(group_nb_clusters, 0, 1)
-#                 local_cluster_to_global[local_cluster_idx] = cluster_idx
-#                 global_cluster_to_local[cluster_idx] = local_cluster_idx
-#             local_assignments_idx[i] = global_cluster_to_local[cluster_idx]
+    @dpex.kernel
+    def update_means_step_fine(x, assignments_idx, centroid_counts, centroids):
+        thread_i = dpex.get_global_id(0)
 
-#         dpex.barrier()
+        if thread_i >= nb_items:
+            return
 
-#         group_nb_clusters = group_nb_clusters[0]
-#         partial_cluster_count = dpex.local.array(shape=group_nb_clusters, dtype=uint32)
-#         local_centroids = dpex.local.array(shape=(group_nb_clusters, dim), dtype=float32)
-#         nb_centroid_entries_per_thread = math.ceil(float32(group_nb_clusters * dim) / group_size)
-#         starting_entry = nb_centroid_entries_per_thread * thread
+        row = thread_i // dim
+        col = thread_i % dim
+        centroid = assignments_idx[row]
+        dpex.atomic.add(centroids, (centroid, col), x[row, col])
 
-#         for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
-#             row = i // dim
-#             if row > group_nb_clusters:
-#                 break
-#             col = i % dim
-#             local_centroids[row, col] = float32(0.)
+        if col == 0:
+            dpex.atomic.add(centroid_counts, row, 1)
 
-#         dpex.barrier()
+    return update_means_step_fine[n_threads, thread_group_size]
 
-#         current_pt = thread_starting_pt
-#         current_dim = thread_starting_dim
-#         current_cluster_idx = local_assignments_idx[current_pt]
-#         for pi in range(p):
-#             if current_pt >= n:
-#                 break
-#             e = x[current_pt, current_dim]
-#             dpex.atomic.add(local_centroids, (current_cluster_idx, current_dim), e)
-#             if current_dim == 0:
-#                 dpex.atomic.add(partial_cluster_count, current_cluster_idx, 1)
-#             current_dim = (current_dim + 1) % dim
-#             if current_dim == 0:
-#                 current_pt += 1
-#                 current_cluster_idx = local_assignments_idx[current_pt]
+def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
+    nb_items = n * dim
+    item_per_group = thread_group_size * p
+    n_threads = math.ceil(nb_items / item_per_group) * thread_group_size
+    max_nb_points_per_group = (thread_group_size * p // dim) + 1
+    local_centroid_shm_shape = (max_nb_points_per_group, dim)
 
-#         dpex.barrier()
+    # ???: this should minimize divergence ?
+    # but unreasonable for dimension more than p ?
+    if p > dim:
+        p = math.floor(p / dim) * dim
 
-#         current_row = starting_entry // dim
-#         current_cluster_idx = local_cluster_to_global[row]
-#         for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
-#             row = i // dim
-#             if row > group_nb_clusters:
-#                 break
-#             if row != current_row:
-#                 current_cluster_idx = local_cluster_to_global[row]
-#                 current_row = row
-#             col = i % dim
-#             if col == 0:
-#                 dpex.atomic.add(centroid_counts, current_cluster_idx, partial_cluster_count[row])
-#             dpex.atomic.add(centroids, (current_cluster_idx, dim), local_centroids[row, col])
+    @dpex.kernel
+    def update_means_step_shm(x, assignments_idx, centroid_counts, centroids):
+        '''
+        NB: here we do not implement exactly what is given in the paper
+        At this point we don't want to mindlessly trigger the caching of "centroids"
+        in each work group, because we might not have enough shared memory for it.
+        In fact, the paper implements a finer mechanism: it caches the maximum
+        amount of centroids, and for those that can't fit in, caching is ignored
+        and results are directly written to global memory. This requires at least
+        having the information of how much shared memory is available for the current
+        gpu. It seems possible (since clinfo gives it, maybe see pyopencl ?) but is
+        left for a future TODO.
 
+        What we do instead to limit the amount of shared memory is to locally remap
+        the indexes of the centroids that are accessed by the current workgroup, so
+        that only the relevant centroids are loaded in cache, rather than the whole
+        array of centroids.
 
-#         current_row = starting_entry // dim
-#         current_cluster_idx = local_cluster_to_global[row]
-#         for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
-#             row = i // dim
-#             if row > group_nb_clusters:
-#                 break
-#             if row != current_row:
-#                 current_cluster_idx = local_cluster_to_global[row]
-#                 current_row = row
-#             col = i % dim
-#             if col == 0:
-#                 dpex.atomic.add(centroid_counts, current_cluster_idx, partial_cluster_count[row])
-#             dpex.atomic.add(centroids, (current_cluster_idx, dim), local_centroids[row, col])
+        Shared memory footprint is decreased at the cost of storing two additional
+        arrays of size (n_clusters) per work group, and a few computations for the
+        remapping.
+        '''
+        group = dpex.get_group_id(0)
+        thread = dpex.get_local_id(0)
+
+        group_nb_previous_entries = group * item_per_group
+        thread_nb_previous_entries = group_nb_previous_entries + thread * p
+
+        thread_starting_pt = (thread_nb_previous_entries // dim)
+        thread_end_pt = ((thread_nb_previous_entries + p - 1) // dim)
+
+        thread_starting_dim = thread_nb_previous_entries % dim
+
+        thread_alloc_start = thread_starting_pt if ((thread == 0) or thread_starting_dim == 0) else (thread_starting_pt + 1)
+
+        group_nb_clusters = dpex.local.array(shape=1, dtype=uint32)
+        local_cluster_to_global = dpex.local.array(shape=max_nb_points_per_group, dtype=uint32)
+        global_cluster_to_local = dpex.local.array(shape=n_clusters, dtype=uint32)
+        local_cluster_count = dpex.local.array(shape=max_nb_points_per_group, dtype=uint32)
+        local_assignments_idx = dpex.local.array(shape=max_nb_points_per_group, dtype=uint32)
+        partial_cluster_count = dpex.local.array(shape=max_nb_points_per_group, dtype=uint32)
+        local_centroids = dpex.local.array(shape=local_centroid_shm_shape, dtype=float32)
+
+        for i in range(thread_alloc_start, thread_end_pt + 1):
+            cluster_idx = assignments_idx[i]
+            cluster_count = dpex.atomic.add(local_cluster_count, cluster_idx, 1)
+            if cluster_count == 0:
+                local_cluster_idx = dpex.atomic.add(group_nb_clusters, 0, 1)
+                local_cluster_to_global[local_cluster_idx] = cluster_idx
+                global_cluster_to_local[cluster_idx] = local_cluster_idx
+            local_assignments_idx[i] = global_cluster_to_local[cluster_idx]
+
+        dpex.barrier()
+
+        group_nb_clusters_ = group_nb_clusters[0]
+
+        # TODO; replace with this line
+        # nb_centroid_entries_per_thread = math.ceil((group_nb_clusters_ * dim) / thread_group_size)
+        # if math.ceil is fixed to return int instead of float64
+        local_nb_centroid_items = group_nb_clusters_ * dim
+        nb_centroid_entries_per_thread = local_nb_centroid_items // thread_group_size
+        if (local_nb_centroid_items % thread_group_size) > 0:
+                nb_centroid_entries_per_thread += 1
+
+        starting_entry = nb_centroid_entries_per_thread * thread
+
+        for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
+            row = i // dim
+            if row > group_nb_clusters_:
+                break
+            col = i % dim
+            local_centroids[row, col] = float32(0.)
+
+        dpex.barrier()
+
+        # ???: because we accept that threads can process p items divergence might happen.
+        # Divergence can be fixed if instead we make blocks of p items
+        # start and finish at first and last dimension respectively, and make p
+        # a multiple of dim (and always ensure that p >= dim)
+        current_pt = thread_starting_pt
+        current_dim = thread_starting_dim
+        local_cluster_idx = local_assignments_idx[current_pt]
+        for pi in range(p):
+            if current_pt >= n:
+                break
+            e = x[current_pt, current_dim]
+            dpex.atomic.add(local_centroids, (local_cluster_idx, current_dim), e)
+            if current_dim == 0:
+                dpex.atomic.add(partial_cluster_count, local_cluster_idx, 1)
+            current_dim = (current_dim + 1) % dim
+            if current_dim == 0:
+                current_pt += 1
+                local_cluster_idx = local_assignments_idx[current_pt]
+
+        dpex.barrier()
+
+        current_row = starting_entry // dim
+        local_cluster_idx = local_assignments_idx[row]
+        global_cluster_idx = local_cluster_to_global[local_cluster_idx]
+        for i in range(starting_entry, starting_entry + nb_centroid_entries_per_thread):
+            row = i // dim
+            if row > group_nb_clusters_:
+                break
+            if row != current_row:
+                local_cluster_idx = local_assignments_idx[row]
+                global_cluster_idx = local_cluster_to_global[local_cluster_idx]
+                current_row = row
+            col = i % dim
+            if col == 0:
+                dpex.atomic.add(centroid_counts, global_cluster_idx, partial_cluster_count[local_cluster_idx])
+            dpex.atomic.add(centroids, (global_cluster_idx, dim), local_centroids[row, col])
+
+    return update_means_step_shm[n_threads, thread_group_size]
 
 
 def kmeans_fit_numba_dpex(x_train,
@@ -525,6 +471,7 @@ def kmeans_fit_numba_dpex(x_train,
     # implement random AND ++
     rng = default_rng(random_state)
     centroids = np.array(rng.choice(x_train, n_clusters, replace=False), dtype=np.float32).copy()
+    centroid_counts = np.empty(shape=n_clusters, dtype=np.int32)
 
     # TODO: the conditions used here to select the best kernel are the conditions
     # suggested in the paper, but it seems that the conditions are slightly
@@ -544,31 +491,45 @@ def kmeans_fit_numba_dpex(x_train,
         n_cluster_groups, assignment_step = get_assignment_step_regs_kernel(
             rp, rq, p, q, n, dim, n_clusters)
 
+    if n_cluster_groups > 1:
+        thread_group_size = 256
+        fine_assignment_step = get_fine_assignment_step_kernel(256, n, n_cluster_groups)
+
+    if dim >= 8192:
+        thread_group_size = 256
+        update_means_step = get_update_means_step_fine_kernel(thread_group_size, n, dim)
+    else:
+        p = 128
+        # TODO: should be the optimized one
+        thread_group_size = 256
+        update_means_step = get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters)
+
+    initialize_to_zeros_1 = get_initialize_to_zeros_kernel_1(thread_group_size=256, n=n_clusters)
+    initialize_to_zeros_2 = get_initialize_to_zeros_kernel_2(thread_group_size=256, n=n_clusters, dim=dim)
+
     coarse_assignments_dist = np.empty((n, n_cluster_groups), dtype=np.float32)
     coarse_assignments_idx = np.empty((n, n_cluster_groups), dtype=np.uint32)
 
     assignment_step(x_train, centroids, coarse_assignments_dist, coarse_assignments_idx)
 
-    # fine_assignments_thread_group_size = 256
-    # fine_assignments_n_threads = np.ceil(n/256) * 256
+    if n_cluster_groups > 1:
+        fine_assignments_dist = np.empty(n, dtype=np.float32)
+        fine_assignments_idx = np.empty(n, dtype=np.uint32)
 
-    # if n_cluster_groups > 1:
-    #     fine_assignments_dist = np.empty(n, dtype=np.float32)
-    #     fine_assignments_idx = np.empty(n, dtype=np.uint32)
+    if n_cluster_groups > 1:  # still TODO
+        fine_assignment_step(
+                coarse_assignments_dist, coarse_assignments_idx,
+                fine_assignments_dist, fine_assignments_idx)
+    else:
+        fine_assignments_dist = coarse_assignments_dist[:]
+        fine_assignments_idx = coarse_assignments_idx[:]
 
-    # while True:
-    #     import ipdb; ipdb.set_trace()
-    #     assignment_step(x_train, centroids, coarse_assignments_dist, coarse_assignments_idx)
-    #     if n_cluster_groups > 1:  # still TODO
-    #         fine_assignment_step[
-    #             fine_assignments_n_threads, fine_assignments_thread_group_size](
-    #                 coarse_assignments_dist, coarse_assignments_idx,
-    #                 fine_assignments_dist, fine_assignments_idx)
-    #     else:
-    #         fine_assignments_dist = coarse_assignments_dist[:]
-    #         fine_assignments_idx = coarse_assignments_idx[:]
-
-    # update_means = (update_means_step_fine if dim >= 8192 else update_means_step_shm)
+    initialize_to_zeros_2(centroids)
+    initialize_to_zeros_1(centroid_counts)
+    import ipdb; ipdb.set_trace()
+    update_means_step(x_train, fine_assignments_idx, centroid_counts, centroids)
+    import ipdb; ipdb.set_trace()
+    print("Finished one iteration.")
 
 
 if __name__ == "__main__":
@@ -582,7 +543,9 @@ if __name__ == "__main__":
     x_test = scaler_x.transform(x_test)
 
     # !!!: care that the arrays are contiguous in memory. Else segfaults happen.
-    x_train = np.array(x_train, dtype=np.float32).copy()
+    # FIXME: apparently there is some bad edge condition that makes absurd results for
+    # the last two rows.
+    x_train = np.array(x_train[:-2], dtype=np.float32).copy()
 
     device = dpctl.select_default_device()
     print("Using device ...")
