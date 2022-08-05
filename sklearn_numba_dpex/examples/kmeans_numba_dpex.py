@@ -11,7 +11,7 @@ from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import MinMaxScaler
 
 from numpy.random import default_rng
-import numba_dpex as dpex
+import numba_dppy as dpex
 from numba import float32, uint32, int32
 
 import dpctl
@@ -145,12 +145,11 @@ def get_assignment_step_regs_kernel(rp, rq, p, q, n, dim, n_clusters):
 
 def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters):
     n_cluster_groups = math.ceil(n_clusters/r)
-    n_threads = n * n_cluster_groups
-    n_threads = (1+math.ceil(n_threads / thread_group_size)) * (thread_group_size)
+    n_threads = (math.ceil(n / thread_group_size)) * (thread_group_size) * n_cluster_groups
     n_windows = math.ceil(dim/h)
     window_shm_shape = (r, h)
     window_elem_nb = (h * r)
-    nb_window_entry_per_thread = math.ceil(r * h / thread_group_size)
+    nb_window_entry_per_thread = math.ceil((r * h) / thread_group_size)
 
     @dpex.kernel
     def assignment_step_fixed(x_train, centroids, coarse_assignments_dist,
@@ -165,18 +164,20 @@ def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters
 
         window = dpex.local.array(shape=window_shm_shape, dtype=float32)
         partial_sums = dpex.private.array(shape=r, dtype=float32)
+        for i in range(r):
+            partial_sums[i] = float32(0.)
 
         for window_k in range(n_windows):
 
             first_dim_global_idx = window_k * h
-
+            first_flat_idx = local_thread * nb_window_entry_per_thread
             # load memory
             for k in range(nb_window_entry_per_thread):
-                flat_idx = local_thread * nb_window_entry_per_thread + k
+                flat_idx = first_flat_idx + k
                 if flat_idx >= window_elem_nb:
-                    continue
-                row = flat_idx // r
-                col = flat_idx % r
+                    break
+                row = flat_idx // h
+                col = flat_idx % h
                 centroids_row = first_centroid_global_idx + row
                 centroids_col = col + first_dim_global_idx
                 if centroids_row < n_clusters and centroids_col < dim:
@@ -189,7 +190,6 @@ def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters
             # ???: We've assumed that the execution order of thread groups follow
             # their indexing to make the most out of L1 cache. It sounds sensible
             # but does it really hold ?
-            first_window = window_k == 0
             for k in range(r):
                 if (first_centroid_global_idx + k) >= n_clusters:
                     break
@@ -203,10 +203,7 @@ def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters
                     x_train_feature = x_train[x_train_global_idx, current_dim_global_idx]
                     diff = centroid_feature - x_train_feature
                     tmp += diff * diff
-                if first_window:
-                    partial_sums[k] = tmp
-                else:
-                    partial_sums[k] += tmp
+                partial_sums[k] += tmp
 
             # wait that everybody is done with reading shared memory before rewriting
             # it for the next window
@@ -284,7 +281,7 @@ def get_initialize_to_zeros_kernel_2(thread_group_size, n, dim):
 
         row = thread_i // dim
         col = thread_i % dim
-        x[int(row), int(col)] = float32(0.)
+        x[row, col] = float32(0.)
 
     return initialize_to_zeros[n_threads, thread_group_size]
 
@@ -473,20 +470,19 @@ def kmeans_fit_numba_dpex(x_train,
     # suggested in the paper, but it seems that the conditions are slightly
     # different when reading the implementation of the authors. Find the
     # differences between the two and use the appropriate best conditions.
-    # if n_clusters <= 32 or dim >= 64 or True:
-    #     # TODO: NOT READY YET (returns incorrect values)
-    #     h = 16
-    #     r = 32
-    #     thread_group_size = 256
-    #     n_cluster_groups, assignment_step = get_assignment_step_fixed_kernel(
-    #         h, r, thread_group_size, n, dim, n_clusters)
-    # else:
-    rq = 4
-    rp = 4
-    p = 32
-    q = 4
-    n_cluster_groups, assignment_step = get_assignment_step_regs_kernel(
-        rp, rq, p, q, n, dim, n_clusters)
+    if n_clusters <= 32 or dim >= 64 or True:
+        h = 16
+        r = 32
+        thread_group_size = 256
+        n_cluster_groups, assignment_step = get_assignment_step_fixed_kernel(
+            h, r, thread_group_size, n, dim, n_clusters)
+    else:
+        rq = 4
+        rp = 4
+        p = 32
+        q = 4
+        n_cluster_groups, assignment_step = get_assignment_step_regs_kernel(
+            rp, rq, p, q, n, dim, n_clusters)
 
     if n_cluster_groups > 1:
         thread_group_size = 256
@@ -520,8 +516,6 @@ def kmeans_fit_numba_dpex(x_train,
     else:
         fine_assignments_dist = coarse_assignments_dist[:]
         fine_assignments_idx = coarse_assignments_idx[:]
-
-    import ipdb; ipdb.set_trace()
 
     initialize_to_zeros_2(centroids)
     initialize_to_zeros_1(centroid_counts)
