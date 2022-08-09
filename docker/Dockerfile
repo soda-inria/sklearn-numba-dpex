@@ -6,10 +6,10 @@
 # editing the file or with the command line).
 # The build can be fairly long (up to one hour on low-end machines.)
 # To start a container, use e.g.:
-# 
+#
 #      sudo docker run --rm --name my_container -it -v /my/host/volume/:/mounted/volume --device=/dev/dri numba_dpex_dev
 #
-# The --device=/dev/dri option enables GPU passthrough (as long as the user 
+# The --device=/dev/dri option enables GPU passthrough (as long as the user
 # has permissions, e.g. by being a member of the video group)
 
 # The `ubuntu2004_intel_drivers` ships an up-to-date installation of the
@@ -46,9 +46,9 @@ ARG INTEL_SCIPY_VERSION="==1.7.3"
 # in the INTEL_PYPI_URL instead of having to rely in pypi.org for the main part
 # of the dependency tree.
 
-# ???: it is not clear so far if this version should also be limited to the 
+# ???: it is not clear so far if this version should also be limited to the
 # content of the intel pypi or not. (this Dockerfile currently assumes that
-# it is not limited to intel pypi. The opposite assumption seems to create 
+# it is not limited to intel pypi. The opposite assumption seems to create
 # impossible build conditions.)
 ARG INTEL_NUMBA_VERSION="<0.56"
 
@@ -195,6 +195,8 @@ ARG TMPDIR
 ARG CMAKE_VERSION
 ARG CMAKE_VERSION_BUILD
 ARG CMAKE_BUILD_DIR=$TMPDIR/cmake
+ARG CMAKE_INSTALL_DIR=/opt/cmake
+ARG CMAKE_INSTALLER_NAME=cmake-${CMAKE_VERSION}.${CMAKE_VERSION_BUILD}-linux-x86_64.sh
 ARG INTEL_PYPI_URL
 ARG BASE_PYPI_URL
 ARG INTEL_NUMPY_VERSION
@@ -205,6 +207,7 @@ ARG CYTHON_VERSION
 ARG SCIKIT_BUILD_VERSION
 ARG ONEAPI_INSTALL_DIR
 # Install an up-to-date cmake that is necessary for some builds
+# Taken from https://askubuntu.com/a/865294
 RUN apt-get update --quiet \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -216,15 +219,12 @@ RUN apt-get update --quiet \
         ninja-build \
     && rm -rf /var/lib/apt/lists/*
 RUN apt purge -y --auto-remove cmake \
-    && mkdir -p $CMAKE_BUILD_DIR \
+    && mkdir -p $CMAKE_BUILD_DIR $CMAKE_INSTALL_DIR \
     && cd $CMAKE_BUILD_DIR \
-    && wget https://cmake.org/files/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}.${CMAKE_VERSION_BUILD}.tar.gz \
-    && tar -xzvf cmake-${CMAKE_VERSION}.${CMAKE_VERSION_BUILD}.tar.gz \
-    && cd cmake-${CMAKE_VERSION}.${CMAKE_VERSION_BUILD} \
-    && ./bootstrap \
-    && make -j$(nproc) \
-    && sudo make install \
+    && wget https://cmake.org/files/v${CMAKE_VERSION}/${CMAKE_INSTALLER_NAME} \
+    && sh ${CMAKE_INSTALLER_NAME} --prefix=${CMAKE_INSTALL_DIR} --skip-license \
     && rm -Rf $CMAKE_BUILD_DIR
+ENV PATH=$CMAKE_INSTALL_DIR/bin:$PATH
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 # install some common python prerequisites for dpctl, dpnp and numba-dpex builds
@@ -236,7 +236,7 @@ RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
-        "scipy${INTEL_SCIPY_VERSION}" \ 
+        "scipy${INTEL_SCIPY_VERSION}" \
         wheel${WHEEL_VERSION} cython${CYTHON_VERSION} \
         scikit-build${SCIKIT_BUILD_VERSION} \
     && pip cache purge
@@ -310,6 +310,12 @@ RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
     && cd $NUMBA_DPEX_BUILD_DIR \
     && git clone --recursive -b $NUMBA_DPEX_GIT_BRANCH --depth 1 $NUMBA_DPEX_GIT_URL . \
     && source $ONEAPI_INSTALL_DIR/setvars.sh \
+    # HACK: currently, there is an issue with the bdist_wheel configuration for numba_dpex
+    # that causes missing files in the final tarball.
+    # The workaround consists in triggering building steps by running `setup.py develop`
+    # before running `setup.py bdist_wheel`.
+    # See https://github.com/ogrisel/sklearn-numba-dpex/issues/5
+    && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \
     && cp dist/numba_dppy*.whl $TMPDIR \
