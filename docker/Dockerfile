@@ -313,8 +313,8 @@ RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
     # HACK: currently, there is an issue with the bdist_wheel configuration for numba_dpex
     # that causes missing files in the final tarball.
     # The workaround consists in triggering building steps by running `setup.py develop`
-    # before running `setup.py bdist_wheel`. See
-    # see https://github.com/ogrisel/sklearn-numba-dpex/issues/5
+    # before running `setup.py bdist_wheel`.
+    # See https://github.com/ogrisel/sklearn-numba-dpex/issues/5
     && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \
