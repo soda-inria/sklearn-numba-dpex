@@ -10,6 +10,15 @@ from sklearn.utils._testing import assert_allclose
 
 def test_placeholder():
     """Placeholder test for CI"""
+    try:
+        import numba_dpex as dpex
+    except ImportError:
+        import numba_dppy as dpex
+
+    import dpctl
+
+    # There must be at least one usable device.
+    assert len(dpctl.get_devices()) > 0
 
 
 @pytest.mark.skip(reason="KMeans has not been implemented yet.")
