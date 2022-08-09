@@ -1,0 +1,22 @@
+name: Run tests
+on:
+  pull_request:
+  push: { branches: main }
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: ubuntu-latest
+    container: intel/oneapi-basekit:2022.2-devel-ubuntu20.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Install sklearn-numba-dpex
+      run: pip install -e . --no-build-isolation
+
+    - name: Run tests
+      run: |
+        pip install pytest
+        pytest .

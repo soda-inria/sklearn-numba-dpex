@@ -9,6 +9,7 @@
 .DS_Store
 build
 
+*.egg-info
 dist/
 MANIFEST
 doc/_build/
