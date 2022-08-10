@@ -318,7 +318,7 @@ def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
     local_centroid_shm_shape = (max_local_centroids_nb, dim)
 
     n_clusters_per_thread = math.ceil(n_clusters / thread_group_size)
-    nb_centroid_entries_per_thread = math.ceil((max_local_centroids_nb * dim) / thread_group_size)
+    nb_centroid_items_per_thread = math.ceil((max_local_centroids_nb * dim) / thread_group_size)
 
     @dpex.kernel
     def update_means_step_shm(x, assignments_idx, centroid_counts, centroids):
@@ -332,10 +332,10 @@ def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
         local_cluster_count = dpex.local.array(shape=n_clusters, dtype=int32)
         local_centroids = dpex.local.array(shape=local_centroid_shm_shape, dtype=float32)
 
-        group_nb_previous_entries = group * item_per_group
-        thread_nb_previous_entries = group_nb_previous_entries + (thread * p)
-        thread_starting_pt = (thread_nb_previous_entries // dim)
-        thread_starting_dim = thread_nb_previous_entries % dim
+        group_nb_previous_items = group * item_per_group
+        thread_nb_previous_items = group_nb_previous_items + (thread * p)
+        thread_starting_pt = (thread_nb_previous_items // dim)
+        thread_starting_dim = thread_nb_previous_items % dim
 
         if thread == 0:
             group_nb_clusters[0] = int32(0)
@@ -362,9 +362,9 @@ def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
 
         dpex.barrier()
 
-        starting_entry = nb_centroid_entries_per_thread * thread
+        starting_entry = nb_centroid_items_per_thread * thread
 
-        for i in range(nb_centroid_entries_per_thread):
+        for i in range(nb_centroid_items_per_thread):
             idx = i + starting_entry
             row = idx // dim
             if row >= max_local_centroids_nb:
@@ -405,7 +405,7 @@ def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
 
         group_nb_clusters_ = group_nb_clusters[0]
         current_row = -1
-        for i in range(nb_centroid_entries_per_thread):
+        for i in range(nb_centroid_items_per_thread):
             idx = i + starting_entry
             row = idx // dim
             if row >= group_nb_clusters_:
@@ -419,6 +419,91 @@ def get_update_means_step_shm_kernel(p, thread_group_size, n, dim, n_clusters):
             dpex.atomic.add(centroids, (global_cluster_idx, int(col)), local_centroids[row, col])
 
     return update_means_step_shm[n_threads, thread_group_size]
+
+
+def get_broadcast_division_kernel(thread_group_size, n, dim):
+    nb_items = n * dim
+    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
+
+    @dpex.kernel
+    def broadcast_division_kernel(x, v):
+        group = dpex.get_group_id(0)
+        thread = dpex.get_local_id(0)
+        group_nb_previous_items = group * thread_group_size
+        thread_nb_previous_items = group_nb_previous_items + thread
+        current_pt = (thread_nb_previous_items // dim)
+        current_dim = thread_nb_previous_items % dim
+        if current_pt >= n:
+            return
+        x[current_pt, current_dim] = x[current_pt, current_dim] / float32(v[current_pt])
+
+    return broadcast_division_kernel[n_threads, thread_group_size]
+
+# we assume thread_group_size is a power of 2
+# NB: numba_dpex could probably expose high level function to implement faster reductions
+def get_sum_reduction_kernel(thread_group_size):
+    local_nb_iterations = math.floor(math.log2(thread_group_size))
+
+    @dpex.kernel
+    def sum_reduction_kernel(v, w):
+        # Commented code that is needed if we assume that thread_group_size is not a
+        # power of 2
+
+        # n_groups = dpex.get_num_groups()
+        group = dpex.get_group_id(0)
+        thread = dpex.get_local_id(0)
+        first_thread = (thread == 0)
+
+        n = v.shape[0]
+        # last_group_size = n % thread_group_size
+        # last_group_id = n_groups - 1
+        # full_last_group = (last_group_size == 0)
+
+        shm = dpex.local.array(thread_group_size, dtype=float32)
+
+        group_start = group * thread_group_size * 2
+        thread_operand_1 = group_start + thread
+        thread_operand_2 = group_start + thread_group_size + thread
+
+        if (thread_operand_1 >= n):
+            shm[thread] = float32(0.)
+        elif (thread_operand_2 >= n):
+            shm[thread] = v[thread_operand_1]
+        else:
+            shm[thread] = (v[thread_operand_1] + v[thread_operand_2])
+
+        dpex.barrier()
+
+        # if (group < last_group_id) or full_last_group:
+        #     current_size = thread_group_size
+        # else:
+        #     current_size = last_group_size
+
+        current_size = thread_group_size
+        for i in range(local_nb_iterations):
+            # offset = current_size % 2
+            current_size = current_size // 2
+            if thread < current_size:
+                shm[thread] += shm[thread + current_size]
+                # if (offset == 1) and first_thread:
+                #     shm[0] = shm[0] + shm[current_size * 2]
+
+            dpex.barrier()
+
+        if first_thread:
+            w[group] = shm[0]
+
+    def sum_reduction(v):
+        n_groups = v.shape[0]
+        while n_groups > 1:
+            n_groups = math.ceil(n_groups/(2 * thread_group_size))
+            n_threads = n_groups * thread_group_size
+            w = dpctl.tensor.empty(n_groups, dtype=np.float32)
+            sum_reduction_kernel[n_threads, thread_group_size](v, w)
+            v = w
+        return v
+
+    return sum_reduction
 
 
 def kmeans_fit_numba_dpex(x_train,
@@ -484,6 +569,10 @@ def kmeans_fit_numba_dpex(x_train,
     initialize_to_zeros_1 = get_initialize_to_zeros_kernel_1(thread_group_size=256, n=n_clusters)
     initialize_to_zeros_2 = get_initialize_to_zeros_kernel_2(thread_group_size=256, n=n_clusters, dim=dim)
 
+    broadcast_division = get_broadcast_division_kernel(thread_group_size=256, n=n_clusters, dim=dim)
+
+    sum_reduction = get_sum_reduction_kernel(thread_group_size=256)
+
     coarse_assignments_dist = dpctl.tensor.empty((n, n_cluster_groups), dtype=np.float32)
     coarse_assignments_idx = dpctl.tensor.empty((n, n_cluster_groups), dtype=np.uint32)
     assignment_step(x_train, centroids, coarse_assignments_dist, coarse_assignments_idx)
@@ -502,6 +591,8 @@ def kmeans_fit_numba_dpex(x_train,
     initialize_to_zeros_1(centroid_counts)
 
     update_means_step(x_train, fine_assignments_idx, centroid_counts, centroids)
+    broadcast_division(centroids, centroid_counts)
+    dist = sum_reduction(fine_assignments_dist)
     print("Finished one iteration.")
 
 
