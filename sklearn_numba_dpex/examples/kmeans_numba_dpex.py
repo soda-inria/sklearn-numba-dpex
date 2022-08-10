@@ -575,25 +575,32 @@ def kmeans_fit_numba_dpex(x_train,
 
     coarse_assignments_dist = dpctl.tensor.empty((n, n_cluster_groups), dtype=np.float32)
     coarse_assignments_idx = dpctl.tensor.empty((n, n_cluster_groups), dtype=np.uint32)
-    assignment_step(x_train, centroids, coarse_assignments_dist, coarse_assignments_idx)
+    fine_assignments_dist = dpctl.tensor.empty(n, dtype=np.float32)
+    fine_assignments_idx = dpctl.tensor.empty(n, dtype=np.uint32)
 
-    if n_cluster_groups > 1:
-        fine_assignments_dist = dpctl.tensor.empty(n, dtype=np.float32)
-        fine_assignments_idx = dpctl.tensor.empty(n, dtype=np.uint32)
-        fine_assignment_step(
-                coarse_assignments_dist, coarse_assignments_idx,
-                fine_assignments_dist, fine_assignments_idx)
-    else:
-        fine_assignments_dist = coarse_assignments_dist[:]
-        fine_assignments_idx = coarse_assignments_idx[:]
+    def _single_iteration():
+        assignment_step(x_train, centroids, coarse_assignments_dist, coarse_assignments_idx)
 
-    initialize_to_zeros_2(centroids)
-    initialize_to_zeros_1(centroid_counts)
+        if n_cluster_groups > 1:
+            fine_assignment_step(
+                    coarse_assignments_dist, coarse_assignments_idx,
+                    fine_assignments_dist, fine_assignments_idx)
+        else:
+            fine_assignments_dist[:] = coarse_assignments_dist[:]
+            fine_assignments_idx[:] = coarse_assignments_idx[:]
 
-    update_means_step(x_train, fine_assignments_idx, centroid_counts, centroids)
-    broadcast_division(centroids, centroid_counts)
-    dist = sum_reduction(fine_assignments_dist)
-    print("Finished one iteration.")
+        initialize_to_zeros_2(centroids)
+        initialize_to_zeros_1(centroid_counts)
+        update_means_step(x_train, fine_assignments_idx, centroid_counts, centroids)
+        broadcast_division(centroids, centroid_counts)
+        return dpctl.tensor.asnumpy(sum_reduction(fine_assignments_dist))[0]
+
+    dist = np.inf
+    prev_dist = 0
+    while np.abs(dist - prev_dist) > tol:
+        prev_dist = dist
+        dist = _single_iteration()
+        print((prev_dist, dist))
 
 
 if __name__ == "__main__":
