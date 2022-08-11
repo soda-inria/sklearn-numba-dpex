@@ -75,13 +75,13 @@ ARG CMAKE_VERSION_BUILD=2
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.13.0dev2
+ARG DPCTL_GIT_BRANCH=0.13.0
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.10.0
+ARG DPNP_GIT_BRANCH=0.10.1
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.18.0
+ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
@@ -318,7 +318,7 @@ RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
     && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \
-    && cp dist/numba_dppy*.whl $TMPDIR \
+    && cp dist/numba_dpex*.whl $TMPDIR \
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
@@ -339,13 +339,13 @@ ARG INTEL_NUMBA_VERSION
 ARG PACKAGING_VERSION
 COPY --from=dpctl_builder $TMPDIR/dpctl*.whl $TMPDIR
 COPY --from=dpnp_builder $TMPDIR/dpnp*.whl $TMPDIR
-COPY --from=numba_dpex_builder $TMPDIR/numba_dppy*.whl $TMPDIR
+COPY --from=numba_dpex_builder $TMPDIR/numba_dpex*.whl $TMPDIR
 RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl*.whl $TMPDIR/dpnp*.whl \
-        $TMPDIR/numba_dppy*.whl packaging${PACKAGING_VERSION} \
+        $TMPDIR/numba_dpex*.whl packaging${PACKAGING_VERSION} \
         # HACK this package is not in the dependency tree of any of the top
         # packages but probably should, in the meantime we add it manually
         mkl-dpcpp \
