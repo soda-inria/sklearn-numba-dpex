@@ -18,6 +18,7 @@ import dpctl
 import numpy as np
 import math
 
+import time
 
 # NB: must have rq <= p and rp <= q
 def get_assignment_step_regs_kernel(rp, rq, p, q, n, dim, n_clusters):
@@ -164,6 +165,7 @@ def get_assignment_step_fixed_kernel(h, r, thread_group_size, n, dim, n_clusters
 
         window = dpex.local.array(shape=window_shm_shape, dtype=float32)
         partial_sums = dpex.private.array(shape=r, dtype=float32)
+
         for i in range(r):
             partial_sums[i] = float32(0.)
 
@@ -523,15 +525,12 @@ def kmeans_fit_numba_dpex(x_train,
     # TODO: write a kernel for this ?
     # x_train[:] = x_train - x_train.mean(axis=0)
 
-    # TODO: use SYCL array rather than numpy arrays
-    # enables finer control of data location
     dim = x_train.shape[1]
     n = x_train.shape[0]
 
     # TODO: write a kernel for initialization on GPU
     # implement random AND ++
-    rng = default_rng(random_state)
-    centroids = np.array(rng.choice(x_train, n_clusters, replace=False), dtype=np.float32).copy()
+    centroids = np.array(init).copy()
     centroid_counts = dpctl.tensor.empty(n_clusters, dtype=np.int32)
     x_train = dpctl.tensor.from_numpy(x_train)
     centroids = dpctl.tensor.from_numpy(centroids)
@@ -595,12 +594,17 @@ def kmeans_fit_numba_dpex(x_train,
         broadcast_division(centroids, centroid_counts)
         return dpctl.tensor.asnumpy(sum_reduction(fine_assignments_dist))[0]
 
+    inertia = np.inf
     dist = np.inf
-    prev_dist = 0
-    while np.abs(dist - prev_dist) > tol:
+    iteration = 0
+    while inertia > tol and iteration < max_iter:
         prev_dist = dist
         dist = _single_iteration()
-        print((prev_dist, dist))
+        print("iteration %d inertia %f" % (iteration, dist))
+        iteration += 1
+        # TODO: convergence should not be monitored on sum of the dists but
+        # on centroid deltas !
+        inertia = np.abs(prev_dist - dist)
 
 
 if __name__ == "__main__":
@@ -615,14 +619,27 @@ if __name__ == "__main__":
 
     # !!!: care that the arrays are contiguous in memory. Else segfaults happen.
     x_train = np.array(x_train, dtype=np.float32).copy()
+    random_state=123
+    n_clusters=127
+    rng = default_rng(random_state)
+    init = np.array(rng.choice(x_train, n_clusters, replace=False), dtype=np.float32)
 
     device = dpctl.select_default_device()
     print("Using device ...")
     device.print_device_info()
-    kmeans_fit_numba_dpex(x_train, y_train, n_clusters=127, init="random",
-                          n_init=10, max_iter=300, tol=1e-4, random_state=123,
+    t0 = time.perf_counter()
+    kmeans_fit_numba_dpex(x_train, y_train, n_clusters=127, init=init,
+                          n_init=1, max_iter=100, tol=1e-12, random_state=123,
                           algorithm="full", copy_x=False)
+    print(time.perf_counter() - t0)
     print("Done...")
+
+    from sklearn.cluster import KMeans
+    est = KMeans(n_clusters=n_clusters, init=init, n_init=1, max_iter=100, tol=1e-4,
+            random_state=123, algorithm="lloyd", verbose=1)
+    t0 = time.perf_counter()
+    est.fit(x_train)
+    print(time.perf_counter() - t0)
 
     # In the thereafter commented block: some code to try sklearn vanilla kmeans
     # and sklearn intelex kmeans
