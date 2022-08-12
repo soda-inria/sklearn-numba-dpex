@@ -10,11 +10,7 @@ from sklearn.utils._testing import assert_allclose
 
 def test_placeholder():
     """Placeholder test for CI"""
-    try:
-        import numba_dpex as dpex
-    except ImportError:
-        import numba_dppy as dpex
-
+    import numba_dpex as dpex
     import dpctl
 
     # There must be at least one usable device.
