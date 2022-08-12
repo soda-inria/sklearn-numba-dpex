@@ -586,6 +586,107 @@ def get_sum_reduction_kernel(thread_group_size):
     return sum_reduction
 
 
+def get_fused_kernel_fixed_window(n, dim, n_clusters, thread_group_size, h, r):
+    # NB: r should be a multiple of warp size
+    # thread_group_size should also be a multiple of warp size
+    # r should be smaller than thread_group_size
+    # we assume that thread_group_size is a multiple of r
+    # (ideally r = warp_size)
+
+    n_cluster_groups = math.ceil(n_clusters / r)
+    n_threads = (math.ceil(n / thread_group_size)) * (thread_group_size)
+    n_dim_windows = math.ceil(dim / h)
+    window_shm_shape = (r, h)
+    window_elem_nb = h * r
+
+    def fused_kernel_fixed_window(
+        x_train, centroids, centroid_counts, inertia
+    ):
+        group = dpex.get_group_id(0)
+        global_thread = dpex.get_global_id(0)
+        local_thread = dpex.get_local_id(0)
+
+        window_shm = dpex.local.array(shape=window_shm_shape, dtype=float32)
+        partial_sums = dpex.private.array(shape=r, dtype=float32)
+
+        first_centroid_global_idx = 0
+
+        for cluster_group in range(n_cluster_groups):
+
+            for i in range(r):
+                partial_sums[i] = float32(0.0)
+
+            first_dim_global_idx = 0
+
+            for dim_window in range(n_dim_windows):
+
+                first_flat_idx = local_thread * nb_window_entry_per_thread
+                # load memory
+                for k in range(nb_window_entry_per_thread):
+                    flat_idx = first_flat_idx + k
+                    if flat_idx >= window_elem_nb:
+                        break
+                    row = flat_idx // h
+                    col = flat_idx % h
+                    centroids_row = first_centroid_global_idx + row
+                    centroids_col = col + first_dim_global_idx
+                    if centroids_row < n_clusters and centroids_col < dim:
+                        window[row, col] = centroids[
+                            centroids_row, centroids_col
+                        ]
+
+                dpex.barrier()
+                # compute partial sums
+                # NB: performance here relies on L1 cache for x_train_feature quick
+                # read access
+                # ???: We've assumed that the execution order of thread groups follow
+                # their indexing to make the most out of L1 cache. It sounds sensible
+                # but does it really hold ?
+                for k in range(r):
+                    if (first_centroid_global_idx + k) >= n_clusters:
+                        break
+                    tmp = float32(0.0)
+                    for d in range(h):
+                        current_dim_global_idx = d + first_dim_global_idx
+                        if current_dim_global_idx >= dim:
+                            break
+                        centroid_feature = window[k, d]
+                        # performance for the line thereafter relies on L1 cache
+                        x_train_feature = x_train[
+                            x_train_global_idx, current_dim_global_idx
+                        ]
+                        diff = centroid_feature - x_train_feature
+                        tmp += diff * diff
+                    partial_sums[k] += tmp
+
+                # wait that everybody is done with reading shared memory before rewriting
+                # it for the next window
+                dpex.barrier()
+
+                first_dim_global_idx += h
+
+            min_dist = partial_sums[0]
+            min_idx = uint32(0)
+            for k in range(1, r):
+                if (first_centroid_global_idx + k) >= n_clusters:
+                    break
+                current_dist = partial_sums[k]
+                smaller_dist = current_dist < min_dist
+                min_dist = current_dist if smaller_dist else min_dist
+                min_idx = uint32(k) if smaller_dist else min_idx
+
+            coarse_assignments_dist[
+                x_train_global_idx, centroid_window
+            ] = min_dist
+            coarse_assignments_idx[x_train_global_idx, centroid_window] = (
+                min_idx + first_centroid_global_idx
+            )
+
+        first_centroid_global_idx += r
+
+    return
+
+
 def kmeans_fit_numba_dpex(
     x_train,
     y_train,
