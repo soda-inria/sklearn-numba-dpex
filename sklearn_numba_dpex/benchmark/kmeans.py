@@ -2,10 +2,7 @@ from sklearn.cluster import KMeans
 from time import perf_counter
 import inspect
 import sklearn
-import dpctl
-from sklearn_numba_dpex.kmeans.sklearn import kmeans as sklearn_kmeans
-from sklearn_numba_dpex.kmeans.daal4py import kmeans as daal4py_kmeans
-from sklearn_numba_dpex.kmeans.dpex import kmeans_fused as dpex_kmeans_fused
+
 
 VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 
@@ -34,8 +31,7 @@ class KMeansTimeit:
                 else self.sample_weight.copy()
             )
 
-            sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_fn
-            estimator = KMeans(
+            est_kwargs = dict(
                 n_clusters=n_clusters,
                 init=centers_init,
                 max_iter=max_iter,
@@ -47,9 +43,18 @@ class KMeansTimeit:
                 algorithm="lloyd",
             )
 
+            sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_fn
+            estimator = KMeans(**est_kwargs)
+
             print(
                 f"Running {name} with parameters max_iter={max_iter} tol={tol} ..."
             )
+
+            # dry run, to be fair for JIT implementations
+            KMeans(**est_kwargs).set_params(max_iter=2).fit(
+                X, sample_weight=sample_weight
+            )
+
             t0 = perf_counter()
             estimator.fit(X, sample_weight=sample_weight)
             t1 = perf_counter()
@@ -69,8 +74,19 @@ class KMeansTimeit:
 
 
 if __name__ == "__main__":
+    # TODO: also checks that the results are close
+    # TODO: ensure that effective n_iter is equal for all runs
+
+    from sklearn_numba_dpex.kmeans.sklearn import kmeans as sklearn_kmeans
+    from sklearn_numba_dpex.kmeans.daal4py import kmeans as daal4py_kmeans
+
+    from sklearn_numba_dpex.kmeans.dpex import (
+        kmeans_fused_cpu as dpex_kmeans_fused_cpu,
+        kmeans_fused_gpu as dpex_kmeans_fused_gpu,
+    )
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
+    from sklearnex import config_context
     from numpy.random import default_rng
     import numpy as np
 
@@ -87,7 +103,7 @@ if __name__ == "__main__":
         scaler_x = MinMaxScaler()
         scaler_x.fit(X)
         X = scaler_x.transform(X)
-        # X = np.vstack((X for _ in range(200)))
+        X = np.vstack((X for _ in range(10)))
         rng = default_rng(random_state)
         init = np.array(
             rng.choice(X, n_clusters, replace=False), dtype=np.float32
@@ -103,14 +119,7 @@ if __name__ == "__main__":
         tol=tol,
     )
 
-    kmeans_timer.timeit(
-        daal4py_kmeans,
-        name="daal4py default",
-        max_iter=max_iter,
-        tol=tol,
-    )
-
-    with dpctl.device_context("cpu"):
+    with config_context(target_offload="cpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
             name="daal4py CPU",
@@ -118,7 +127,7 @@ if __name__ == "__main__":
             tol=tol,
         )
 
-    with dpctl.device_context("gpu"):
+    with config_context(target_offload="gpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
             name="daal4py GPU",
@@ -127,15 +136,15 @@ if __name__ == "__main__":
         )
 
     kmeans_timer.timeit(
-        dpex_kmeans_fused,
-        name="Kmeans numba_dpex dry iter.",
-        max_iter=2,
+        dpex_kmeans_fused_cpu,
+        name="Kmeans numba_dpex CPU",
+        max_iter=max_iter,
         tol=tol,
     )
 
     kmeans_timer.timeit(
-        dpex_kmeans_fused,
-        name="Kmeans numba_dpex",
+        dpex_kmeans_fused_gpu,
+        name="Kmeans numba_dpex GPU",
         max_iter=max_iter,
         tol=tol,
     )

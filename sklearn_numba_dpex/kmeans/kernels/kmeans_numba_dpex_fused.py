@@ -197,7 +197,7 @@ def get_half_l2_norm_kernel_dim0(n, dim, thread_group_size):
 
 
 @cached_kernel_factory
-def get_sum_reduction_kernel_1(n, thread_group_size):
+def get_sum_reduction_kernel_1(n, thread_group_size, device):
     local_nb_iterations = math.floor(math.log2(thread_group_size))
     f32zero = float32(0.0)
 
@@ -242,7 +242,7 @@ def get_sum_reduction_kernel_1(n, thread_group_size):
         _steps_data.append(
             (
                 sum_reduction_kernel[n_threads, thread_group_size],
-                dpctl.tensor.empty(n_groups, dtype=np.float32),
+                dpctl.tensor.empty(n_groups, dtype=np.float32, device=device),
             )
         )
 
