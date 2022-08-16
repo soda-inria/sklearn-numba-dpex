@@ -25,6 +25,7 @@ def kmeans_fused(
     x_squared_norms=None,
     tol=1e-4,
     n_threads=1,
+    device=None,
 ):
 
     # NB: all parameters given when instanciating the kernels can impact performance,
@@ -42,7 +43,6 @@ def kmeans_fused(
     dim = X.shape[1]
     n = X.shape[0]
     n_clusters = centers_init.shape[0]
-    X = dpctl.tensor.from_numpy(np.ascontiguousarray(X).T)
 
     reset_inertia = get_initialize_to_zeros_kernel_1_float32(
         n=n, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
@@ -66,11 +66,11 @@ def kmeans_fused(
 
     # NB: assumes thread_group_size is a power of two
     reduce_inertia = get_sum_reduction_kernel_1(
-        n, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+        n, thread_group_size=DEFAULT_THREAD_GROUP_SIZE, device=device
     )
 
     reduce_center_shifts = get_sum_reduction_kernel_1(
-        n_clusters, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+        n_clusters, thread_group_size=DEFAULT_THREAD_GROUP_SIZE, device=device
     )
 
     (
@@ -129,20 +129,33 @@ def kmeans_fused(
         number_of_load_iter=4,
     )
 
-    centroids = dpctl.tensor.from_numpy(np.ascontiguousarray(centers_init).T)
-    centroids_copy_array = dpctl.tensor.empty_like(centroids)
-    best_centroids = dpctl.tensor.empty_like(centroids)
-    centroids_half_l2_norm = dpctl.tensor.empty(n_clusters, dtype=np.float32)
-    centroid_counts = dpctl.tensor.empty(n_clusters, dtype=np.float32)
-    center_shifts = dpctl.tensor.empty(n_clusters, dtype=np.float32)
-    inertia = dpctl.tensor.empty(n, dtype=np.float32)
-    assignments_idx = dpctl.tensor.empty(n, dtype=np.uint32)
+    X = dpctl.tensor.from_numpy(np.ascontiguousarray(X).T, device=device)
+    centroids = dpctl.tensor.from_numpy(
+        np.ascontiguousarray(centers_init).T, device=device
+    )
+    centroids_copy_array = dpctl.tensor.empty_like(centroids, device=device)
+    best_centroids = dpctl.tensor.empty_like(centroids, device=device)
+    centroids_half_l2_norm = dpctl.tensor.empty(
+        n_clusters, dtype=np.float32, device=device
+    )
+    centroid_counts = dpctl.tensor.empty(
+        n_clusters, dtype=np.float32, device=device
+    )
+    center_shifts = dpctl.tensor.empty(
+        n_clusters, dtype=np.float32, device=device
+    )
+    inertia = dpctl.tensor.empty(n, dtype=np.float32, device=device)
+    assignments_idx = dpctl.tensor.empty(n, dtype=np.uint32, device=device)
 
     centroids_private_copies = dpctl.tensor.empty(
-        (nb_centroids_private_copies, dim, n_clusters), dtype=np.float32
+        (nb_centroids_private_copies, dim, n_clusters),
+        dtype=np.float32,
+        device=device,
     )
     centroid_counts_private_copies = dpctl.tensor.empty(
-        (nb_centroids_private_copies, n_clusters), dtype=np.float32
+        (nb_centroids_private_copies, n_clusters),
+        dtype=np.float32,
+        device=device,
     )
 
     n_iteration = 0
@@ -210,4 +223,50 @@ def kmeans_fused(
         inertia_sum,
         np.ascontiguousarray(dpctl.tensor.asnumpy(best_centroids.T)),
         n_iteration,
+    )
+
+
+def kmeans_fused_cpu(
+    X,
+    sample_weight,
+    centers_init,
+    max_iter=300,
+    verbose=False,
+    x_squared_norms=None,
+    tol=1e-4,
+    n_threads=1,
+):
+    return kmeans_fused(
+        X,
+        sample_weight,
+        centers_init,
+        max_iter=300,
+        verbose=False,
+        x_squared_norms=None,
+        tol=1e-4,
+        n_threads=1,
+        device="cpu",
+    )
+
+
+def kmeans_fused_gpu(
+    X,
+    sample_weight,
+    centers_init,
+    max_iter=300,
+    verbose=False,
+    x_squared_norms=None,
+    tol=1e-4,
+    n_threads=1,
+):
+    return kmeans_fused(
+        X,
+        sample_weight,
+        centers_init,
+        max_iter=300,
+        verbose=False,
+        x_squared_norms=None,
+        tol=1e-4,
+        n_threads=1,
+        device="gpu",
     )
