@@ -34,6 +34,7 @@ class KMeansTimeit:
             est_kwargs = dict(
                 n_clusters=n_clusters,
                 init=centers_init,
+                n_init=1,
                 max_iter=max_iter,
                 tol=tol,
                 # random_state is set but since we don't use kmeans++ or random
@@ -58,7 +59,7 @@ class KMeansTimeit:
             t0 = perf_counter()
             estimator.fit(X, sample_weight=sample_weight)
             t1 = perf_counter()
-            print(f"Running {name} ... done in {t1 - t0}")
+            print(f"Running {name} ... done in {t1 - t0}\n")
 
         finally:
             sklearn.cluster._kmeans._kmeans_single_lloyd = (
@@ -77,17 +78,22 @@ if __name__ == "__main__":
     # TODO: also checks that the results are close
     # TODO: ensure that effective n_iter is equal for all runs
 
-    from sklearn_numba_dpex.kmeans.sklearn import kmeans as sklearn_kmeans
-    from sklearn_numba_dpex.kmeans.daal4py import kmeans as daal4py_kmeans
+    from sklearn_numba_dpex.benchmark.ext_helpers.sklearn import (
+        kmeans as sklearn_kmeans,
+    )
+    from sklearn_numba_dpex.benchmark.ext_helpers.daal4py import (
+        kmeans as daal4py_kmeans,
+    )
 
-    from sklearn_numba_dpex.kmeans.dpex import (
-        kmeans_fused_cpu as dpex_kmeans_fused_cpu,
-        kmeans_fused_gpu as dpex_kmeans_fused_gpu,
+    from sklearn_numba_dpex.kmeans.drivers import (
+        kmeans_cpu as dpex_kmeans_cpu,
+        kmeans_gpu as dpex_kmeans_gpu,
     )
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
     from numpy.random import default_rng
+    import dpctl
     import numpy as np
 
     random_state = 123
@@ -103,7 +109,9 @@ if __name__ == "__main__":
         scaler_x = MinMaxScaler()
         scaler_x.fit(X)
         X = scaler_x.transform(X)
-        X = np.vstack((X for _ in range(10)))
+        # Change dataset dimensions
+        # X = np.hstack([X for _ in range(5)])
+        # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
         init = np.array(
             rng.choice(X, n_clusters, replace=False), dtype=np.float32
@@ -136,14 +144,14 @@ if __name__ == "__main__":
         )
 
     kmeans_timer.timeit(
-        dpex_kmeans_fused_cpu,
+        dpex_kmeans_cpu,
         name="Kmeans numba_dpex CPU",
         max_iter=max_iter,
         tol=tol,
     )
 
     kmeans_timer.timeit(
-        dpex_kmeans_fused_gpu,
+        dpex_kmeans_gpu,
         name="Kmeans numba_dpex GPU",
         max_iter=max_iter,
         tol=tol,

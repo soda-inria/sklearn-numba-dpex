@@ -34,9 +34,10 @@ setup(
         "Programming Language :: Python :: Implementation :: CPython",
     ],
     python_requires=">=3.8",
-    # TODO: replace "numba-dppy" by "numba-dpex" once released
-    install_requires=["scikit-learn", "numba-dpex", "dpctl"],
-    extra_requires=[dict(benchmark=["scikit-learn-intelex"])],
+    # TODO: remove pyopencl when dpctl exposes preferred_work_group_size_multiple
+    # see https://github.com/IntelPython/dpctl/issues/886
+    install_requires=["scikit-learn", "numba-dpex", "dpctl", "pyopencl"],
+    extra_requires=[dict(benchmark=["scikit-learn-intelex, pandas"])],
     packages=["sklearn_numba_dpex"],
     entry_points={
         "sklearn_engines": [
