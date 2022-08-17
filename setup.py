@@ -35,9 +35,11 @@ setup(
     ],
     python_requires=">=3.8",
     # TODO: replace "numba-dppy" by "numba-dpex" once released
-    install_requires=["scikit-learn", "numba-dppy", "dpnp"],
+    install_requires=["scikit-learn", "numba-dpex", "dpnp"],
     packages=["sklearn_numba_dpex"],
     entry_points={
-        "sklearn_engines": ["kmeans=sklearn_numba_dpex.cluster.kmeans:KMeansEngine"]
+        "sklearn_engines": [
+            "kmeans=sklearn_numba_dpex.cluster.kmeans:KMeansEngine"
+        ]
     },
 )
