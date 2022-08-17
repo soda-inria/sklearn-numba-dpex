@@ -11,6 +11,8 @@
 #
 # The --device=/dev/dri option enables GPU passthrough (as long as the user
 # has permissions, e.g. by being a member of the video group)
+#
+# The image is publicly available on dockerhub with the tag jjerphan/numba_dpex_dev:latest .
 
 # The `ubuntu2004_intel_drivers` ships an up-to-date installation of the
 # intel runtime, including drivers and opencl and level_zero runtimes.

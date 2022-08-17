@@ -7,7 +7,7 @@ jobs:
   test:
     name: Run test suite
     runs-on: ubuntu-latest
-    container: intel/oneapi-basekit:2022.2-devel-ubuntu20.04
+    container: jjerphan/numba_dpex_dev:latest
 
     steps:
     - name: Checkout code
@@ -15,6 +15,9 @@ jobs:
 
     - name: Install sklearn-numba-dpex
       run: pip install -e . --no-build-isolation
+      
+    - name: Install pytest
+      run: pip install pytest
 
     - name: Run tests
       run: |
