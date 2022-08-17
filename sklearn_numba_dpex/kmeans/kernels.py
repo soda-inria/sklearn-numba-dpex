@@ -11,9 +11,9 @@ from sklearn_numba_dpex.utils import (
 
 
 @cached_kernel_factory
-def get_initialize_to_zeros_kernel_1_int32(n, thread_group_size):
+def make_initialize_to_zeros_kernel_1_int32(n, local_size):
 
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+    global_size = math.ceil(n / local_size) * local_size
     int32zero = int32(0)
 
     @dpex.kernel
@@ -25,13 +25,13 @@ def get_initialize_to_zeros_kernel_1_int32(n, thread_group_size):
 
         x[thread_i] = int32zero
 
-    return initialize_to_zeros[n_threads, thread_group_size]
+    return initialize_to_zeros[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_initialize_to_zeros_kernel_1_float32(n, thread_group_size):
+def make_initialize_to_zeros_kernel_1_float32(n, local_size):
 
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+    global_size = math.ceil(n / local_size) * local_size
     f32zero = float32(0)
 
     @dpex.kernel
@@ -43,14 +43,14 @@ def get_initialize_to_zeros_kernel_1_float32(n, thread_group_size):
 
         x[thread_i] = f32zero
 
-    return initialize_to_zeros[n_threads, thread_group_size]
+    return initialize_to_zeros[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_initialize_to_zeros_kernel_2_float32(n, dim, thread_group_size):
+def make_initialize_to_zeros_kernel_2_float32(n, dim, local_size):
 
     nb_items = n * dim
-    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
+    global_size = math.ceil(nb_items / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -64,14 +64,14 @@ def get_initialize_to_zeros_kernel_2_float32(n, dim, thread_group_size):
         col = thread_i % n
         x[row, col] = f32zero
 
-    return initialize_to_zeros[n_threads, thread_group_size]
+    return initialize_to_zeros[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_initialize_to_zeros_kernel_2_float32(n, dim, thread_group_size):
+def make_initialize_to_zeros_kernel_2_float32(n, dim, local_size):
 
     nb_items = n * dim
-    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
+    global_size = math.ceil(nb_items / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -85,17 +85,15 @@ def get_initialize_to_zeros_kernel_2_float32(n, dim, thread_group_size):
         col = thread_i % n
         x[row, col] = f32zero
 
-    return initialize_to_zeros[n_threads, thread_group_size]
+    return initialize_to_zeros[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_initialize_to_zeros_kernel_3_float32(
-    dim0, dim1, dim2, thread_group_size
-):
+def make_initialize_to_zeros_kernel_3_float32(dim0, dim1, dim2, local_size):
 
     nb_items = dim0 * dim1 * dim2
     stride0 = dim1 * dim2
-    n_threads = math.ceil(nb_items / thread_group_size) * thread_group_size
+    global_size = math.ceil(nb_items / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -111,12 +109,12 @@ def get_initialize_to_zeros_kernel_3_float32(
         d2 = stride0_id % dim2
         x[d0, d1, d2] = f32zero
 
-    return initialize_to_zeros[n_threads, thread_group_size]
+    return initialize_to_zeros[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_copyto_kernel(n, dim, thread_group_size):
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+def make_copyto_kernel(n, dim, local_size):
+    global_size = math.ceil(n / local_size) * local_size
 
     @dpex.kernel
     def copyto_kernel(X, Y):
@@ -128,12 +126,12 @@ def get_copyto_kernel(n, dim, thread_group_size):
         for d in range(dim):
             Y[d, x] = X[d, x]
 
-    return copyto_kernel[n_threads, thread_group_size]
+    return copyto_kernel[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_broadcast_division_kernel(n, dim, thread_group_size):
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+def make_broadcast_division_kernel(n, dim, local_size):
+    global_size = math.ceil(n / local_size) * local_size
 
     @dpex.kernel
     def broadcast_division_kernel(X, v):
@@ -147,12 +145,12 @@ def get_broadcast_division_kernel(n, dim, thread_group_size):
         for d in range(dim):
             X[d, x] = X[d, x] / divisor
 
-    return broadcast_division_kernel[n_threads, thread_group_size]
+    return broadcast_division_kernel[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_center_shift_kernel(n, dim, thread_group_size):
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+def make_center_shift_kernel(n, dim, local_size):
+    global_size = math.ceil(n / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -170,12 +168,12 @@ def get_center_shift_kernel(n, dim, thread_group_size):
 
         center_shift[x] = tmp
 
-    return center_shift_kernel[n_threads, thread_group_size]
+    return center_shift_kernel[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_half_l2_norm_kernel_dim0(n, dim, thread_group_size):
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+def make_half_l2_norm_kernel_dim0(n, dim, local_size):
+    global_size = math.ceil(n / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -193,12 +191,12 @@ def get_half_l2_norm_kernel_dim0(n, dim, thread_group_size):
 
         result[x] = l2_norm / 2
 
-    return half_l2_norm_kernel_dim0[n_threads, thread_group_size]
+    return half_l2_norm_kernel_dim0[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_sum_reduction_kernel_1(n, thread_group_size, device):
-    local_nb_iterations = math.floor(math.log2(thread_group_size))
+def make_sum_reduction_kernel_1(n, local_size, device):
+    local_nb_iterations = math.floor(math.log2(local_size))
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -209,11 +207,11 @@ def get_sum_reduction_kernel_1(n, thread_group_size, device):
 
         n = v.shape[0]
 
-        shm = dpex.local.array(thread_group_size, dtype=float32)
+        shm = dpex.local.array(local_size, dtype=float32)
 
-        group_start = group * thread_group_size * 2
+        group_start = group * local_size * 2
         thread_operand_1 = group_start + thread
-        thread_operand_2 = group_start + thread_group_size + thread
+        thread_operand_2 = group_start + local_size + thread
 
         if thread_operand_1 >= n:
             shm[thread] = f32zero
@@ -223,7 +221,7 @@ def get_sum_reduction_kernel_1(n, thread_group_size, device):
             shm[thread] = v[thread_operand_1] + v[thread_operand_2]
 
         dpex.barrier()
-        current_size = thread_group_size
+        current_size = local_size
         for i in range(local_nb_iterations):
             current_size = current_size // 2
             if thread < current_size:
@@ -237,11 +235,11 @@ def get_sum_reduction_kernel_1(n, thread_group_size, device):
     _steps_data = []
     n_groups = n
     while n_groups > 1:
-        n_groups = math.ceil(n_groups / (2 * thread_group_size))
-        n_threads = n_groups * thread_group_size
+        n_groups = math.ceil(n_groups / (2 * local_size))
+        global_size = n_groups * local_size
         _steps_data.append(
             (
-                sum_reduction_kernel[n_threads, thread_group_size],
+                sum_reduction_kernel[global_size, local_size],
                 dpctl.tensor.empty(n_groups, dtype=np.float32, device=device),
             )
         )
@@ -256,8 +254,8 @@ def get_sum_reduction_kernel_1(n, thread_group_size, device):
 
 
 @cached_kernel_factory
-def get_sum_reduction_kernel_2(n, dim, thread_group_size):
-    n_threads = math.ceil(n / thread_group_size) * thread_group_size
+def make_sum_reduction_kernel_2(n, dim, local_size):
+    global_size = math.ceil(n / local_size) * local_size
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -270,14 +268,14 @@ def get_sum_reduction_kernel_2(n, dim, thread_group_size):
             tmp += v[d, thread]
         w[thread] = tmp
 
-    return sum_reduction_kernel[n_threads, thread_group_size]
+    return sum_reduction_kernel[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_sum_reduction_kernel_3(dim0, dim1, dim2, thread_group_size):
-    nb_groups_for_dim2 = math.ceil(dim2 / thread_group_size)
-    nb_threads_for_dim2 = nb_groups_for_dim2 * thread_group_size
-    n_threads = nb_threads_for_dim2 * dim1
+def make_sum_reduction_kernel_3(dim0, dim1, dim2, local_size):
+    nb_groups_for_dim2 = math.ceil(dim2 / local_size)
+    nb_threads_for_dim2 = nb_groups_for_dim2 * local_size
+    global_size = nb_threads_for_dim2 * dim1
     f32zero = float32(0.0)
 
     @dpex.kernel
@@ -285,7 +283,7 @@ def get_sum_reduction_kernel_3(dim0, dim1, dim2, thread_group_size):
         group = dpex.get_group_id(0)
         thread = dpex.get_local_id(0)
         d1 = group // nb_groups_for_dim2
-        d2 = ((group % nb_groups_for_dim2) * thread_group_size) + thread
+        d2 = ((group % nb_groups_for_dim2) * local_size) + thread
         if d2 >= dim2:
             return
         tmp = f32zero
@@ -293,11 +291,11 @@ def get_sum_reduction_kernel_3(dim0, dim1, dim2, thread_group_size):
             tmp += v[d, d1, d2]
         w[d1, d2] = tmp
 
-    return sum_reduction_kernel[n_threads, thread_group_size]
+    return sum_reduction_kernel[global_size, local_size]
 
 
 @cached_kernel_factory
-def get_fused_kernel_fixed_window(
+def make_fused_kernel_fixed_window(
     n,
     dim,
     n_clusters,
@@ -308,11 +306,11 @@ def get_fused_kernel_fixed_window(
     number_of_load_iter,
 ):
     r = warp_size * window_length_multiple
-    thread_group_size = r * cluster_window_per_thread_group
+    local_size = r * cluster_window_per_thread_group
     h = number_of_load_iter * cluster_window_per_thread_group
 
     n_cluster_groups = math.ceil(n_clusters / r)
-    n_threads = (math.ceil(n / thread_group_size)) * (thread_group_size)
+    global_size = (math.ceil(n / local_size)) * (local_size)
     n_dim_windows = math.ceil(dim / h)
     window_shm_shape = (h, r)
 
@@ -422,26 +420,29 @@ def get_fused_kernel_fixed_window(
         inertia[global_thread] = min_score
 
         warp_id = global_thread // warp_size
+        private_id = warp_id % nb_centroids_private_copies
         dpex.atomic.add(
             centroid_counts_private_copies,
-            (warp_id % nb_centroids_private_copies, min_idx),
+            (private_id, min_idx),
             f32one,
         )
+
         for d in range(dim):
             dpex.atomic.add(
                 centroids_private_copies,
-                ((warp_id + d) % nb_centroids_private_copies, d, min_idx),
+                # ((warp_id + d) % nb_centroids_private_copies, d, min_idx),
+                (private_id, d, min_idx),
                 X[d, global_thread],
             )
 
     return (
         nb_centroids_private_copies,
-        fused_kernel_fixed_window[n_threads, thread_group_size],
+        fused_kernel_fixed_window[global_size, local_size],
     )
 
 
 @cached_kernel_factory
-def get_assignment_kernel_fixed_window(
+def make_assignment_kernel_fixed_window(
     n,
     dim,
     n_clusters,
@@ -451,11 +452,11 @@ def get_assignment_kernel_fixed_window(
     number_of_load_iter,
 ):
     r = warp_size * window_length_multiple
-    thread_group_size = r * cluster_window_per_thread_group
+    local_size = r * cluster_window_per_thread_group
     h = number_of_load_iter * cluster_window_per_thread_group
 
     n_cluster_groups = math.ceil(n_clusters / r)
-    n_threads = (math.ceil(n / thread_group_size)) * (thread_group_size)
+    global_size = (math.ceil(n / local_size)) * (local_size)
     n_dim_windows = math.ceil(dim / h)
     window_shm_shape = (h, r)
 
@@ -560,4 +561,4 @@ def get_assignment_kernel_fixed_window(
         assignments_idx[global_thread] = min_idx
         inertia[global_thread] = X_l2_norm + (f32two * min_score)
 
-    return assigment_kernel_fixed_window[n_threads, thread_group_size]
+    return assigment_kernel_fixed_window[global_size, local_size]

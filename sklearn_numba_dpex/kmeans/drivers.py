@@ -1,22 +1,22 @@
 import numpy as np
 import dpctl
-from sklearn_numba_dpex.kmeans.kernels.kmeans_numba_dpex_fused import (
-    get_initialize_to_zeros_kernel_1_float32,
-    get_initialize_to_zeros_kernel_2_float32,
-    get_initialize_to_zeros_kernel_3_float32,
-    get_copyto_kernel,
-    get_broadcast_division_kernel,
-    get_center_shift_kernel,
-    get_half_l2_norm_kernel_dim0,
-    get_sum_reduction_kernel_1,
-    get_sum_reduction_kernel_2,
-    get_sum_reduction_kernel_3,
-    get_fused_kernel_fixed_window,
-    get_assignment_kernel_fixed_window,
+from sklearn_numba_dpex.kmeans.kernels import (
+    make_initialize_to_zeros_kernel_1_float32,
+    make_initialize_to_zeros_kernel_2_float32,
+    make_initialize_to_zeros_kernel_3_float32,
+    make_copyto_kernel,
+    make_broadcast_division_kernel,
+    make_center_shift_kernel,
+    make_half_l2_norm_kernel_dim0,
+    make_sum_reduction_kernel_1,
+    make_sum_reduction_kernel_2,
+    make_sum_reduction_kernel_3,
+    make_fused_kernel_fixed_window,
+    make_assignment_kernel_fixed_window,
 )
 
 
-def kmeans_fused(
+def kmeans(
     X,
     sample_weight,
     centers_init,
@@ -38,45 +38,43 @@ def kmeans_fused(
     WARP_SIZE = 64
     # cache size (in bytes) can also be retrieved
     L2_CACHE_SIZE = 1572864
-    DEFAULT_THREAD_GROUP_SIZE = 4 * WARP_SIZE
+    local_size = 4 * WARP_SIZE
 
     dim = X.shape[1]
     n = X.shape[0]
     n_clusters = centers_init.shape[0]
 
-    reset_inertia = get_initialize_to_zeros_kernel_1_float32(
-        n=n, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+    reset_inertia = make_initialize_to_zeros_kernel_1_float32(
+        n=n, local_size=local_size
     )
 
-    copyto = get_copyto_kernel(
-        n_clusters, dim, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+    copyto = make_copyto_kernel(n_clusters, dim, local_size=local_size)
+
+    broadcast_division = make_broadcast_division_kernel(
+        n=n_clusters, dim=dim, local_size=local_size
     )
 
-    broadcast_division = get_broadcast_division_kernel(
-        n=n_clusters, dim=dim, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+    get_center_shifts = make_center_shift_kernel(
+        n_clusters, dim, local_size=local_size
     )
 
-    get_center_shifts = get_center_shift_kernel(
-        n_clusters, dim, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+    half_l2_norm = make_half_l2_norm_kernel_dim0(
+        n_clusters, dim, local_size=local_size
     )
 
-    half_l2_norm = get_half_l2_norm_kernel_dim0(
-        n_clusters, dim, thread_group_size=DEFAULT_THREAD_GROUP_SIZE
+    # NB: assumes local_size is a power of two
+    reduce_inertia = make_sum_reduction_kernel_1(
+        n, local_size=local_size, device=device
     )
 
-    # NB: assumes thread_group_size is a power of two
-    reduce_inertia = get_sum_reduction_kernel_1(
-        n, thread_group_size=DEFAULT_THREAD_GROUP_SIZE, device=device
-    )
-
-    reduce_center_shifts = get_sum_reduction_kernel_1(
-        n_clusters, thread_group_size=DEFAULT_THREAD_GROUP_SIZE, device=device
+    reduce_center_shifts = make_sum_reduction_kernel_1(
+        n_clusters, local_size=local_size, device=device
     )
 
     (
         nb_centroids_private_copies,
         fused_kernel_fixed_window,
-    ) = get_fused_kernel_fixed_window(
+    ) = make_fused_kernel_fixed_window(
         n,
         dim,
         n_clusters,
@@ -92,34 +90,34 @@ def kmeans_fused(
     )
 
     reset_centroid_counts_private_copies = (
-        get_initialize_to_zeros_kernel_2_float32(
+        make_initialize_to_zeros_kernel_2_float32(
             n=n_clusters,
             dim=nb_centroids_private_copies,
-            thread_group_size=DEFAULT_THREAD_GROUP_SIZE,
+            local_size=local_size,
         )
     )
 
-    reset_centroids_private_copies = get_initialize_to_zeros_kernel_3_float32(
+    reset_centroids_private_copies = make_initialize_to_zeros_kernel_3_float32(
         dim0=nb_centroids_private_copies,
         dim1=dim,
         dim2=n_clusters,
-        thread_group_size=DEFAULT_THREAD_GROUP_SIZE,
+        local_size=local_size,
     )
 
-    reduce_centroid_counts_private_copies = get_sum_reduction_kernel_2(
+    reduce_centroid_counts_private_copies = make_sum_reduction_kernel_2(
         n=n_clusters,
         dim=nb_centroids_private_copies,
-        thread_group_size=DEFAULT_THREAD_GROUP_SIZE,
+        local_size=local_size,
     )
 
-    reduce_centroids_private_copies = get_sum_reduction_kernel_3(
+    reduce_centroids_private_copies = make_sum_reduction_kernel_3(
         dim0=nb_centroids_private_copies,
         dim1=dim,
         dim2=n_clusters,
-        thread_group_size=DEFAULT_THREAD_GROUP_SIZE,
+        local_size=local_size,
     )
 
-    assignment_kernel_fixed_window = get_assignment_kernel_fixed_window(
+    assignment_kernel_fixed_window = make_assignment_kernel_fixed_window(
         n,
         dim,
         n_clusters,
@@ -226,7 +224,7 @@ def kmeans_fused(
     )
 
 
-def kmeans_fused_cpu(
+def kmeans_cpu(
     X,
     sample_weight,
     centers_init,
@@ -236,20 +234,20 @@ def kmeans_fused_cpu(
     tol=1e-4,
     n_threads=1,
 ):
-    return kmeans_fused(
+    return kmeans(
         X,
         sample_weight,
         centers_init,
-        max_iter=300,
-        verbose=False,
-        x_squared_norms=None,
-        tol=1e-4,
-        n_threads=1,
+        max_iter,
+        verbose,
+        x_squared_norms,
+        tol,
+        n_threads,
         device="cpu",
     )
 
 
-def kmeans_fused_gpu(
+def kmeans_gpu(
     X,
     sample_weight,
     centers_init,
@@ -259,14 +257,14 @@ def kmeans_fused_gpu(
     tol=1e-4,
     n_threads=1,
 ):
-    return kmeans_fused(
+    return kmeans(
         X,
         sample_weight,
         centers_init,
-        max_iter=300,
-        verbose=False,
-        x_squared_norms=None,
-        tol=1e-4,
-        n_threads=1,
+        max_iter,
+        verbose,
+        x_squared_norms,
+        tol,
+        n_threads,
         device="gpu",
     )
