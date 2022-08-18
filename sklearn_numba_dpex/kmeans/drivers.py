@@ -156,7 +156,11 @@ def kmeans(
         number_of_load_iter=4,
     )
 
-    X = dpctl.tensor.from_numpy(np.ascontiguousarray(X).T, device=device)
+    # The dpex kernel expects X to be shaped as (n_features, n_samples) as the
+    # usual (n_samples, n_features). Furthermore, using a Fortran memory layout
+    # is actually more L1 cache friendly on the GPU and results in a small
+    # performance increase (e.g. 15% faster).
+    X = dpctl.tensor.from_numpy(X, device=device).T
     centroids = dpctl.tensor.from_numpy(
         np.ascontiguousarray(centers_init).T, device=device
     )
