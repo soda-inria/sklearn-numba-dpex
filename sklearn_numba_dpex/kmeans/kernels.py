@@ -129,8 +129,8 @@ def make_copyto_kernel(n_samples, n_features, work_group_size):
         if sample_idx >= n_samples:
             return
 
-        for d in range(n_features):
-            Y[d, sample_idx] = X[d, sample_idx]
+        for feature_idx in range(n_features):
+            Y[feature_idx, sample_idx] = X[feature_idx, sample_idx]
 
     return copyto_kernel[global_size, work_group_size]
 
@@ -148,8 +148,8 @@ def make_broadcast_division_kernel(n_samples, n_features, work_group_size):
 
         divisor = v[sample_idx]
 
-        for d in range(n_features):
-            X[d, sample_idx] = X[d, sample_idx] / divisor
+        for feature_idx in range(n_features):
+            X[feature_idx, sample_idx] = X[feature_idx, sample_idx] / divisor
 
     return broadcast_division[global_size, work_group_size]
 
@@ -168,9 +168,10 @@ def make_center_shift_kernel(n_samples, n_features, work_group_size):
 
         tmp = f32zero
 
-        for d in range(n_features):
+        for feature_idx in range(n_features):
             center_diff = (
-                previous_center[d, sample_idx] - center[d, sample_idx]
+                previous_center[feature_idx, sample_idx]
+                - center[feature_idx, sample_idx]
             )
             tmp += center_diff * center_diff
 
@@ -193,8 +194,8 @@ def make_half_l2_norm_dim0_kernel(n_samples, n_features, work_group_size):
 
         l2_norm = f32zero
 
-        for d in range(n_features):
-            item = X[d, sample_idx]
+        for feature_idx in range(n_features):
+            item = X[feature_idx, sample_idx]
             l2_norm += item * item
 
         result[sample_idx] = l2_norm / 2
@@ -272,8 +273,8 @@ def make_sum_reduction_2dim_kernel(n_samples, n_features, work_group_size):
         if sample_idx >= n_samples:
             return
         tmp = f32zero
-        for d in range(n_features):
-            tmp += v[d, sample_idx]
+        for feature_idx in range(n_features):
+            tmp += v[feature_idx, sample_idx]
         w[sample_idx] = tmp
 
     return sum_reduction_kernel[global_size, work_group_size]
@@ -332,7 +333,7 @@ def make_fused_fixed_window_kernel(
 
     inf = float32(math.inf)
     f32zero = float32(0.0)
-    f32one = float32(0.0)
+    f32one = float32(1.0)
 
     nb_cluster_items = n_clusters * (n_features + 1)
     nb_cluster_bytes = 4 * nb_cluster_items

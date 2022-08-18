@@ -143,7 +143,7 @@ if __name__ == "__main__":
     )
 
     kmeans_timer.timeit(
-        KMeansDriver(work_group_size_multiplier=4, device="gpu"),
+        KMeansDriver(device="gpu"),
         name="Kmeans numba_dpex GPU",
         max_iter=max_iter,
         tol=tol,
