@@ -135,16 +135,18 @@ if __name__ == "__main__":
             tol=tol,
         )
 
-    kmeans_timer.timeit(
-        KMeansDriver(work_group_size_multiplier=4, device="cpu"),
-        name="Kmeans numba_dpex CPU",
-        max_iter=max_iter,
-        tol=tol,
-    )
+    for multiplier in [1, 2, 4, 8]:
+        kmeans_timer.timeit(
+            KMeansDriver(device="cpu", work_group_size_multiplier=multiplier),
+            name="Kmeans numba_dpex CPU (work_group_size_multiplier={multiplier})",
+            max_iter=max_iter,
+            tol=tol,
+        )
 
-    kmeans_timer.timeit(
-        KMeansDriver(device="gpu"),
-        name="Kmeans numba_dpex GPU",
-        max_iter=max_iter,
-        tol=tol,
-    )
+        kmeans_timer.timeit(
+            KMeansDriver(device="gpu", work_group_size_multiplier=multiplier),
+            name=f"Kmeans numba_dpex GPU (work_group_size_multiplier={multiplier})",
+            max_iter=max_iter,
+            tol=tol,
+        )
+
