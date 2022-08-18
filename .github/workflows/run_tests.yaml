@@ -15,7 +15,7 @@ jobs:
 
     - name: Install sklearn-numba-dpex
       run: pip install -e . --no-build-isolation
-      
+
     - name: Install pytest
       run: pip install pytest
 

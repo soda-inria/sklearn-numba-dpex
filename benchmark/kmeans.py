@@ -78,12 +78,8 @@ if __name__ == "__main__":
     # TODO: also checks that the results are close
     # TODO: ensure that effective n_iter is equal for all runs
 
-    from sklearn_numba_dpex.benchmark.ext_helpers.sklearn import (
-        kmeans as sklearn_kmeans,
-    )
-    from sklearn_numba_dpex.benchmark.ext_helpers.daal4py import (
-        kmeans as daal4py_kmeans,
-    )
+    from ext_helpers.sklearn import kmeans as sklearn_kmeans
+    from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
     from sklearn_numba_dpex.kmeans.drivers import (
         kmeans_cpu as dpex_kmeans_cpu,
@@ -93,7 +89,6 @@ if __name__ == "__main__":
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
     from numpy.random import default_rng
-    import dpctl
     import numpy as np
 
     random_state = 123
