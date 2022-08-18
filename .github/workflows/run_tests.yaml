@@ -22,4 +22,4 @@ jobs:
     - name: Run tests
       run: |
         pip install pytest
-        pytest .
+        pytest sklearn_numba_dpex/
