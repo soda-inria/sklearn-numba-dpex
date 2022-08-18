@@ -60,8 +60,7 @@ class KMeansDriver:
         self.work_group_size_multiplier = _check_power_of_2(
             work_group_size_multiplier
             or (
-                cl_device.max_work_group_size
-                // self.preferred_work_group_size_multiple
+                cl_device.max_work_group_size // self.preferred_work_group_size_multiple
             )
         )
 
@@ -96,8 +95,7 @@ class KMeansDriver:
         Conference on Parallel Processing-ICPP (pp. 1-11).
         """
         work_group_size = (
-            self.work_group_size_multiplier
-            * self.preferred_work_group_size_multiple
+            self.work_group_size_multiplier * self.preferred_work_group_size_multiple
         )
 
         n_features = X.shape[1]
@@ -158,13 +156,11 @@ class KMeansDriver:
             )
         )
 
-        reset_centroids_private_copies = (
-            make_initialize_to_zeros_3dim_float32_kernel(
-                dim0=nb_centroids_private_copies,
-                dim1=n_features,
-                dim2=n_clusters,
-                work_group_size=work_group_size,
-            )
+        reset_centroids_private_copies = make_initialize_to_zeros_3dim_float32_kernel(
+            dim0=nb_centroids_private_copies,
+            dim1=n_features,
+            dim2=n_clusters,
+            work_group_size=work_group_size,
         )
 
         reduce_centroid_counts_private_copies = make_sum_reduction_2dim_kernel(
@@ -190,12 +186,8 @@ class KMeansDriver:
             work_group_size=work_group_size,
         )
 
-        X_t = dpctl.tensor.from_numpy(
-            np.ascontiguousarray(X).T, device=self.device
-        )
-        centroids_t = dpctl.tensor.from_numpy(
-            np.ascontiguousarray(centers_init).T, device=self.device
-        )
+        X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
+        centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
         centroids_t_copy_array = dpctl.tensor.empty_like(
             centroids_t, device=self.device
         )
@@ -211,9 +203,7 @@ class KMeansDriver:
         center_shifts = dpctl.tensor.empty(
             n_clusters, dtype=np.float32, device=self.device
         )
-        inertia = dpctl.tensor.empty(
-            n_samples, dtype=np.float32, device=self.device
-        )
+        inertia = dpctl.tensor.empty(n_samples, dtype=np.float32, device=self.device)
         assignments_idx = dpctl.tensor.empty(
             n_samples, dtype=np.uint32, device=self.device
         )
@@ -238,9 +228,7 @@ class KMeansDriver:
             half_l2_norm(centroids_t, centroids_half_l2_norm)
 
             reset_inertia(inertia)
-            reset_centroid_counts_private_copies(
-                centroid_counts_private_copies
-            )
+            reset_centroid_counts_private_copies(centroid_counts_private_copies)
             reset_centroids_private_copies(centroids_t_private_copies)
 
             # TODO: implement special case where only one copy is needed
@@ -262,9 +250,7 @@ class KMeansDriver:
 
             broadcast_division(centroids_t_copy_array, centroid_counts)
 
-            get_center_shifts(
-                centroids_t, centroids_t_copy_array, center_shifts
-            )
+            get_center_shifts(centroids_t, centroids_t_copy_array, center_shifts)
 
             center_shifts_sum = dpctl.tensor.asnumpy(
                 reduce_center_shifts(center_shifts)
