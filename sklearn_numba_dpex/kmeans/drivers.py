@@ -186,7 +186,13 @@ class KMeansDriver:
             work_group_size=work_group_size,
         )
 
-        X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
+        # The kernels expect X to be shaped as (n_features, n_samples) instead
+        # of the usual (n_samples, n_features). Furthermore, using a Fortran
+        # memory layout is actually more L1 cache friendly on the GPU and
+        # results in a slight performance increase (typically 15% faster) when
+        # updating the centroids from the assigned samples.
+        X_t = dpctl.tensor.from_numpy(X, device=self.device).T
+        assert X_t.strides[0] == 1  # Fortran memory layout
         centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
         centroids_t_copy_array = dpctl.tensor.empty_like(
             centroids_t, device=self.device
