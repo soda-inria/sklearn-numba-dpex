@@ -11,85 +11,89 @@ from sklearn_numba_dpex.utils import (
 
 
 @cached_kernel_factory
-def make_initialize_to_zeros_kernel_1_int32(n, work_group_size):
+def make_initialize_to_zeros_1dim_int32_kernel(n_samples, work_group_size):
 
-    global_size = math.ceil(n / work_group_size) * work_group_size
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
     int32zero = int32(0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
-        thread_i = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(0)
 
-        if thread_i >= n:
+        if sample_idx >= n_samples:
             return
 
-        x[thread_i] = int32zero
+        x[sample_idx] = int32zero
 
     return initialize_to_zeros[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_initialize_to_zeros_kernel_1_float32(n, work_group_size):
+def make_initialize_to_zeros_1dim_float32_kernel(n_samples, work_group_size):
 
-    global_size = math.ceil(n / work_group_size) * work_group_size
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
-        thread_i = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(0)
 
-        if thread_i >= n:
+        if sample_idx >= n_samples:
             return
 
-        x[thread_i] = f32zero
+        x[sample_idx] = f32zero
 
     return initialize_to_zeros[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_initialize_to_zeros_kernel_2_float32(n, dim, work_group_size):
+def make_initialize_to_zeros_2dim_float32_kernel(
+    n_samples, n_features, work_group_size
+):
 
-    nb_items = n * dim
+    nb_items = n_samples * n_features
     global_size = math.ceil(nb_items / work_group_size) * work_group_size
     f32zero = float32(0.0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
-        thread_i = dpex.get_global_id(0)
+        item_idx = dpex.get_global_id(0)
 
-        if thread_i >= nb_items:
+        if item_idx >= nb_items:
             return
 
-        row = thread_i // n
-        col = thread_i % n
-        x[row, col] = f32zero
+        i = item_idx // n_samples
+        j = item_idx % n_samples
+        x[i, j] = f32zero
 
     return initialize_to_zeros[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_initialize_to_zeros_kernel_2_float32(n, dim, work_group_size):
+def make_initialize_to_zeros_2dim_float32_kernel(
+    n_samples, n_features, work_group_size
+):
 
-    nb_items = n * dim
+    nb_items = n_samples * n_features
     global_size = math.ceil(nb_items / work_group_size) * work_group_size
     f32zero = float32(0.0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
-        thread_i = dpex.get_global_id(0)
+        item_idx = dpex.get_global_id(0)
 
-        if thread_i >= nb_items:
+        if item_idx >= nb_items:
             return
 
-        row = thread_i // n
-        col = thread_i % n
-        x[row, col] = f32zero
+        i = item_idx // n_samples
+        j = item_idx % n_samples
+        x[i, j] = f32zero
 
     return initialize_to_zeros[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_initialize_to_zeros_kernel_3_float32(
+def make_initialize_to_zeros_3dim_float32_kernel(
     dim0, dim1, dim2, work_group_size
 ):
 
@@ -100,142 +104,144 @@ def make_initialize_to_zeros_kernel_3_float32(
 
     @dpex.kernel
     def initialize_to_zeros(x):
-        thread_i = dpex.get_global_id(0)
+        item_idx = dpex.get_global_id(0)
 
-        if thread_i >= nb_items:
+        if item_idx >= nb_items:
             return
 
-        d0 = thread_i // stride0
-        stride0_id = thread_i % stride0
-        d1 = stride0_id // dim2
-        d2 = stride0_id % dim2
-        x[d0, d1, d2] = f32zero
+        i = item_idx // stride0
+        stride0_id = item_idx % stride0
+        j = stride0_id // dim2
+        k = stride0_id % dim2
+        x[i, j, k] = f32zero
 
     return initialize_to_zeros[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_copyto_kernel(n, dim, work_group_size):
-    global_size = math.ceil(n / work_group_size) * work_group_size
+def make_copyto_kernel(n_samples, n_features, work_group_size):
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
 
     @dpex.kernel
     def copyto_kernel(X, Y):
-        x = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(0)
 
-        if x >= n:
+        if sample_idx >= n_samples:
             return
 
-        for d in range(dim):
-            Y[d, x] = X[d, x]
+        for d in range(n_features):
+            Y[d, sample_idx] = X[d, sample_idx]
 
     return copyto_kernel[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_broadcast_division_kernel(n, dim, work_group_size):
-    global_size = math.ceil(n / work_group_size) * work_group_size
+def make_broadcast_division_kernel(n_samples, n_features, work_group_size):
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
 
     @dpex.kernel
-    def broadcast_division_kernel(X, v):
-        x = dpex.get_global_id(0)
+    def broadcast_division(X, v):
+        sample_idx = dpex.get_global_id(0)
 
-        if x >= n:
+        if sample_idx >= n_samples:
             return
 
-        divisor = v[x]
+        divisor = v[sample_idx]
 
-        for d in range(dim):
-            X[d, x] = X[d, x] / divisor
+        for d in range(n_features):
+            X[d, sample_idx] = X[d, sample_idx] / divisor
 
-    return broadcast_division_kernel[global_size, work_group_size]
+    return broadcast_division[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_center_shift_kernel(n, dim, work_group_size):
-    global_size = math.ceil(n / work_group_size) * work_group_size
+def make_center_shift_kernel(n_samples, n_features, work_group_size):
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
 
     @dpex.kernel
-    def center_shift_kernel(previous_center, center, center_shift):
-        x = dpex.get_global_id(0)
+    def center_shift(previous_center, center, center_shift):
+        sample_idx = dpex.get_global_id(0)
 
-        if x >= n:
+        if sample_idx >= n_samples:
             return
 
         tmp = f32zero
 
-        for d in range(dim):
-            center_diff = previous_center[d, x] - center[d, x]
+        for d in range(n_features):
+            center_diff = (
+                previous_center[d, sample_idx] - center[d, sample_idx]
+            )
             tmp += center_diff * center_diff
 
-        center_shift[x] = tmp
+        center_shift[sample_idx] = tmp
 
-    return center_shift_kernel[global_size, work_group_size]
+    return center_shift[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_half_l2_norm_kernel_dim0(n, dim, work_group_size):
-    global_size = math.ceil(n / work_group_size) * work_group_size
+def make_half_l2_norm_dim0_kernel(n_samples, n_features, work_group_size):
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
 
     @dpex.kernel
-    def half_l2_norm_kernel_dim0(X, result):
-        x = dpex.get_global_id(0)
+    def half_l2_norm(X, result):
+        sample_idx = dpex.get_global_id(0)
 
-        if x >= n:
+        if sample_idx >= n_samples:
             return
 
         l2_norm = f32zero
 
-        for d in range(dim):
-            item = X[d, x]
+        for d in range(n_features):
+            item = X[d, sample_idx]
             l2_norm += item * item
 
-        result[x] = l2_norm / 2
+        result[sample_idx] = l2_norm / 2
 
-    return half_l2_norm_kernel_dim0[global_size, work_group_size]
+    return half_l2_norm[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_sum_reduction_kernel_1(n, work_group_size, device):
+def make_sum_reduction_1dim_kernel(n_samples, work_group_size, device):
     local_nb_iterations = math.floor(math.log2(work_group_size))
     f32zero = float32(0.0)
 
     @dpex.kernel
     def sum_reduction_kernel(v, w):
-        group = dpex.get_group_id(0)
-        thread = dpex.get_local_id(0)
-        first_thread = thread == 0
+        group_id = dpex.get_group_id(0)
+        local_work_id = dpex.get_local_id(0)
+        first_work_id = local_work_id == 0
 
-        n = v.shape[0]
+        n_samples = v.shape[0]
 
         shm = dpex.local.array(work_group_size, dtype=float32)
 
-        group_start = group * work_group_size * 2
-        thread_operand_1 = group_start + thread
-        thread_operand_2 = group_start + work_group_size + thread
+        first_sample_idx = group_id * work_group_size * 2
+        augend_idx = first_sample_idx + local_work_id
+        addend_idx = first_sample_idx + work_group_size + local_work_id
 
-        if thread_operand_1 >= n:
-            shm[thread] = f32zero
-        elif thread_operand_2 >= n:
-            shm[thread] = v[thread_operand_1]
+        if augend_idx >= n_samples:
+            shm[local_work_id] = f32zero
+        elif addend_idx >= n_samples:
+            shm[local_work_id] = v[augend_idx]
         else:
-            shm[thread] = v[thread_operand_1] + v[thread_operand_2]
+            shm[local_work_id] = v[augend_idx] + v[addend_idx]
 
         dpex.barrier()
         current_size = work_group_size
         for i in range(local_nb_iterations):
             current_size = current_size // 2
-            if thread < current_size:
-                shm[thread] += shm[thread + current_size]
+            if local_work_id < current_size:
+                shm[local_work_id] += shm[local_work_id + current_size]
 
             dpex.barrier()
 
-        if first_thread:
-            w[group] = shm[0]
+        if first_work_id:
+            w[group_id] = shm[0]
 
     _steps_data = []
-    n_groups = n
+    n_groups = n_samples
     while n_groups > 1:
         n_groups = math.ceil(n_groups / (2 * work_group_size))
         global_size = n_groups * work_group_size
@@ -256,25 +262,25 @@ def make_sum_reduction_kernel_1(n, work_group_size, device):
 
 
 @cached_kernel_factory
-def make_sum_reduction_kernel_2(n, dim, work_group_size):
-    global_size = math.ceil(n / work_group_size) * work_group_size
+def make_sum_reduction_2dim_kernel(n_samples, n_features, work_group_size):
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
 
     @dpex.kernel
     def sum_reduction_kernel(v, w):
-        thread = dpex.get_global_id(0)
-        if thread >= n:
+        sample_idx = dpex.get_global_id(0)
+        if sample_idx >= n_samples:
             return
         tmp = f32zero
-        for d in range(dim):
-            tmp += v[d, thread]
-        w[thread] = tmp
+        for d in range(n_features):
+            tmp += v[d, sample_idx]
+        w[sample_idx] = tmp
 
     return sum_reduction_kernel[global_size, work_group_size]
 
 
 @cached_kernel_factory
-def make_sum_reduction_kernel_3(dim0, dim1, dim2, work_group_size):
+def make_sum_reduction_3dim_kernel(dim0, dim1, dim2, work_group_size):
     nb_groups_for_dim2 = math.ceil(dim2 / work_group_size)
     nb_threads_for_dim2 = nb_groups_for_dim2 * work_group_size
     global_size = nb_threads_for_dim2 * dim1
@@ -297,270 +303,333 @@ def make_sum_reduction_kernel_3(dim0, dim1, dim2, work_group_size):
 
 
 @cached_kernel_factory
-def make_fused_kernel_fixed_window(
-    n,
-    dim,
+def make_fused_fixed_window_kernel(
+    n_samples,
+    n_features,
     n_clusters,
-    warp_size,
-    l2_cache_size,
-    window_length_multiple,
-    cluster_window_per_thread_group,
-    number_of_load_iter,
+    preferred_work_group_size_multiple,
+    global_mem_cache_size,
+    centroids_window_width_multiplier,
+    centroids_window_height_ratio_multiplier,
+    centroids_private_copies_max_cache_occupancy,
+    work_group_size,
 ):
-    r = warp_size * window_length_multiple
-    work_group_size = r * cluster_window_per_thread_group
-    h = number_of_load_iter * cluster_window_per_thread_group
+    window_nb_centroids = (
+        preferred_work_group_size_multiple * centroids_window_width_multiplier
+    )
+    nb_of_window_features_per_work_group = (
+        work_group_size // window_nb_centroids
+    )
+    window_nb_features = (
+        centroids_window_height_ratio_multiplier
+        * nb_of_window_features_per_work_group
+    )
 
-    n_cluster_groups = math.ceil(n_clusters / r)
-    global_size = (math.ceil(n / work_group_size)) * (work_group_size)
-    n_dim_windows = math.ceil(dim / h)
-    window_shm_shape = (h, r)
+    nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
+    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
+    nb_windows_per_centroid = math.ceil(n_features / window_nb_features)
+    centroids_window_shape = (window_nb_features, (window_nb_centroids + 1))
 
     inf = float32(math.inf)
     f32zero = float32(0.0)
-    f32one = float32(1.0)
+    f32one = float32(0.0)
 
-    nb_cluster_items = n_clusters * (dim + 1)
+    nb_cluster_items = n_clusters * (n_features + 1)
     nb_cluster_bytes = 4 * nb_cluster_items
-    l2_cache_size_allocation = 0.9
     nb_centroids_private_copies = int(
-        (l2_cache_size * l2_cache_size_allocation) // nb_cluster_bytes
+        (global_mem_cache_size * centroids_private_copies_max_cache_occupancy)
+        // nb_cluster_bytes
     )
 
     @dpex.kernel
-    def fused_kernel_fixed_window(
-        X,
-        current_centroids,
+    def fused_kmeans(
+        X_t,
+        current_centroids_t,
         centroids_half_l2_norm,
         inertia,
-        centroids_private_copies,
+        centroids_t_private_copies,
         centroid_counts_private_copies,
     ):
-        global_thread = dpex.get_global_id(0)
-        local_thread = dpex.get_local_id(0)
+        sample_idx = dpex.get_global_id(0)
+        local_work_id = dpex.get_local_id(0)
 
-        window_shm = dpex.local.array(shape=window_shm_shape, dtype=float32)
-        local_centroids_half_l2_norm = dpex.local.array(shape=r, dtype=float32)
-        partial_scores = dpex.private.array(shape=r, dtype=float32)
+        centroids_window = dpex.local.array(
+            shape=centroids_window_shape, dtype=float32
+        )
+        centroids_window_half_l2_norm = dpex.local.array(
+            shape=window_nb_centroids, dtype=float32
+        )
+        partial_scores = dpex.private.array(
+            shape=window_nb_centroids, dtype=float32
+        )
 
-        first_centroid_global_idx = 0
+        first_centroid_idx = 0
 
         min_idx = 0
         min_score = inf
 
-        window_col = local_thread % r
-        window_row_offset = local_thread // r
+        window_loading_centroid_idx = local_work_id % window_nb_centroids
+        window_loading_feature_offset = local_work_id // window_nb_centroids
 
-        for _0 in range(n_cluster_groups):
+        for _0 in range(nb_windows_per_feature):
 
-            for i in range(r):
+            for i in range(window_nb_centroids):
                 partial_scores[i] = f32zero
 
-            half_l2_norm_idx = first_centroid_global_idx + local_thread
-            if local_thread < r:
-                if half_l2_norm_idx < n_clusters:
-                    l2norm = centroids_half_l2_norm[half_l2_norm_idx]
+            half_l2_norm_loading_idx = first_centroid_idx + local_work_id
+            if local_work_id < window_nb_centroids:
+                if half_l2_norm_loading_idx < n_clusters:
+                    l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
                 else:
                     l2norm = inf
-                local_centroids_half_l2_norm[local_thread] = l2norm
+                centroids_window_half_l2_norm[local_work_id] = l2norm
 
-            global_window_col = first_centroid_global_idx + window_col
+            loading_centroid_idx = (
+                first_centroid_idx + window_loading_centroid_idx
+            )
 
-            first_dim_global_idx = 0
+            first_feature_idx = 0
 
-            for _1 in range(n_dim_windows):
-                load_first_dim_local_idx = 0
-                for load_iter in range(number_of_load_iter):
-                    window_row = load_first_dim_local_idx + window_row_offset
-                    global_window_row = first_dim_global_idx + window_row
+            for _1 in range(nb_windows_per_centroid):
 
-                    if (global_window_row < dim) and (
-                        global_window_col < n_clusters
+                centroid_window_first_loading_feature_idx = 0
+
+                for _2 in range(centroids_window_height_ratio_multiplier):
+                    window_loading_feature_idx = (
+                        centroid_window_first_loading_feature_idx
+                        + window_loading_feature_offset
+                    )
+                    loading_feature_idx = (
+                        first_feature_idx + window_loading_feature_idx
+                    )
+
+                    if (loading_feature_idx < n_features) and (
+                        loading_centroid_idx < n_clusters
                     ):
-                        item = current_centroids[
-                            global_window_row, global_window_col
+                        value = current_centroids_t[
+                            loading_feature_idx, loading_centroid_idx
                         ]
                     else:
-                        item = f32zero
+                        value = f32zero
 
-                    window_shm[window_row, window_col] = item
+                    centroids_window[
+                        window_loading_feature_idx, window_loading_centroid_idx
+                    ] = value
 
-                    load_first_dim_local_idx += cluster_window_per_thread_group
+                    centroid_window_first_loading_feature_idx += (
+                        nb_of_window_features_per_work_group
+                    )
 
                 dpex.barrier()
 
-                for d in range(h):
-                    current_dim_global_idx = d + first_dim_global_idx
-                    if (current_dim_global_idx < dim) and (global_thread < n):
+                for window_feature_idx in range(window_nb_features):
+                    feature_idx = window_feature_idx + first_feature_idx
+                    if (feature_idx < n_features) and (sample_idx < n_samples):
                         # performance for the line thereafter relies on L1 cache
-                        X_feature = X[current_dim_global_idx, global_thread]
+                        X_value = X_t[feature_idx, sample_idx]
                     else:
-                        X_feature = f32zero
-                    for i in range(r):
-                        centroid_feature = window_shm[d, i]
-                        partial_scores[i] += centroid_feature * X_feature
+                        X_value = f32zero
+                    for window_centroid_idx in range(window_nb_centroids):
+                        centroid_value = centroids_window[
+                            window_feature_idx, window_centroid_idx
+                        ]
+                        partial_scores[window_centroid_idx] += (
+                            centroid_value * X_value
+                        )
 
                 dpex.barrier()
 
-                first_dim_global_idx += h
+                first_feature_idx += window_nb_features
 
-            for i in range(r):
+            for i in range(window_nb_centroids):
                 current_score = (
-                    local_centroids_half_l2_norm[i] - partial_scores[i]
+                    centroids_window_half_l2_norm[i] - partial_scores[i]
                 )
                 if current_score < min_score:
                     min_score = current_score
-                    min_idx = first_centroid_global_idx + i
+                    min_idx = first_centroid_idx + i
 
             dpex.barrier()
 
-            first_centroid_global_idx += r
+            first_centroid_idx += window_nb_centroids
 
-        if global_thread >= n:
+        if sample_idx >= n_samples:
             return
 
-        inertia[global_thread] = min_score
+        inertia[sample_idx] = min_score
 
-        warp_id = global_thread // warp_size
-        private_id = warp_id % nb_centroids_private_copies
+        privatization_idx = (
+            sample_idx // preferred_work_group_size_multiple
+        ) % nb_centroids_private_copies
         dpex.atomic.add(
             centroid_counts_private_copies,
-            (private_id, min_idx),
+            (privatization_idx, min_idx),
             f32one,
         )
 
-        for d in range(dim):
+        for feature_idx in range(n_features):
             dpex.atomic.add(
-                centroids_private_copies,
-                # ((warp_id + d) % nb_centroids_private_copies, d, min_idx),
-                (private_id, d, min_idx),
-                X[d, global_thread],
+                centroids_t_private_copies,
+                # ((privatization_idx + feature_idx) % nb_centroids_private_copies, feature_idx, min_idx),
+                (privatization_idx, feature_idx, min_idx),
+                X_t[feature_idx, sample_idx],
             )
 
     return (
         nb_centroids_private_copies,
-        fused_kernel_fixed_window[global_size, work_group_size],
+        fused_kmeans[global_size, work_group_size],
     )
 
 
 @cached_kernel_factory
-def make_assignment_kernel_fixed_window(
-    n,
-    dim,
+def make_assignment_fixed_window_kernel(
+    n_samples,
+    n_features,
     n_clusters,
-    warp_size,
-    window_length_multiple,
-    cluster_window_per_thread_group,
-    number_of_load_iter,
+    preferred_work_group_size_multiple,
+    centroids_window_width_multiplier,
+    centroids_window_height_ratio_multiplier,
+    work_group_size,
 ):
-    r = warp_size * window_length_multiple
-    work_group_size = r * cluster_window_per_thread_group
-    h = number_of_load_iter * cluster_window_per_thread_group
+    window_nb_centroids = (
+        preferred_work_group_size_multiple * centroids_window_width_multiplier
+    )
+    nb_of_window_features_per_work_group = (
+        work_group_size // window_nb_centroids
+    )
+    window_nb_features = (
+        centroids_window_height_ratio_multiplier
+        * nb_of_window_features_per_work_group
+    )
 
-    n_cluster_groups = math.ceil(n_clusters / r)
-    global_size = (math.ceil(n / work_group_size)) * (work_group_size)
-    n_dim_windows = math.ceil(dim / h)
-    window_shm_shape = (h, r)
+    nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
+    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
+    nb_windows_per_centroid = math.ceil(n_features / window_nb_features)
+    centroids_window_shape = (window_nb_features, (window_nb_centroids + 1))
 
     inf = float32(math.inf)
     f32zero = float32(0.0)
     f32two = float32(2)
 
     @dpex.kernel
-    def assigment_kernel_fixed_window(
-        X,
-        current_centroids,
+    def assignment(
+        X_t,
+        current_centroids_t,
         centroids_half_l2_norm,
         inertia,
         assignments_idx,
     ):
-        global_thread = dpex.get_global_id(0)
-        local_thread = dpex.get_local_id(0)
+        sample_idx = dpex.get_global_id(0)
+        local_work_id = dpex.get_local_id(0)
 
-        window_shm = dpex.local.array(shape=window_shm_shape, dtype=float32)
-        local_centroids_half_l2_norm = dpex.local.array(shape=r, dtype=float32)
-        partial_scores = dpex.private.array(shape=r, dtype=float32)
+        centroids_window = dpex.local.array(
+            shape=centroids_window_shape, dtype=float32
+        )
+        centroids_window_half_l2_norm = dpex.local.array(
+            shape=window_nb_centroids, dtype=float32
+        )
+        partial_scores = dpex.private.array(
+            shape=window_nb_centroids, dtype=float32
+        )
 
-        first_centroid_global_idx = 0
+        first_centroid_idx = 0
 
         min_idx = 0
         min_score = inf
 
         X_l2_norm = f32zero
 
-        window_col = local_thread % r
-        window_row_offset = local_thread // r
+        window_loading_centroid_idx = local_work_id % window_nb_centroids
+        window_loading_feature_offset = local_work_id // window_nb_centroids
 
-        for _0 in range(n_cluster_groups):
+        for _0 in range(nb_windows_per_feature):
 
-            for i in range(r):
+            for i in range(window_nb_centroids):
                 partial_scores[i] = f32zero
 
-            half_l2_norm_idx = first_centroid_global_idx + local_thread
-            if local_thread < r:
-                if half_l2_norm_idx < n_clusters:
-                    l2norm = centroids_half_l2_norm[half_l2_norm_idx]
+            half_l2_norm_loading_idx = first_centroid_idx + local_work_id
+            if local_work_id < window_nb_centroids:
+                if half_l2_norm_loading_idx < n_clusters:
+                    l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
                 else:
                     l2norm = inf
-                local_centroids_half_l2_norm[local_thread] = l2norm
+                centroids_window_half_l2_norm[local_work_id] = l2norm
 
-            global_window_col = first_centroid_global_idx + window_col
+            loading_centroid_idx = (
+                first_centroid_idx + window_loading_centroid_idx
+            )
 
-            first_dim_global_idx = 0
+            first_feature_idx = 0
 
-            for _1 in range(n_dim_windows):
-                load_first_dim_local_idx = 0
-                for load_iter in range(number_of_load_iter):
-                    window_row = load_first_dim_local_idx + window_row_offset
-                    global_window_row = first_dim_global_idx + window_row
+            for _1 in range(nb_windows_per_centroid):
 
-                    if (global_window_row < dim) and (
-                        global_window_col < n_clusters
+                centroid_window_first_loading_feature_idx = 0
+
+                for _2 in range(centroids_window_height_ratio_multiplier):
+                    window_loading_feature_idx = (
+                        centroid_window_first_loading_feature_idx
+                        + window_loading_feature_offset
+                    )
+                    loading_feature_idx = (
+                        first_feature_idx + window_loading_feature_idx
+                    )
+
+                    if (loading_feature_idx < n_features) and (
+                        loading_centroid_idx < n_clusters
                     ):
-                        item = current_centroids[
-                            global_window_row, global_window_col
+                        value = current_centroids_t[
+                            loading_feature_idx, loading_centroid_idx
                         ]
                     else:
-                        item = f32zero
+                        value = f32zero
 
-                    window_shm[window_row, window_col] = item
+                    centroids_window[
+                        window_loading_feature_idx, window_loading_centroid_idx
+                    ] = value
 
-                    load_first_dim_local_idx += cluster_window_per_thread_group
+                    centroid_window_first_loading_feature_idx += (
+                        nb_of_window_features_per_work_group
+                    )
 
                 dpex.barrier()
 
-                for d in range(h):
-                    current_dim_global_idx = d + first_dim_global_idx
-                    if (current_dim_global_idx < dim) and (global_thread < n):
+                for window_feature_idx in range(window_nb_features):
+                    feature_idx = window_feature_idx + first_feature_idx
+                    if (feature_idx < n_features) and (sample_idx < n_samples):
                         # performance for the line thereafter relies on L1 cache
-                        X_feature = X[current_dim_global_idx, global_thread]
+                        X_value = X_t[feature_idx, sample_idx]
                     else:
-                        X_feature = f32zero
-                    X_l2_norm += X_feature * X_feature
-                    for i in range(r):
-                        centroid_feature = window_shm[d, i]
-                        partial_scores[i] += centroid_feature * X_feature
+                        X_value = f32zero
+                    if _0 == 0:
+                        X_l2_norm += X_value * X_value
+                    for window_centroid_idx in range(window_nb_centroids):
+                        centroid_value = centroids_window[
+                            window_feature_idx, window_centroid_idx
+                        ]
+                        partial_scores[window_centroid_idx] += (
+                            centroid_value * X_value
+                        )
 
                 dpex.barrier()
 
-                first_dim_global_idx += h
+                first_feature_idx += window_nb_features
 
-            for i in range(r):
+            for i in range(window_nb_centroids):
                 current_score = (
-                    local_centroids_half_l2_norm[i] - partial_scores[i]
+                    centroids_window_half_l2_norm[i] - partial_scores[i]
                 )
                 if current_score < min_score:
                     min_score = current_score
-                    min_idx = first_centroid_global_idx + i
+                    min_idx = first_centroid_idx + i
 
             dpex.barrier()
 
-            first_centroid_global_idx += r
+            first_centroid_idx += window_nb_centroids
 
-        if global_thread >= n:
+        if sample_idx >= n_samples:
             return
 
-        assignments_idx[global_thread] = min_idx
-        inertia[global_thread] = X_l2_norm + (f32two * min_score)
+        assignments_idx[sample_idx] = min_idx
+        inertia[sample_idx] = X_l2_norm + (f32two * min_score)
 
-    return assigment_kernel_fixed_window[global_size, work_group_size]
+    return assignment[global_size, work_group_size]

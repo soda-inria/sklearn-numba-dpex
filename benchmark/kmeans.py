@@ -81,10 +81,7 @@ if __name__ == "__main__":
     from ext_helpers.sklearn import kmeans as sklearn_kmeans
     from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
-    from sklearn_numba_dpex.kmeans.drivers import (
-        kmeans_cpu as dpex_kmeans_cpu,
-        kmeans_gpu as dpex_kmeans_gpu,
-    )
+    from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
@@ -139,14 +136,14 @@ if __name__ == "__main__":
         )
 
     kmeans_timer.timeit(
-        dpex_kmeans_cpu,
+        KMeansDriver(work_group_size_multiplier=4, device="cpu"),
         name="Kmeans numba_dpex CPU",
         max_iter=max_iter,
         tol=tol,
     )
 
     kmeans_timer.timeit(
-        dpex_kmeans_gpu,
+        KMeansDriver(work_group_size_multiplier=4, device="gpu"),
         name="Kmeans numba_dpex GPU",
         max_iter=max_iter,
         tol=tol,
