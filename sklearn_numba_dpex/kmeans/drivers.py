@@ -16,6 +16,33 @@ from sklearn_numba_dpex.kmeans.kernels import (
 )
 
 
+# class KMeansDriver:
+
+
+#     def __init__(
+#         # work_group_size="auto",
+#         # preferred_work_group_size_multiple="auto",
+#         # work_group_size_multiplier="auto",
+#         # work_group_size_multiplier_for_cluster_window_length="auto",
+#         # ratio_multiplier_for_window_height="auto",
+#         # global_memory_cache_size="auto",
+#         # work_group_size_multiple_for_cluster_window_length="auto",
+#         # window_height
+#         ):
+#     """
+#     parameters:
+#         preferred work group size (used for privatization strategy), power of 2
+#         width of the window (number of clusters), multiple of preferred work group size
+#             should be a power of 2
+#         work group sized, multiple of preferred work grup size, power of 2
+#         height of the window (number of dims), should be a multiple of the ratio
+#             (work group size / width)
+
+#     """
+
+#     pass
+
+
 def kmeans(
     X,
     sample_weight,
@@ -38,37 +65,39 @@ def kmeans(
     WARP_SIZE = 64
     # cache size (in bytes) can also be retrieved
     L2_CACHE_SIZE = 1572864
-    local_size = 4 * WARP_SIZE
+    work_group_size = 4 * WARP_SIZE
 
     dim = X.shape[1]
     n = X.shape[0]
     n_clusters = centers_init.shape[0]
 
     reset_inertia = make_initialize_to_zeros_kernel_1_float32(
-        n=n, local_size=local_size
+        n=n, work_group_size=work_group_size
     )
 
-    copyto = make_copyto_kernel(n_clusters, dim, local_size=local_size)
+    copyto = make_copyto_kernel(
+        n_clusters, dim, work_group_size=work_group_size
+    )
 
     broadcast_division = make_broadcast_division_kernel(
-        n=n_clusters, dim=dim, local_size=local_size
+        n=n_clusters, dim=dim, work_group_size=work_group_size
     )
 
     get_center_shifts = make_center_shift_kernel(
-        n_clusters, dim, local_size=local_size
+        n_clusters, dim, work_group_size=work_group_size
     )
 
     half_l2_norm = make_half_l2_norm_kernel_dim0(
-        n_clusters, dim, local_size=local_size
+        n_clusters, dim, work_group_size=work_group_size
     )
 
-    # NB: assumes local_size is a power of two
+    # NB: assumes work_group_size is a power of two
     reduce_inertia = make_sum_reduction_kernel_1(
-        n, local_size=local_size, device=device
+        n, work_group_size=work_group_size, device=device
     )
 
     reduce_center_shifts = make_sum_reduction_kernel_1(
-        n_clusters, local_size=local_size, device=device
+        n_clusters, work_group_size=work_group_size, device=device
     )
 
     (
@@ -93,7 +122,7 @@ def kmeans(
         make_initialize_to_zeros_kernel_2_float32(
             n=n_clusters,
             dim=nb_centroids_private_copies,
-            local_size=local_size,
+            work_group_size=work_group_size,
         )
     )
 
@@ -101,20 +130,20 @@ def kmeans(
         dim0=nb_centroids_private_copies,
         dim1=dim,
         dim2=n_clusters,
-        local_size=local_size,
+        work_group_size=work_group_size,
     )
 
     reduce_centroid_counts_private_copies = make_sum_reduction_kernel_2(
         n=n_clusters,
         dim=nb_centroids_private_copies,
-        local_size=local_size,
+        work_group_size=work_group_size,
     )
 
     reduce_centroids_private_copies = make_sum_reduction_kernel_3(
         dim0=nb_centroids_private_copies,
         dim1=dim,
         dim2=n_clusters,
-        local_size=local_size,
+        work_group_size=work_group_size,
     )
 
     assignment_kernel_fixed_window = make_assignment_kernel_fixed_window(
