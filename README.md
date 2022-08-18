@@ -25,7 +25,7 @@ Let's create a dedicated conda env with the development versions
 of the Intel Python libraries (from the `dppy/label/dev` channel).
 
 ```
-conda create -n dppy-dev dpnp numba cython -c dppy/label/dev -c intel --override-channels
+conda create -n dppy-dev dpnp numba cython spirv-tools -c dppy/label/dev -c intel --override-channels
 ```
 
 Let's activate it and introspect the available hardware:
@@ -109,7 +109,6 @@ The install numba-dpex in the same conda env as previously:
 
 git clone https://github.com/IntelPython/numba-dpex/
 cd numba-dpex
-conda install cython
 pip install -e . --no-build-isolation
 ```
 
