@@ -28,16 +28,17 @@ def _check_power_of_2(e):
     return e
 
 
-class KMeansDriver:
+class LLoydKMeansDriver:
     def __init__(
         self,
         global_mem_cache_size=None,
         preferred_work_group_size_multiple=None,
         work_group_size_multiplier=None,
         centroids_window_width_multiplier=None,
-        centroids_window_height_ratio_multiplier=None,
+        centroids_window_height=None,
         centroids_private_copies_max_cache_occupancy=None,
         device=None,
+        X_layout=None,
     ):
         dpctl_device = dpctl.SyclDevice(device)
         device_params = _DeviceParams(dpctl_device)
@@ -54,7 +55,8 @@ class KMeansDriver:
         self.work_group_size_multiplier = _check_power_of_2(
             work_group_size_multiplier
             or (
-                device_params.max_work_group_size // self.preferred_work_group_size_multiple
+                device_params.max_work_group_size
+                // self.preferred_work_group_size_multiple
             )
         )
 
@@ -62,15 +64,15 @@ class KMeansDriver:
             centroids_window_width_multiplier or 1
         )
 
-        self.centroids_window_height_ratio_multiplier = (
-            centroids_window_height_ratio_multiplier or 2
-        )
+        self.centroids_window_height = _check_power_of_2(centroids_window_height or 16)
 
         self.centroids_private_copies_max_cache_occupancy = (
             centroids_private_copies_max_cache_occupancy or 0.7
         )
 
         self.device = device
+
+        self.X_layout = X_layout or "F"
 
     def __call__(
         self,
@@ -83,7 +85,9 @@ class KMeansDriver:
         tol=1e-4,
         n_threads=1,
     ):
-        """Inspired by the "Fused Fixed" strategy exposed in:
+        """GPU optimized implementation of Lloyd's k-means.
+
+        Inspired by the "Fused Fixed" strategy exposed in:
         Kruliš, M., & Kratochvíl, M. (2020, August). Detailed analysis and
         optimization of CUDA K-means algorithm. In 49th International
         Conference on Parallel Processing-ICPP (pp. 1-11).
@@ -137,7 +141,7 @@ class KMeansDriver:
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height_ratio_multiplier=self.centroids_window_height_ratio_multiplier,
+            centroids_window_height=self.centroids_window_height,
             centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
             work_group_size=work_group_size,
         )
@@ -176,7 +180,7 @@ class KMeansDriver:
             n_clusters,
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height_ratio_multiplier=self.centroids_window_height_ratio_multiplier,
+            centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
         )
 
@@ -185,9 +189,28 @@ class KMeansDriver:
         # memory layout is actually more L1 cache friendly on the GPU and
         # results in a slight performance increase (typically 15% faster) when
         # updating the centroids from the assigned samples.
-        X_t = dpctl.tensor.from_numpy(X, device=self.device).T
-        assert X_t.strides[0] == 1  # Fortran memory layout
-        centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
+
+        # TODO: instead of forcing float32 dtype, only convert when necessary (i.e.
+        # if the device does not support float32), and abstract the dtype in all kernels
+        if self.X_layout == "C":
+            raise ValueError("C layout is currently not supported.")
+            X_t = dpctl.tensor.from_numpy(X.astype(np.float32), device=self.device).T
+            assert (
+                X_t.strides[0] == 1
+            )  # Fortran memory layout, equvalent to C layout on tranposed
+        elif self.X_layout == "F":
+            X_t = dpctl.tensor.from_numpy(X.astype(np.float32).T, device=self.device)
+            assert (
+                X_t.strides[1] == 1
+            )  # C memory layout, equvalent to Fortran layout on transposed
+        else:
+            raise ValueError(
+                f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
+            )
+
+        centroids_t = dpctl.tensor.from_numpy(
+            centers_init.astype(np.float32).T, device=self.device
+        )
         centroids_t_copy_array = dpctl.tensor.empty_like(
             centroids_t, device=self.device
         )
@@ -283,7 +306,7 @@ class KMeansDriver:
         inertia_sum = dpctl.tensor.asnumpy(reduce_inertia(inertia))[0]
 
         return (
-            dpctl.tensor.asnumpy(assignments_idx),
+            dpctl.tensor.asnumpy(assignments_idx).astype(np.int32),
             inertia_sum,
             np.ascontiguousarray(dpctl.tensor.asnumpy(best_centroids_t.T)),
             n_iteration,

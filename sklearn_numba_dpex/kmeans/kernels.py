@@ -92,9 +92,7 @@ def make_initialize_to_zeros_2dim_float32_kernel(
 
 
 @lru_cache
-def make_initialize_to_zeros_3dim_float32_kernel(
-    dim0, dim1, dim2, work_group_size
-):
+def make_initialize_to_zeros_3dim_float32_kernel(dim0, dim1, dim2, work_group_size):
 
     nb_items = dim0 * dim1 * dim2
     stride0 = dim1 * dim2
@@ -310,20 +308,20 @@ def make_fused_fixed_window_kernel(
     preferred_work_group_size_multiple,
     global_mem_cache_size,
     centroids_window_width_multiplier,
-    centroids_window_height_ratio_multiplier,
+    centroids_window_height,
     centroids_private_copies_max_cache_occupancy,
     work_group_size,
 ):
     window_nb_centroids = (
         preferred_work_group_size_multiple * centroids_window_width_multiplier
     )
-    nb_of_window_features_per_work_group = (
-        work_group_size // window_nb_centroids
+    nb_of_window_features_per_work_group = work_group_size // window_nb_centroids
+
+    centroids_window_height_ratio_multiplier = (
+        centroids_window_height // nb_of_window_features_per_work_group
     )
-    window_nb_features = (
-        centroids_window_height_ratio_multiplier
-        * nb_of_window_features_per_work_group
-    )
+
+    window_nb_features = centroids_window_height
 
     nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
@@ -350,18 +348,33 @@ def make_fused_fixed_window_kernel(
         centroids_t_private_copies,
         centroid_counts_private_copies,
     ):
+        """One full iteration of LLoyd's k-means.
+
+        This kernel is meant to be invoked on a 1D grid spanning the
+        data points of the training set in parallel.
+
+        Each work-item will assign that sample to its nearest centroid
+        and accumulate the feature values of the data points into
+        the new version of the centroid for the next iteration. The
+        centroid assignment and centroid update steps are performed
+        in a single fused kernel to avoid introducing a large
+        intermediate label assignment array to be re-read from global
+        memory before performing the centroid update step.
+
+        To avoid atomic contention when performing the centroid updates
+        concurrently for different data points, we use private copies
+        of the new centroid array in global memory. Those copies are
+        meant to be re-reduced afterwards.
+        """
+        sample_idx = dpex.get_global_id(0)
         sample_idx = dpex.get_global_id(0)
         local_work_id = dpex.get_local_id(0)
 
-        centroids_window = dpex.local.array(
-            shape=centroids_window_shape, dtype=float32
-        )
+        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=float32)
         centroids_window_half_l2_norm = dpex.local.array(
             shape=window_nb_centroids, dtype=float32
         )
-        partial_scores = dpex.private.array(
-            shape=window_nb_centroids, dtype=float32
-        )
+        partial_scores = dpex.private.array(shape=window_nb_centroids, dtype=float32)
 
         first_centroid_idx = 0
 
@@ -384,9 +397,7 @@ def make_fused_fixed_window_kernel(
                     l2norm = inf
                 centroids_window_half_l2_norm[local_work_id] = l2norm
 
-            loading_centroid_idx = (
-                first_centroid_idx + window_loading_centroid_idx
-            )
+            loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
             first_feature_idx = 0
 
@@ -399,9 +410,7 @@ def make_fused_fixed_window_kernel(
                         centroid_window_first_loading_feature_idx
                         + window_loading_feature_offset
                     )
-                    loading_feature_idx = (
-                        first_feature_idx + window_loading_feature_idx
-                    )
+                    loading_feature_idx = first_feature_idx + window_loading_feature_idx
 
                     if (loading_feature_idx < n_features) and (
                         loading_centroid_idx < n_clusters
@@ -433,18 +442,14 @@ def make_fused_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        partial_scores[window_centroid_idx] += (
-                            centroid_value * X_value
-                        )
+                        partial_scores[window_centroid_idx] += centroid_value * X_value
 
                 dpex.barrier()
 
                 first_feature_idx += window_nb_features
 
             for i in range(window_nb_centroids):
-                current_score = (
-                    centroids_window_half_l2_norm[i] - partial_scores[i]
-                )
+                current_score = centroids_window_half_l2_norm[i] - partial_scores[i]
                 if current_score < min_score:
                     min_score = current_score
                     min_idx = first_centroid_idx + i
@@ -488,19 +493,18 @@ def make_assignment_fixed_window_kernel(
     n_clusters,
     preferred_work_group_size_multiple,
     centroids_window_width_multiplier,
-    centroids_window_height_ratio_multiplier,
+    centroids_window_height,
     work_group_size,
 ):
     window_nb_centroids = (
         preferred_work_group_size_multiple * centroids_window_width_multiplier
     )
-    nb_of_window_features_per_work_group = (
-        work_group_size // window_nb_centroids
+    nb_of_window_features_per_work_group = work_group_size // window_nb_centroids
+    centroids_window_height_ratio_multiplier = (
+        centroids_window_height // nb_of_window_features_per_work_group
     )
-    window_nb_features = (
-        centroids_window_height_ratio_multiplier
-        * nb_of_window_features_per_work_group
-    )
+
+    window_nb_features = centroids_window_height
 
     nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
@@ -522,15 +526,11 @@ def make_assignment_fixed_window_kernel(
         sample_idx = dpex.get_global_id(0)
         local_work_id = dpex.get_local_id(0)
 
-        centroids_window = dpex.local.array(
-            shape=centroids_window_shape, dtype=float32
-        )
+        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=float32)
         centroids_window_half_l2_norm = dpex.local.array(
             shape=window_nb_centroids, dtype=float32
         )
-        partial_scores = dpex.private.array(
-            shape=window_nb_centroids, dtype=float32
-        )
+        partial_scores = dpex.private.array(shape=window_nb_centroids, dtype=float32)
 
         first_centroid_idx = 0
 
@@ -555,9 +555,7 @@ def make_assignment_fixed_window_kernel(
                     l2norm = inf
                 centroids_window_half_l2_norm[local_work_id] = l2norm
 
-            loading_centroid_idx = (
-                first_centroid_idx + window_loading_centroid_idx
-            )
+            loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
             first_feature_idx = 0
 
@@ -570,9 +568,7 @@ def make_assignment_fixed_window_kernel(
                         centroid_window_first_loading_feature_idx
                         + window_loading_feature_offset
                     )
-                    loading_feature_idx = (
-                        first_feature_idx + window_loading_feature_idx
-                    )
+                    loading_feature_idx = first_feature_idx + window_loading_feature_idx
 
                     if (loading_feature_idx < n_features) and (
                         loading_centroid_idx < n_clusters
@@ -606,18 +602,14 @@ def make_assignment_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        partial_scores[window_centroid_idx] += (
-                            centroid_value * X_value
-                        )
+                        partial_scores[window_centroid_idx] += centroid_value * X_value
 
                 dpex.barrier()
 
                 first_feature_idx += window_nb_features
 
             for i in range(window_nb_centroids):
-                current_score = (
-                    centroids_window_half_l2_norm[i] - partial_scores[i]
-                )
+                current_score = centroids_window_half_l2_norm[i] - partial_scores[i]
                 if current_score < min_score:
                     min_score = current_score
                     min_idx = first_centroid_idx + i

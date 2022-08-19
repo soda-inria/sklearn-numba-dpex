@@ -26,9 +26,7 @@ class KMeansTimeit:
             centers_init = self.centers_init.copy()
             X = self.X.copy()
             sample_weight = (
-                None
-                if self.sample_weight is None
-                else self.sample_weight.copy()
+                None if self.sample_weight is None else self.sample_weight.copy()
             )
 
             est_kwargs = dict(
@@ -47,9 +45,7 @@ class KMeansTimeit:
             sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_fn
             estimator = KMeans(**est_kwargs)
 
-            print(
-                f"Running {name} with parameters max_iter={max_iter} tol={tol} ..."
-            )
+            print(f"Running {name} with parameters max_iter={max_iter} tol={tol} ...")
 
             # dry run, to be fair for JIT implementations
             KMeans(**est_kwargs).set_params(max_iter=2).fit(
@@ -62,9 +58,7 @@ class KMeansTimeit:
             print(f"Running {name} ... done in {t1 - t0}\n")
 
         finally:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = (
-                VANILLA_SKLEARN_LLOYD
-            )
+            sklearn.cluster._kmeans._kmeans_single_lloyd = VANILLA_SKLEARN_LLOYD
 
     def _check_kmeans_fn_signature(self, kmeans_fn):
         fn_signature = inspect.signature(kmeans_fn)
@@ -81,7 +75,7 @@ if __name__ == "__main__":
     from ext_helpers.sklearn import kmeans as sklearn_kmeans
     from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
-    from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
+    from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
@@ -93,9 +87,7 @@ if __name__ == "__main__":
     max_iter = 100
     tol = 0
 
-    def benchmark_data_initialization(
-        random_state=random_state, n_clusters=n_clusters
-    ):
+    def benchmark_data_initialization(random_state=random_state, n_clusters=n_clusters):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True)
         X = X.astype(np.float32)
         scaler_x = MinMaxScaler()
@@ -105,9 +97,7 @@ if __name__ == "__main__":
         # X = np.hstack([X for _ in range(5)])
         # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
-        init = np.array(
-            rng.choice(X, n_clusters, replace=False), dtype=np.float32
-        )
+        init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
         return X, None, init
 
     kmeans_timer = KMeansTimeit(benchmark_data_initialization)
@@ -137,14 +127,14 @@ if __name__ == "__main__":
 
     for multiplier in [1, 2, 4, 8]:
         kmeans_timer.timeit(
-            KMeansDriver(device="cpu", work_group_size_multiplier=multiplier),
+            LLoydKMeansDriver(device="cpu", work_group_size_multiplier=multiplier),
             name="Kmeans numba_dpex CPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,
         )
 
         kmeans_timer.timeit(
-            KMeansDriver(device="gpu", work_group_size_multiplier=multiplier),
+            LLoydKMeansDriver(device="gpu", work_group_size_multiplier=multiplier),
             name=f"Kmeans numba_dpex GPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,

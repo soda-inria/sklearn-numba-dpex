@@ -1,4 +1,7 @@
 import pytest
+import inspect
+
+import sklearn
 
 from numpy.testing import assert_array_equal
 from sklearn import config_context
@@ -6,6 +9,12 @@ from sklearn.datasets import make_blobs
 from sklearn.cluster import KMeans
 from sklearn.base import clone
 from sklearn.utils._testing import assert_allclose
+
+from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
+
+
+_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
+_SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
 
 
 def test_placeholder():
@@ -17,9 +26,39 @@ def test_placeholder():
     assert len(dpctl.get_devices()) > 0
 
 
+def test_kmeans_driver_signature():
+    driver_signature = inspect.signature(LLoydKMeansDriver())
+    assert driver_signature == _SKLEARN_LLOYD_SIGNATURE
+
+
+def test_kmeans_fit_same_results():
+    random_seed = 42
+    X, _ = make_blobs(random_state=random_seed)
+
+    kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd")
+    kmeans_engine = clone(kmeans_vanilla)
+
+    # Fit a reference model with the default scikit-learn engine:
+    kmeans_vanilla.fit(X)
+
+    # Fit a model with numba_dpex backend
+    try:
+        sklearn.cluster._kmeans._kmeans_single_lloyd = LLoydKMeansDriver(
+            work_group_size_multiplier=4
+        )
+        kmeans_engine.fit(X)
+    finally:
+        sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
+
+    # ensure same results
+    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
+    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+
+
 @pytest.mark.skip(reason="KMeans has not been implemented yet.")
 def test_kmeans_same_results(global_random_seed):
-    X = make_blobs(random_state=global_random_seed)
+    X, _ = make_blobs(random_state=global_random_seed)
 
     # Fit a reference model with the default scikit-learn engine:
 

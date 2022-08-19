@@ -7,8 +7,6 @@ import warnings
 # attributes and will fault when pyopencl is not needed anymore.
 try:
     import pyopencl
-
-    _PYOPENCL_PLATFORMS = pyopencl.get_platforms()
 except ImportError:
     pyopencl = None
 
@@ -80,7 +78,7 @@ def _get_cl_param(cl_device, value, default, device_name):
 
 def _warns_missing_cl_param(value, default, device_name):
     text = [
-        f"Trying to fetch the parameter {value} for the executing device {device_name}"
+        f"Trying to fetch the parameter {value} for the executing device {device_name} "
         f"from opencl interface "
     ]
     if pyopencl is None:
@@ -93,4 +91,4 @@ def _warns_missing_cl_param(value, default, device_name):
     text.append(
         f"\nUsing default value {value} = {default} as a fallback, which might be inadapted."
     )
-    warnings.warm(text, RuntimeWarning)
+    warnings.warn("".join(text), RuntimeWarning)
