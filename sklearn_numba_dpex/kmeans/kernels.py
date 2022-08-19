@@ -1,3 +1,6 @@
+from functools import lru_cache
+
+
 import numba_dpex as dpex
 from numba import float32, int32
 
@@ -5,12 +8,8 @@ import dpctl
 import numpy as np
 import math
 
-from sklearn_numba_dpex.utils import (
-    cached_kernel_factory,
-)
 
-
-@cached_kernel_factory
+@lru_cache
 def make_initialize_to_zeros_1dim_int32_kernel(n_samples, work_group_size):
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
@@ -28,7 +27,7 @@ def make_initialize_to_zeros_1dim_int32_kernel(n_samples, work_group_size):
     return initialize_to_zeros[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_initialize_to_zeros_1dim_float32_kernel(n_samples, work_group_size):
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
@@ -46,7 +45,7 @@ def make_initialize_to_zeros_1dim_float32_kernel(n_samples, work_group_size):
     return initialize_to_zeros[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_initialize_to_zeros_2dim_float32_kernel(
     n_samples, n_features, work_group_size
 ):
@@ -69,7 +68,7 @@ def make_initialize_to_zeros_2dim_float32_kernel(
     return initialize_to_zeros[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_initialize_to_zeros_2dim_float32_kernel(
     n_samples, n_features, work_group_size
 ):
@@ -92,7 +91,7 @@ def make_initialize_to_zeros_2dim_float32_kernel(
     return initialize_to_zeros[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_initialize_to_zeros_3dim_float32_kernel(
     dim0, dim1, dim2, work_group_size
 ):
@@ -118,7 +117,7 @@ def make_initialize_to_zeros_3dim_float32_kernel(
     return initialize_to_zeros[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_copyto_kernel(n_samples, n_features, work_group_size):
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
 
@@ -135,7 +134,7 @@ def make_copyto_kernel(n_samples, n_features, work_group_size):
     return copyto_kernel[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_broadcast_division_kernel(n_samples, n_features, work_group_size):
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
 
@@ -154,7 +153,7 @@ def make_broadcast_division_kernel(n_samples, n_features, work_group_size):
     return broadcast_division[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_center_shift_kernel(n_samples, n_features, work_group_size):
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
@@ -180,7 +179,7 @@ def make_center_shift_kernel(n_samples, n_features, work_group_size):
     return center_shift[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_half_l2_norm_dim0_kernel(n_samples, n_features, work_group_size):
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
@@ -203,7 +202,7 @@ def make_half_l2_norm_dim0_kernel(n_samples, n_features, work_group_size):
     return half_l2_norm[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_sum_reduction_1dim_kernel(n_samples, work_group_size, device):
     local_nb_iterations = math.floor(math.log2(work_group_size))
     f32zero = float32(0.0)
@@ -262,7 +261,7 @@ def make_sum_reduction_1dim_kernel(n_samples, work_group_size, device):
     return sum_reduction
 
 
-@cached_kernel_factory
+@lru_cache
 def make_sum_reduction_2dim_kernel(n_samples, n_features, work_group_size):
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
     f32zero = float32(0.0)
@@ -280,7 +279,7 @@ def make_sum_reduction_2dim_kernel(n_samples, n_features, work_group_size):
     return sum_reduction_kernel[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_sum_reduction_3dim_kernel(dim0, dim1, dim2, work_group_size):
     nb_groups_for_dim2 = math.ceil(dim2 / work_group_size)
     nb_threads_for_dim2 = nb_groups_for_dim2 * work_group_size
@@ -303,7 +302,7 @@ def make_sum_reduction_3dim_kernel(dim0, dim1, dim2, work_group_size):
     return sum_reduction_kernel[global_size, work_group_size]
 
 
-@cached_kernel_factory
+@lru_cache
 def make_fused_fixed_window_kernel(
     n_samples,
     n_features,
@@ -347,7 +346,7 @@ def make_fused_fixed_window_kernel(
         X_t,
         current_centroids_t,
         centroids_half_l2_norm,
-        inertia,
+        pseudo_inertia,
         centroids_t_private_copies,
         centroid_counts_private_copies,
     ):
@@ -457,7 +456,7 @@ def make_fused_fixed_window_kernel(
         if sample_idx >= n_samples:
             return
 
-        inertia[sample_idx] = min_score
+        pseudo_inertia[sample_idx] = min_score
 
         privatization_idx = (
             sample_idx // preferred_work_group_size_multiple
@@ -482,7 +481,7 @@ def make_fused_fixed_window_kernel(
     )
 
 
-@cached_kernel_factory
+@lru_cache
 def make_assignment_fixed_window_kernel(
     n_samples,
     n_features,

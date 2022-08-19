@@ -149,4 +149,3 @@ if __name__ == "__main__":
             max_iter=max_iter,
             tol=tol,
         )
-

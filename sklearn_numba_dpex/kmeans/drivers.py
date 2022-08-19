@@ -4,6 +4,8 @@ import numpy as np
 import dpctl
 import pyopencl
 
+from sklearn_numba_dpex.utils._device import _DeviceParams
+
 from sklearn_numba_dpex.kmeans.kernels import (
     make_initialize_to_zeros_1dim_float32_kernel,
     make_initialize_to_zeros_2dim_float32_kernel,
@@ -38,29 +40,21 @@ class KMeansDriver:
         device=None,
     ):
         dpctl_device = dpctl.SyclDevice(device)
-
-        # TODO: when dpctl.SyclDevice also exposes relevant attributes,
-        # remove the dependency to opencl and only use dpctl.
-        cl_device = next(
-            device
-            for platform in pyopencl.get_platforms()
-            for device in platform.get_devices()
-            if device.name == dpctl_device.name
-        )
+        device_params = _DeviceParams(dpctl_device)
 
         self.global_mem_cache_size = (
-            global_mem_cache_size or cl_device.global_mem_cache_size
+            global_mem_cache_size or device_params.global_mem_cache_size
         )
 
         self.preferred_work_group_size_multiple = _check_power_of_2(
             preferred_work_group_size_multiple
-            or cl_device.preferred_work_group_size_multiple
+            or device_params.preferred_work_group_size_multiple
         )
 
         self.work_group_size_multiplier = _check_power_of_2(
             work_group_size_multiplier
             or (
-                cl_device.max_work_group_size // self.preferred_work_group_size_multiple
+                device_params.max_work_group_size // self.preferred_work_group_size_multiple
             )
         )
 
