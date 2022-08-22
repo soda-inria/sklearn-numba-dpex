@@ -2,7 +2,9 @@ import pytest
 import inspect
 
 import sklearn
+import dpctl
 
+import numpy as np
 from numpy.testing import assert_array_equal
 from sklearn import config_context
 from sklearn.datasets import make_blobs
@@ -17,13 +19,12 @@ _SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 _SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
 
 
-def test_placeholder():
-    """Placeholder test for CI"""
-    import numba_dpex as dpex
-    import dpctl
-
-    # There must be at least one usable device.
-    assert len(dpctl.get_devices()) > 0
+AVAILABLE_DTYPES = [np.float32]
+DEVICE = dpctl.SyclDevice()
+if DEVICE.has_aspect_fp16:
+    AVAILABLE_DTYPES.append(np.float16)
+if DEVICE.has_aspect_fp64:
+    AVAILABLE_DTYPES.append(np.float64)
 
 
 def test_kmeans_driver_signature():
@@ -31,9 +32,11 @@ def test_kmeans_driver_signature():
     assert driver_signature == _SKLEARN_LLOYD_SIGNATURE
 
 
-def test_kmeans_fit_same_results():
+@pytest.mark.parametrize("dtype", AVAILABLE_DTYPES)
+def test_kmeans_fit_same_results(dtype):
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
+    X = X.astype(dtype)
 
     kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd")
     kmeans_engine = clone(kmeans_vanilla)
@@ -44,7 +47,7 @@ def test_kmeans_fit_same_results():
     # Fit a model with numba_dpex backend
     try:
         sklearn.cluster._kmeans._kmeans_single_lloyd = LLoydKMeansDriver(
-            work_group_size_multiplier=4
+            work_group_size_multiplier=4, dtype=dtype
         )
         kmeans_engine.fit(X)
     finally:

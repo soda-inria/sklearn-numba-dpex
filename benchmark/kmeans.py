@@ -1,7 +1,10 @@
 from sklearn.cluster import KMeans
 from time import perf_counter
 import inspect
+from numpy.testing import assert_array_equal
 import sklearn
+from sklearn.utils._testing import assert_allclose
+import numpy as np
 
 
 VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
@@ -18,8 +21,9 @@ class KMeansTimeit:
             self.sample_weight,
             self.centers_init,
         ) = data_initialization_fn()
+        self.results = None
 
-    def timeit(self, kmeans_fn, name, max_iter, tol):
+    def timeit(self, kmeans_fn, name, max_iter, tol, run_consistency_test=True):
         self._check_kmeans_fn_signature(kmeans_fn)
         n_clusters = self.centers_init.shape[0]
         try:
@@ -55,16 +59,51 @@ class KMeansTimeit:
             t0 = perf_counter()
             estimator.fit(X, sample_weight=sample_weight)
             t1 = perf_counter()
+
+            self._check_same_fit(
+                estimator, name, max_iter, assert_allclose=run_consistency_test
+            )
             print(f"Running {name} ... done in {t1 - t0}\n")
 
         finally:
             sklearn.cluster._kmeans._kmeans_single_lloyd = VANILLA_SKLEARN_LLOYD
 
+    def _check_same_fit(self, estimator, name, max_iter, assert_allclose):
+        text = (
+            "It is expected for all iterators in the benchmark to run the same "
+            "number of iterations and return the same results."
+        )
+        n_iter = estimator.n_iter_
+        if n_iter != max_iter:
+            raise RuntimeError(
+                f"The estimator {name} only ran {n_iter} iterations instead of "
+                f"max_iter={max_iter} iterations. " + text
+            )
+
+        if not assert_allclose:
+            return
+
+        if self.results is None:
+            self.results = dict(
+                labels=estimator.labels_,
+                cluster_centers=estimator.cluster_centers_,
+                inertia=estimator.inertia_,
+            )
+        else:
+            assert_array_equal(self.results["labels"], estimator.labels_, err_msg=text)
+            assert_allclose(
+                self.results["cluster_centers"],
+                estimator.cluster_centers_,
+                err_msg=text,
+            )
+            assert_allclose(self.results["inertia"], estimator.inertia_, err_msg=text)
+
     def _check_kmeans_fn_signature(self, kmeans_fn):
         fn_signature = inspect.signature(kmeans_fn)
         if fn_signature != self._VANILLA_SKLEARN_LLOYD_SIGNATURE:
             raise ValueError(
-                f"The signature of the submitted kmeans_fn is expected to be {self._VANILLA_SKLEARN_LLOYD_SIGNATURE}, but got {fn_signature}"
+                f"The signature of the submitted kmeans_fn is expected to be "
+                f"{self._VANILLA_SKLEARN_LLOYD_SIGNATURE}, but got {fn_signature} ."
             )
 
 
@@ -86,10 +125,14 @@ if __name__ == "__main__":
     n_clusters = 127
     max_iter = 100
     tol = 0
+    dtype = np.float32
+    # NB: it seems that currently the estimators in the benchmark always return
+    # close results but with significant differences for a few elements.
+    run_consistency_check = False
 
     def benchmark_data_initialization(random_state=random_state, n_clusters=n_clusters):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True)
-        X = X.astype(np.float32)
+        X = X.astype(dtype)
         scaler_x = MinMaxScaler()
         scaler_x.fit(X)
         X = scaler_x.transform(X)
@@ -107,6 +150,7 @@ if __name__ == "__main__":
         name="Sklearn vanilla lloyd",
         max_iter=max_iter,
         tol=tol,
+        run_consistency_check=run_consistency_check,
     )
 
     with config_context(target_offload="cpu"):
@@ -115,6 +159,7 @@ if __name__ == "__main__":
             name="daal4py CPU",
             max_iter=max_iter,
             tol=tol,
+            run_consistency_check=run_consistency_check,
         )
 
     with config_context(target_offload="gpu"):
@@ -123,19 +168,26 @@ if __name__ == "__main__":
             name="daal4py GPU",
             max_iter=max_iter,
             tol=tol,
+            run_consistency_check=run_consistency_check,
         )
 
     for multiplier in [1, 2, 4, 8]:
         kmeans_timer.timeit(
-            LLoydKMeansDriver(device="cpu", work_group_size_multiplier=multiplier),
-            name="Kmeans numba_dpex CPU (work_group_size_multiplier={multiplier})",
+            LLoydKMeansDriver(
+                device="cpu", dtype=dtype, work_group_size_multiplier=multiplier
+            ),
+            name=f"Kmeans numba_dpex CPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,
+            run_consistency_check=run_consistency_check,
         )
 
         kmeans_timer.timeit(
-            LLoydKMeansDriver(device="gpu", work_group_size_multiplier=multiplier),
+            LLoydKMeansDriver(
+                device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
+            ),
             name=f"Kmeans numba_dpex GPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,
+            run_consistency_check=run_consistency_check,
         )

@@ -19,8 +19,13 @@ def test_opencl_requirement():
 
 class _FakeSyclDevice:
     def __init__(
-        self, has_aspect_fp64=True, max_work_group_size=16, name="Fake Sycl Device"
+        self,
+        has_aspect_fp16=True,
+        has_aspect_fp64=True,
+        max_work_group_size=16,
+        name="Fake Sycl Device",
     ):
+        self.has_aspect_fp16 = has_aspect_fp16
         self.has_aspect_fp64 = has_aspect_fp64
         self.max_work_group_size = 16
         self.name = name

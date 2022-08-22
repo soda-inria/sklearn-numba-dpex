@@ -26,6 +26,7 @@ class _DeviceParams:
 
     def __init__(self, sycl_device):
 
+        self.has_aspect_fp16 = sycl_device.has_aspect_fp16
         self.has_aspect_fp64 = sycl_device.has_aspect_fp64
         self.max_work_group_size = sycl_device.max_work_group_size
         self._sycl_device = sycl_device
