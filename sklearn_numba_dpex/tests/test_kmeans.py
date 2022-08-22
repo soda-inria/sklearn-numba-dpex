@@ -55,8 +55,10 @@ def test_kmeans_fit_same_results(dtype):
 
     # ensure same results
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
-    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+    assert_allclose(
+        kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_, rtol=1e-04
+    )
+    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_, rtol=1e-04)
 
 
 @pytest.mark.skip(reason="KMeans has not been implemented yet.")
