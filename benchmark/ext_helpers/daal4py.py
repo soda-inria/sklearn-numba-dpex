@@ -30,7 +30,10 @@ def kmeans(
 # within sklearn.numba_dpex.benchmark.kmeans benchmark, are redundant with sklearn.cluster.KMeans
 # steps, but it is not compatible with sklearnex.config_context that can be used to
 # offload computations to all available devices.
-
+#
+# In fact, the added cost of input and environment validation in sklearnex is negligible and
+# should not be a significant factor in the benchmark results.
+#
 # from daal4py.sklearn.cluster._k_means_0_23 import _daal4py_k_means_fit
 
 # def kmeans(

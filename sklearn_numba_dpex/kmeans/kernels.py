@@ -468,7 +468,6 @@ def make_fused_fixed_window_kernel(
         for feature_idx in range(n_features):
             dpex.atomic.add(
                 centroids_t_private_copies,
-                # ((privatization_idx + feature_idx) % nb_centroids_private_copies, feature_idx, min_idx),
                 (privatization_idx, feature_idx, min_idx),
                 X_t[feature_idx, sample_idx],
             )

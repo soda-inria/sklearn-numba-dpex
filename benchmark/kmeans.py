@@ -12,7 +12,7 @@ VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 
 # TODO: maybe this class could be abstracted to use the same strategy with other
 # estimators ?
-class KMeansTimeit:
+class KMeansLloydTimeit:
     _VANILLA_SKLEARN_LLOYD_SIGNATURE = inspect.signature(VANILLA_SKLEARN_LLOYD)
 
     def __init__(self, data_initialization_fn):
@@ -23,8 +23,10 @@ class KMeansTimeit:
         ) = data_initialization_fn()
         self.results = None
 
-    def timeit(self, kmeans_fn, name, max_iter, tol, run_consistency_test=True):
-        self._check_kmeans_fn_signature(kmeans_fn)
+    def timeit(
+        self, kmeans_single_lloyd_fn, name, max_iter, tol, run_consistency_check=True
+    ):
+        self._check_kmeans_single_lloyd_fn_signature(kmeans_single_lloyd_fn)
         n_clusters = self.centers_init.shape[0]
         try:
             centers_init = self.centers_init.copy()
@@ -46,13 +48,13 @@ class KMeansTimeit:
                 algorithm="lloyd",
             )
 
-            sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_fn
+            sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_single_lloyd_fn
             estimator = KMeans(**est_kwargs)
 
             print(f"Running {name} with parameters max_iter={max_iter} tol={tol} ...")
 
             # dry run, to be fair for JIT implementations
-            KMeans(**est_kwargs).set_params(max_iter=2).fit(
+            KMeans(**est_kwargs).set_params(max_iter=1).fit(
                 X, sample_weight=sample_weight
             )
 
@@ -61,7 +63,7 @@ class KMeansTimeit:
             t1 = perf_counter()
 
             self._check_same_fit(
-                estimator, name, max_iter, assert_allclose=run_consistency_test
+                estimator, name, max_iter, assert_allclose=run_consistency_check
             )
             print(f"Running {name} ... done in {t1 - t0}\n")
 
@@ -69,7 +71,7 @@ class KMeansTimeit:
             sklearn.cluster._kmeans._kmeans_single_lloyd = VANILLA_SKLEARN_LLOYD
 
     def _check_same_fit(self, estimator, name, max_iter, assert_allclose):
-        text = (
+        runtime_error_message = (
             "It is expected for all iterators in the benchmark to run the same "
             "number of iterations and return the same results."
         )
@@ -77,7 +79,7 @@ class KMeansTimeit:
         if n_iter != max_iter:
             raise RuntimeError(
                 f"The estimator {name} only ran {n_iter} iterations instead of "
-                f"max_iter={max_iter} iterations. " + text
+                f"max_iter={max_iter} iterations. " + runtime_error_message
             )
 
         if not assert_allclose:
@@ -90,27 +92,30 @@ class KMeansTimeit:
                 inertia=estimator.inertia_,
             )
         else:
-            assert_array_equal(self.results["labels"], estimator.labels_, err_msg=text)
+            assert_array_equal(
+                self.results["labels"], estimator.labels_, err_msg=runtime_error_message
+            )
             assert_allclose(
                 self.results["cluster_centers"],
                 estimator.cluster_centers_,
-                err_msg=text,
+                err_msg=runtime_error_message,
             )
-            assert_allclose(self.results["inertia"], estimator.inertia_, err_msg=text)
+            assert_allclose(
+                self.results["inertia"],
+                estimator.inertia_,
+                err_msg=runtime_error_message,
+            )
 
-    def _check_kmeans_fn_signature(self, kmeans_fn):
-        fn_signature = inspect.signature(kmeans_fn)
+    def _check_kmeans_single_lloyd_fn_signature(self, kmeans_single_lloyd_fn):
+        fn_signature = inspect.signature(kmeans_single_lloyd_fn)
         if fn_signature != self._VANILLA_SKLEARN_LLOYD_SIGNATURE:
             raise ValueError(
-                f"The signature of the submitted kmeans_fn is expected to be "
+                f"The signature of the submitted kmeans_single_lloyd_fn is expected to be "
                 f"{self._VANILLA_SKLEARN_LLOYD_SIGNATURE}, but got {fn_signature} ."
             )
 
 
 if __name__ == "__main__":
-    # TODO: also checks that the results are close
-    # TODO: ensure that effective n_iter is equal for all runs
-
     from ext_helpers.sklearn import kmeans as sklearn_kmeans
     from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
@@ -119,7 +124,6 @@ if __name__ == "__main__":
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
     from numpy.random import default_rng
-    import numpy as np
 
     random_state = 123
     n_clusters = 127
@@ -143,7 +147,7 @@ if __name__ == "__main__":
         init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
         return X, None, init
 
-    kmeans_timer = KMeansTimeit(benchmark_data_initialization)
+    kmeans_timer = KMeansLloydTimeit(benchmark_data_initialization)
 
     kmeans_timer.timeit(
         sklearn_kmeans,
@@ -156,7 +160,7 @@ if __name__ == "__main__":
     with config_context(target_offload="cpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
-            name="daal4py CPU",
+            name="daal4py lloyd CPU",
             max_iter=max_iter,
             tol=tol,
             run_consistency_check=run_consistency_check,
@@ -165,7 +169,7 @@ if __name__ == "__main__":
     with config_context(target_offload="gpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
-            name="daal4py GPU",
+            name="daal4py lloyd GPU",
             max_iter=max_iter,
             tol=tol,
             run_consistency_check=run_consistency_check,
@@ -176,7 +180,7 @@ if __name__ == "__main__":
             LLoydKMeansDriver(
                 device="cpu", dtype=dtype, work_group_size_multiplier=multiplier
             ),
-            name=f"Kmeans numba_dpex CPU (work_group_size_multiplier={multiplier})",
+            name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,
             run_consistency_check=run_consistency_check,
@@ -186,7 +190,7 @@ if __name__ == "__main__":
             LLoydKMeansDriver(
                 device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
             ),
-            name=f"Kmeans numba_dpex GPU (work_group_size_multiplier={multiplier})",
+            name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
             max_iter=max_iter,
             tol=tol,
             run_consistency_check=run_consistency_check,

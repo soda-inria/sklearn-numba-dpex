@@ -20,13 +20,11 @@ class _DeviceParams:
     """This class aggregates information about a SyclDevice with informations
     from pyopencl.
 
-    If pyopencl is not available, it will try to guess missing informations,
-    either using safe default values that might be inaccurate, or more
-    complex routines that might be slower to fetch the information."""
+    If pyopencl is not available, it will try to guess missing informations
+    by using safe default values that might be inaccurate."""
 
     def __init__(self, sycl_device):
 
-        self.has_aspect_fp16 = sycl_device.has_aspect_fp16
         self.has_aspect_fp64 = sycl_device.has_aspect_fp64
         self.max_work_group_size = sycl_device.max_work_group_size
         self._sycl_device = sycl_device

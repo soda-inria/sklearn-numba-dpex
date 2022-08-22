@@ -12,7 +12,8 @@ def kmeans(
     n_threads=1,
 ):
     # NB: include computation of x_squared_norms here to be fairer to other
-    # implementations that don't make use of x_squared_norms input
+    # implementations that don't make use of x_squared_norms input.
+    # (in fact, the impact it negligible and could be ignored)
     x_squared_norms = row_norms(X, squared=True)
     return _kmeans_single_lloyd(
         X,

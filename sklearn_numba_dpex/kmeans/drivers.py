@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 import dpctl
+from sklearn.exceptions import DataConversionWarning
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
@@ -76,23 +77,14 @@ class LLoydKMeansDriver:
         self.X_layout = X_layout or "F"
 
         self.has_aspect_fp64 = device_params.has_aspect_fp64
-        self.has_aspect_fp16 = device_params.has_aspect_fp16
 
         self.dtype = dtype
         if dtype is not None:
             dtype = np.dtype(dtype).type
-            if (
-                (dtype != np.float16)
-                and (dtype != np.float32)
-                and (dtype != np.float64)
-            ):
-                raise ValueError(
-                    f"Valid types are float64, float32 or float16, but got f{dtype}"
-                )
+            if (dtype != np.float32) and (dtype != np.float64):
+                raise ValueError(f"Valid types are float64, float32, but got f{dtype}")
             self.dtype = dtype
-            if ((self.dtype == np.float64) and not self.has_aspect_fp64) or (
-                (self.dtype == np.float16) and not self.has_aspect_fp16
-            ):
+            if (self.dtype == np.float64) and not self.has_aspect_fp64:
                 raise RuntimeError(
                     f"Computations with precision f{self.dtype} has been explicitly "
                     f"requested to the KMeans driver but the device {dpctl_device.name} does not "
@@ -220,15 +212,15 @@ class LLoydKMeansDriver:
             # TODO: support the C layout and benchmark it and default to it if
             # performances are better
             raise ValueError("C layout is currently not supported.")
-            X_t = dpctl.tensor.from_numpy(X.astype(np.float32), device=self.device).T
+            X_t = dpctl.tensor.from_numpy(X, device=self.device).T
             assert (
                 X_t.strides[0] == 1
-            )  # Fortran memory layout, equvalent to C layout on tranposed
+            )  # Fortran memory layout, equivalent to C layout on transposed
         elif self.X_layout == "F":
-            X_t = dpctl.tensor.from_numpy(X.astype(np.float32).T, device=self.device)
+            X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
             assert (
                 X_t.strides[1] == 1
-            )  # C memory layout, equvalent to Fortran layout on transposed
+            )  # C memory layout, equivalent to Fortran layout on transposed
         else:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
@@ -273,7 +265,12 @@ class LLoydKMeansDriver:
         best_inertia = np.inf
         copyto(centroids_t, best_centroids_t)
 
-        while (n_iteration < max_iter) and (center_shifts_sum >= tol):
+        # TODO: should we conform to sklearn vanilla kmeans strategy and avoid
+        # computing an extra centroid update in the last iteration that will not be
+        # used ?
+        # It's not a significant difference anyway since when performance matters
+        # usually we have n_iteration > 100
+        while (n_iteration <= max_iter) and (center_shifts_sum > tol):
             half_l2_norm(centroids_t, centroids_half_l2_norm)
 
             reset_inertia(inertia)
@@ -290,6 +287,8 @@ class LLoydKMeansDriver:
                 centroid_counts_private_copies,
             )
 
+            # TODO: explore fusing the next two kernels to reduce synchronous
+            # scheduling overhead.
             reduce_centroid_counts_private_copies(
                 centroid_counts_private_copies, centroid_counts
             )
@@ -307,6 +306,10 @@ class LLoydKMeansDriver:
 
             inertia_sum = dpctl.tensor.asnumpy(reduce_inertia(inertia))[0]
 
+            # TODO: should we drop this check ?
+            # (it should not be needed because we have theoritical guarantee that
+            # inertia decreases, if it doesn't it should only be because of rounding
+            # errors)
             if inertia_sum < best_inertia:
                 best_inertia = inertia_sum
                 copyto(centroids_t, best_centroids_t)
@@ -331,27 +334,28 @@ class LLoydKMeansDriver:
 
         inertia_sum = dpctl.tensor.asnumpy(reduce_inertia(inertia))[0]
 
+        # TODO: explore leveraging dpnp to benefit from USM to avoid moving
+        # centroids back and forth between device and host memory in case
+        # a subsequent `.predict` call is requested on the same GPU later.
         return (
             dpctl.tensor.asnumpy(assignments_idx).astype(np.int32),
             inertia_sum,
             np.ascontiguousarray(dpctl.tensor.asnumpy(best_centroids_t.T)),
-            n_iteration,
+            n_iteration - 1,  # substract 1 to conform with vanilla sklearn count
         )
 
     def _set_dtype(self, X, centers_init):
         dtype = self.dtype or X.dtype
         dtype = np.dtype(dtype).type
         copy = True
-        if (dtype != np.float16) and (dtype != np.float32) and (dtype != np.float64):
+        if (dtype != np.float32) and (dtype != np.float64):
             text = (
                 f"The data has been submitted with type {dtype} but only the types "
-                f"float16, float32 or float64 are supported. The computations will "
+                f"float32 and float64 are supported. The computations will "
                 f"default back to float32 type."
             )
             dtype = np.float32
-        elif ((dtype == np.float16) and not self.has_aspect_fp16) or (
-            (dtype == np.float64) and not self.has_aspect_fp64
-        ):
+        elif (dtype == np.float64) and not self.has_aspect_fp64:
             text = (
                 f"The data has been submitted with type {dtype} but this type is not "
                 f"supported by the device {self.device.name}. The computations will "
@@ -373,7 +377,7 @@ class LLoydKMeansDriver:
                 f"save memory and prevent this warning, ensure that the dtype of "
                 f"the input data matches the dtype required for computations."
             )
-            warnings.warn(text, RuntimeWarning)
+            warnings.warn(text, DataConversionWarning)
             X = X.astype(dtype)
 
         centers_init_dtype = centers_init.dtype
@@ -385,13 +389,5 @@ class LLoydKMeansDriver:
                 f"correct dtype to save memory and disable this warning."
             )
             centers_init = centers_init.astype(dtype)
-
-        if (self.dtype is None) and dtype is np.float64:
-            warnings.warn(
-                f"The computations will use type float64, but float32 computations are "
-                f"generally regarded as faster and accurate enough. To disable this "
-                f"warning, please explicitly set dtype to float64 when instanciating "
-                f"the driver, or pass an array of float16 or float32 data."
-            )
 
         return X, centers_init, dtype

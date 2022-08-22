@@ -21,8 +21,6 @@ _SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
 
 AVAILABLE_DTYPES = [np.float32]
 DEVICE = dpctl.SyclDevice()
-if DEVICE.has_aspect_fp16:
-    AVAILABLE_DTYPES.append(np.float16)
 if DEVICE.has_aspect_fp64:
     AVAILABLE_DTYPES.append(np.float64)
 
@@ -34,11 +32,13 @@ def test_kmeans_driver_signature():
 
 @pytest.mark.parametrize("dtype", AVAILABLE_DTYPES)
 def test_kmeans_fit_same_results(dtype):
+    # TODO: remove the manual monkey-patching and rely on engine registration
+    # once properly implemented.
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
 
-    kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd")
+    kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd", max_iter=1)
     kmeans_engine = clone(kmeans_vanilla)
 
     # Fit a reference model with the default scikit-learn engine:
@@ -46,6 +46,8 @@ def test_kmeans_fit_same_results(dtype):
 
     # Fit a model with numba_dpex backend
     try:
+        # Temporarily monkeypatch scikit-learn internals to replace
+        # them with this package implementation.
         sklearn.cluster._kmeans._kmeans_single_lloyd = LLoydKMeansDriver(
             work_group_size_multiplier=4, dtype=dtype
         )
@@ -56,9 +58,9 @@ def test_kmeans_fit_same_results(dtype):
     # ensure same results
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_, rtol=1e-04
+        kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_, rtol=1e-4
     )
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_, rtol=1e-04)
+    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_, rtol=1e-4)
 
 
 @pytest.mark.skip(reason="KMeans has not been implemented yet.")
