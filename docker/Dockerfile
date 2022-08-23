@@ -33,6 +33,11 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # More about sycl docker image Dockerfiles: https://github.com/intel/llvm/tree/sycl/devops/containers
 # and https://github.com/intel/llvm/blob/sycl/sycl/doc/developer/DockerBKMs.md
 
+# FIXME: The base image is missing a package required for enabling the `level_zero` 
+# backend, see https://github.com/intel/llvm/issues/6342
+# Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
+ARG L0_LOADER_DEB_VERSION=1.8.5
+ARG L0_LOADER_DEB_PLATFORM=u18.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
 ARG BASE_PYPI_URL=https://pypi.org/simple
@@ -99,7 +104,21 @@ ARG PYENV_INSTALLER_REF=master
 
 ARG TMPDIR=/tmp
 
-FROM $BASE AS oneapi_dpcpp_binaries_installer
+FROM $BASE as l0_base
+ARG TMPDIR
+ARG L0_LOADER_DEB_VERSION
+ARG L0_LOADER_DEB_PLATFORM
+ARG L0_LOADER_DEB_ARCH=amd64
+ARG L0_LOADER_DEB_NAME=level-zero_${L0_LOADER_DEB_VERSION}+${L0_LOADER_DEB_PLATFORM}_${L0_LOADER_DEB_ARCH}.deb
+ARG L0_LOADER_DEB_URL=https://github.com/oneapi-src/level-zero/releases/download
+ARG L0_LOADER_DOWNLOAD_DIR=$TMPDIR/l0_loader
+RUN mkdir -p $L0_LOADER_DOWNLOAD_DIR \
+    && wget -P $L0_LOADER_DOWNLOAD_DIR $L0_LOADER_DEB_URL/v${L0_LOADER_DEB_VERSION}/$L0_LOADER_DEB_NAME \
+    && dpkg -i $L0_LOADER_DOWNLOAD_DIR/$L0_LOADER_DEB_NAME \
+    && rm -Rf $L0_LOADER_DOWNLOAD_DIR
+
+
+FROM l0_base AS oneapi_dpcpp_binaries_installer
 ARG TMPDIR
 ARG ONEAPI_INSTALL_DIR
 ARG ONEAPI_INSTALLER_URL
@@ -137,7 +156,7 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
     && rm -Rf $TMPDIR/*
 
 
-FROM $BASE AS base_config
+FROM l0_base AS base_config
 ARG ONEAPI_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
