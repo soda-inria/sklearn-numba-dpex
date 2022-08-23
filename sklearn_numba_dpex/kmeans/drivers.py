@@ -30,13 +30,75 @@ def _check_power_of_2(e):
 
 
 class LLoydKMeansDriver:
+    """GPU optimized implementation of Lloyd's k-means.
+
+    Inspired by the "Fused Fixed" strategy exposed in:
+    Kruliš, M., & Kratochvíl, M. (2020, August). Detailed analysis and
+    optimization of CUDA K-means algorithm. In 49th International
+    Conference on Parallel Processing-ICPP (pp. 1-11).
+
+    The current implementation is called "fused fixed", it consists in a sliding window
+    of fixed size on the value of the centroids that work items use to accumulate the
+    distances of a given sample to each centroids. It is followed, in a same kernel, by
+    an update of new centroids in a context of memory privatization to avoid a too high
+    cost of atomic operations.
+
+    This class instantiates into a callable that mimics the interface of sklearn's
+    private function `_kmeans_single_lloyd` .
+
+    Parameters
+    ----------
+    preferred_work_group_size_multiple : int
+        The kernels will use this value to optimize the distribution of work items. If
+        None, it is automatically fetched with pyopencl if possible, else a default of
+        64 is applied. It is required to be a power of two.
+
+    work_group_size_multiplier : int
+        The size of groups of work items used to execute the kernels is defined as
+        `work_group_size_multiplier * preferred_work_group_size_multiple` and, if None,
+        is chosen to be equal to the value of max_work_group_size which is fetched
+        with dpctl. It is required to be a power of two.
+
+    centroids_window_width_multiplier : int
+        The width of the window over the centroids is defined as
+        `centroids_window_width_multiplier x preferred_work_group_size_multiple`. The
+        higher the value, the higher the cost in shared memory. If None, will default
+        to 1. It is required to be a power of two.
+
+    centroids_window_height : int
+        The height of the window, counted as a number of features. The higher the
+        value, the higher the cost in shared memory. If None, will default to 16. It is
+        required to be a power of two.
+
+    global_mem_cache_size : int
+        Size in bytes of the size of the global memory cache size. If None, the value
+        will be automatically fetched with dpctl. It is used to estimate the maximum
+        number of copies of the array of centroids that can be used for privatization.
+
+    centroids_private_copies_max_cache_occupancy : float
+        A maximum fraction of global_mem_cache_size that is allowed to be expected for
+        use when estimating the maximum number of copies that can be used for
+        privatization. If None, will default to 0.7 .
+
+    device: str
+        A valid sycl device filter.
+
+    X_layout: str
+        'F' or 'C'
+
+    dtype: np.float32 or np.float64
+        The floating point precision that the kernels should use. If None, will adapt
+        to the dtype of the data, else, will cast the data to the appropriate dtype.
+
+    """
+
     def __init__(
         self,
-        global_mem_cache_size=None,
         preferred_work_group_size_multiple=None,
         work_group_size_multiplier=None,
         centroids_window_width_multiplier=None,
         centroids_window_height=None,
+        global_mem_cache_size=None,
         centroids_private_copies_max_cache_occupancy=None,
         device=None,
         X_layout=None,
@@ -102,23 +164,21 @@ class LLoydKMeansDriver:
         tol=1e-4,
         n_threads=1,
     ):
-        """GPU optimized implementation of Lloyd's k-means.
-
-        Inspired by the "Fused Fixed" strategy exposed in:
-        Kruliš, M., & Kratochvíl, M. (2020, August). Detailed analysis and
-        optimization of CUDA K-means algorithm. In 49th International
-        Conference on Parallel Processing-ICPP (pp. 1-11).
+        """This call is expected to accept the same inputs than sklearn's private
+        _kmeans_single_lloyd and produce the same outputs.
         """
+        # Input validation
+        X, centers_init, dtype = self._set_dtype(X, centers_init)
+
         work_group_size = (
             self.work_group_size_multiplier * self.preferred_work_group_size_multiple
         )
-
-        X, centers_init, dtype = self._set_dtype(X, centers_init)
 
         n_features = X.shape[1]
         n_samples = X.shape[0]
         n_clusters = centers_init.shape[0]
 
+        # Create a set of kernels
         reset_inertia = make_initialize_to_zeros_1dim_kernel(
             n_samples=n_samples, work_group_size=work_group_size, dtype=dtype
         )
@@ -141,7 +201,6 @@ class LLoydKMeansDriver:
             n_clusters, n_features, work_group_size=work_group_size, dtype=dtype
         )
 
-        # NB: assumes work_group_size is a power of two
         reduce_inertia = make_sum_reduction_1dim_kernel(
             n_samples, work_group_size=work_group_size, device=self.device, dtype=dtype
         )
@@ -207,7 +266,8 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        # TODO: let the user pass directly dpctl.tensor arrays to avoid copies.
+        # Transfer the input data to device memory,
+        # TODO: let the user pass directly dpctl.tensor or dpnp arrays to avoid copies.
         if self.X_layout == "C":
             # TODO: support the C layout and benchmark it and default to it if
             # performances are better
@@ -226,9 +286,9 @@ class LLoydKMeansDriver:
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
 
-        centroids_t = dpctl.tensor.from_numpy(
-            centers_init.astype(np.float32).T, device=self.device
-        )
+        centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
+
+        # Allocate the necessary memory in the device global memory
         centroids_t_copy_array = dpctl.tensor.empty_like(
             centroids_t, device=self.device
         )
@@ -236,30 +296,29 @@ class LLoydKMeansDriver:
             centroids_t_copy_array, device=self.device
         )
         centroids_half_l2_norm = dpctl.tensor.empty(
-            n_clusters, dtype=np.float32, device=self.device
+            n_clusters, dtype=dtype, device=self.device
         )
         centroid_counts = dpctl.tensor.empty(
-            n_clusters, dtype=np.float32, device=self.device
+            n_clusters, dtype=dtype, device=self.device
         )
-        center_shifts = dpctl.tensor.empty(
-            n_clusters, dtype=np.float32, device=self.device
-        )
-        inertia = dpctl.tensor.empty(n_samples, dtype=np.float32, device=self.device)
+        center_shifts = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
+        inertia = dpctl.tensor.empty(n_samples, dtype=dtype, device=self.device)
         assignments_idx = dpctl.tensor.empty(
             n_samples, dtype=np.uint32, device=self.device
         )
 
         centroids_t_private_copies = dpctl.tensor.empty(
             (nb_centroids_private_copies, n_features, n_clusters),
-            dtype=np.float32,
+            dtype=dtype,
             device=self.device,
         )
         centroid_counts_private_copies = dpctl.tensor.empty(
             (nb_centroids_private_copies, n_clusters),
-            dtype=np.float32,
+            dtype=dtype,
             device=self.device,
         )
 
+        # The loop
         n_iteration = 0
         center_shifts_sum = np.inf
         best_inertia = np.inf
@@ -321,6 +380,8 @@ class LLoydKMeansDriver:
 
             n_iteration += 1
 
+        # Finally, run an assignment kernel to compute the assignments to the best
+        # centroids found, along with the exact inertia.
         half_l2_norm(best_centroids_t, centroids_half_l2_norm)
         reset_inertia(inertia)
 
@@ -386,7 +447,8 @@ class LLoydKMeansDriver:
                 f"The centers have been initialized with type {centers_init_dtype} but "
                 f"type {dtype} is expected. A copy will be created with the correct "
                 f"type {dtype}. Ensure that the centers are initialized with the "
-                f"correct dtype to save memory and disable this warning."
+                f"correct dtype to save memory and disable this warning.",
+                DataConversionWarning,
             )
             centers_init = centers_init.astype(dtype)
 

@@ -14,18 +14,49 @@ VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 # estimators ?
 class KMeansLloydTimeit:
     _VANILLA_SKLEARN_LLOYD_SIGNATURE = inspect.signature(VANILLA_SKLEARN_LLOYD)
+    """A helper class that standardizes a test bench for different implementations of
+    the Lloyd algorithm.
 
-    def __init__(self, data_initialization_fn):
+    Parameters
+    ----------
+    data_initialization_fn : function
+        Is expected to return a tuple (X, sample_weight, centers_init) with shapes
+        (n_samples, n_features), (n_samples) and (n_clusters, n_features) respectively.
+
+    max_iter : int
+        Number of iterations to run in each test.
+
+    run_consistency_checks : bool
+        If true, will check if all candidates on the test bench return the same
+        results.
+    """
+
+    def __init__(self, data_initialization_fn, max_iter, run_consistency_checks=True):
         (
             self.X,
             self.sample_weight,
             self.centers_init,
         ) = data_initialization_fn()
+        self.max_iter = max_iter
+        self.run_consistency_checks = run_consistency_checks
         self.results = None
 
     def timeit(
-        self, kmeans_single_lloyd_fn, name, max_iter, tol, run_consistency_check=True
+        self,
+        kmeans_single_lloyd_fn,
+        name,
     ):
+        """
+        Parameters
+        ----------
+        kmeans_single_lloyd_fn : function
+            Is expected to have the same signature and the same interface than sklearn's
+            private function _kmeans_single_lloyd
+
+        name: str
+            Name of the candidate to test
+        """
+        max_iter = self.max_iter
         self._check_kmeans_single_lloyd_fn_signature(kmeans_single_lloyd_fn)
         n_clusters = self.centers_init.shape[0]
         try:
@@ -40,7 +71,7 @@ class KMeansLloydTimeit:
                 init=centers_init,
                 n_init=1,
                 max_iter=max_iter,
-                tol=tol,
+                tol=0,
                 # random_state is set but since we don't use kmeans++ or random
                 # init this parameter shouldn't have any impact on the outputs
                 random_state=42,
@@ -63,7 +94,7 @@ class KMeansLloydTimeit:
             t1 = perf_counter()
 
             self._check_same_fit(
-                estimator, name, max_iter, assert_allclose=run_consistency_check
+                estimator, name, max_iter, assert_allclose=self.run_consistency_checks
             )
             print(f"Running {name} ... done in {t1 - t0}\n")
 
@@ -132,7 +163,7 @@ if __name__ == "__main__":
     dtype = np.float32
     # NB: it seems that currently the estimators in the benchmark always return
     # close results but with significant differences for a few elements.
-    run_consistency_check = False
+    run_consistency_checks = False
 
     def benchmark_data_initialization(random_state=random_state, n_clusters=n_clusters):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True)
@@ -147,32 +178,25 @@ if __name__ == "__main__":
         init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
         return X, None, init
 
-    kmeans_timer = KMeansLloydTimeit(benchmark_data_initialization)
+    kmeans_timer = KMeansLloydTimeit(
+        benchmark_data_initialization, max_iter, run_consistency_checks
+    )
 
     kmeans_timer.timeit(
         sklearn_kmeans,
         name="Sklearn vanilla lloyd",
-        max_iter=max_iter,
-        tol=tol,
-        run_consistency_check=run_consistency_check,
     )
 
     with config_context(target_offload="cpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
             name="daal4py lloyd CPU",
-            max_iter=max_iter,
-            tol=tol,
-            run_consistency_check=run_consistency_check,
         )
 
     with config_context(target_offload="gpu"):
         kmeans_timer.timeit(
             daal4py_kmeans,
             name="daal4py lloyd GPU",
-            max_iter=max_iter,
-            tol=tol,
-            run_consistency_check=run_consistency_check,
         )
 
     for multiplier in [1, 2, 4, 8]:
@@ -181,9 +205,6 @@ if __name__ == "__main__":
                 device="cpu", dtype=dtype, work_group_size_multiplier=multiplier
             ),
             name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
-            max_iter=max_iter,
-            tol=tol,
-            run_consistency_check=run_consistency_check,
         )
 
         kmeans_timer.timeit(
@@ -191,7 +212,4 @@ if __name__ == "__main__":
                 device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
             ),
             name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
-            max_iter=max_iter,
-            tol=tol,
-            run_consistency_check=run_consistency_check,
         )

@@ -17,11 +17,26 @@ class _DEFAULT_VALUES:
 
 
 class _DeviceParams:
-    """This class aggregates information about a SyclDevice with informations
-    from pyopencl.
+    """This class aggregates information about a SyclDevice with informations from
+    pyopencl.
 
     If pyopencl is not available, it will try to guess missing informations
-    by using safe default values that might be inaccurate."""
+    by using safe default values that might be inaccurate.
+
+    Attributes
+    ----------
+    name: str
+        The name of the device
+    has_aspect_fp64: bool
+        True if the device supports float64 operations else False
+    max_work_group_size: int
+        The maximum work group size when running a kernel
+    preferred_work_group_size_multiple: int
+        It is recommended to choose a work group size that is a multiple of this value
+        when running a kernel
+    global_mem_cache_size: int
+        Size (in bytes) of the L2 cache for this device.
+    """
 
     def __init__(self, sycl_device):
 
