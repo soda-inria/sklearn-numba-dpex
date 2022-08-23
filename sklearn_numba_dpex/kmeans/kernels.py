@@ -24,35 +24,17 @@ def make_initialize_to_zeros_1dim_kernel(n_samples, work_group_size, dtype):
 
 
 @lru_cache
-def make_initialize_to_zeros_1dim_kernel(n_samples, work_group_size, dtype):
-
-    global_size = math.ceil(n_samples / work_group_size) * work_group_size
-    zero = dtype(0)
-
-    @dpex.kernel
-    def initialize_to_zeros(x):
-        sample_idx = dpex.get_global_id(0)
-
-        if sample_idx >= n_samples:
-            return
-
-        x[sample_idx] = zero
-
-    return initialize_to_zeros[global_size, work_group_size]
-
-
-@lru_cache
 def make_initialize_to_zeros_2dim_kernel(n_samples, n_features, work_group_size, dtype):
 
-    nb_items = n_samples * n_features
-    global_size = math.ceil(nb_items / work_group_size) * work_group_size
+    n_items = n_samples * n_features
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
         item_idx = dpex.get_global_id(0)
 
-        if item_idx >= nb_items:
+        if item_idx >= n_items:
             return
 
         i = item_idx // n_samples
@@ -65,15 +47,15 @@ def make_initialize_to_zeros_2dim_kernel(n_samples, n_features, work_group_size,
 @lru_cache
 def make_initialize_to_zeros_2dim_kernel(n_samples, n_features, work_group_size, dtype):
 
-    nb_items = n_samples * n_features
-    global_size = math.ceil(nb_items / work_group_size) * work_group_size
+    n_items = n_samples * n_features
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
         item_idx = dpex.get_global_id(0)
 
-        if item_idx >= nb_items:
+        if item_idx >= n_items:
             return
 
         i = item_idx // n_samples
@@ -86,22 +68,22 @@ def make_initialize_to_zeros_2dim_kernel(n_samples, n_features, work_group_size,
 @lru_cache
 def make_initialize_to_zeros_3dim_kernel(dim0, dim1, dim2, work_group_size, dtype):
 
-    nb_items = dim0 * dim1 * dim2
+    n_items = dim0 * dim1 * dim2
     stride0 = dim1 * dim2
-    global_size = math.ceil(nb_items / work_group_size) * work_group_size
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
     @dpex.kernel
     def initialize_to_zeros(x):
         item_idx = dpex.get_global_id(0)
 
-        if item_idx >= nb_items:
+        if item_idx >= n_items:
             return
 
         i = item_idx // stride0
-        stride0_id = item_idx % stride0
-        j = stride0_id // dim2
-        k = stride0_id % dim2
+        stride0_idx = item_idx % stride0
+        j = stride0_idx // dim2
+        k = stride0_idx % dim2
         x[i, j, k] = zero
 
     return initialize_to_zeros[global_size, work_group_size]
@@ -194,7 +176,7 @@ def make_half_l2_norm_dim0_kernel(n_samples, n_features, work_group_size, dtype)
 
 @lru_cache
 def make_sum_reduction_1dim_kernel(n_samples, work_group_size, device, dtype):
-    local_nb_iterations = math.floor(math.log2(work_group_size))
+    local_n_iterations = math.floor(math.log2(work_group_size))
     zero = dtype(0.0)
 
     @dpex.kernel
@@ -218,14 +200,14 @@ def make_sum_reduction_1dim_kernel(n_samples, work_group_size, device, dtype):
         else:
             shm[local_work_id] = v[augend_idx] + v[addend_idx]
 
-        dpex.barrier()
+        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         current_size = work_group_size
-        for i in range(local_nb_iterations):
+        for i in range(local_n_iterations):
             current_size = current_size // 2
             if local_work_id < current_size:
                 shm[local_work_id] += shm[local_work_id + current_size]
 
-            dpex.barrier()
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         if first_work_id:
             w[group_id] = shm[0]
@@ -275,17 +257,17 @@ def make_sum_reduction_2dim_kernel(n_samples, n_features, work_group_size, dtype
 
 @lru_cache
 def make_sum_reduction_3dim_kernel(dim0, dim1, dim2, work_group_size, dtype):
-    nb_groups_for_dim2 = math.ceil(dim2 / work_group_size)
-    nb_threads_for_dim2 = nb_groups_for_dim2 * work_group_size
-    global_size = nb_threads_for_dim2 * dim1
+    n_groups_for_dim2 = math.ceil(dim2 / work_group_size)
+    n_threads_for_dim2 = n_groups_for_dim2 * work_group_size
+    global_size = n_threads_for_dim2 * dim1
     zero = dtype(0.0)
 
     @dpex.kernel
     def sum_reduction_kernel(v, w):
-        group = dpex.get_group_id(0)
-        thread = dpex.get_local_id(0)
-        d1 = group // nb_groups_for_dim2
-        d2 = ((group % nb_groups_for_dim2) * work_group_size) + thread
+        group_idx = dpex.get_group_id(0)
+        thread_idx = dpex.get_local_id(0)
+        d1 = group_idx // n_groups_for_dim2
+        d2 = ((group_idx % n_groups_for_dim2) * work_group_size) + thread_idx
         if d2 >= dim2:
             return
         tmp = zero
@@ -309,34 +291,34 @@ def make_fused_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
-    window_nb_centroids = (
+    window_n_centroids = (
         preferred_work_group_size_multiple * centroids_window_width_multiplier
     )
-    nb_of_window_features_per_work_group = work_group_size // window_nb_centroids
+    n_window_features_per_work_group = work_group_size // window_n_centroids
 
     centroids_window_height_ratio_multiplier = (
-        centroids_window_height // nb_of_window_features_per_work_group
+        centroids_window_height // n_window_features_per_work_group
     )
 
-    window_nb_features = centroids_window_height
+    window_n_features = centroids_window_height
 
-    nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
+    n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    nb_windows_per_centroid = math.ceil(n_features / window_nb_features)
-    centroids_window_shape = (window_nb_features, (window_nb_centroids + 1))
+    n_windows_per_centroid = math.ceil(n_features / window_n_features)
+    centroids_window_shape = (window_n_features, (window_n_centroids + 1))
 
     inf = dtype(math.inf)
     zero = dtype(0.0)
     one = dtype(1.0)
 
-    nb_cluster_items = n_clusters * (n_features + 1)
-    nb_cluster_bytes = 4 * nb_cluster_items
+    n_cluster_items = n_clusters * (n_features + 1)
+    n_cluster_bytes = 4 * n_cluster_items
     # TODO: control that this value is not higher than the number of sub-groups of size
     # preferred_work_group_size_multiple that can effectively run concurrently. We
     # should fetch this information and apply it here.
-    nb_centroids_private_copies = int(
+    n_centroids_private_copies = int(
         (global_mem_cache_size * centroids_private_copies_max_cache_occupancy)
-        // nb_cluster_bytes
+        // n_cluster_bytes
     )
 
     # fmt: off
@@ -345,9 +327,9 @@ def make_fused_fixed_window_kernel(
         X_t,                                # IN    (n_features, n_samples)
         current_centroids_t,                # IN    (n_features, n_clusters)
         centroids_half_l2_norm,             # IN    (n_clusters,)
-        pseudo_inertia,                     # OUT   (n_samples,)
-        centroids_t_private_copies,         # OUT   (nb_private_copies, n_features, n_clusters)
-        centroid_counts_private_copies,     # OUT   (nb_private_copies, n_clusters)
+        per_sample_pseudo_inertia,          # OUT   (n_samples,)
+        new_centroids_t_private_copies,     # OUT   (n_private_copies, n_features, n_clusters)
+        cluster_sizes_private_copies,       # OUT   (n_private_copies, n_clusters)
     ):
     # fmt: on
         """One full iteration of LLoyd's k-means.
@@ -389,14 +371,14 @@ def make_fused_fixed_window_kernel(
         # It contains values of centroids_half_l2_norm for each centroid in the sliding
         # centroids_window array. It is updated once per iteration in the outer loop.
         centroids_window_half_l2_norm = dpex.local.array(
-            shape=window_nb_centroids, dtype=dtype
+            shape=window_n_centroids, dtype=dtype
         )
 
-        # In the inner loop each work item accumulate in private memory the
+        # In the inner loop each work item accumulates in private memory the
         # dot product of the sample at the sample_idx relatively to each centroid
         # in the window.
         partial_dot_products = dpex.private.array(
-            shape=window_nb_centroids, dtype=dtype
+            shape=window_n_centroids, dtype=dtype
         )
 
         first_centroid_idx = 0
@@ -409,24 +391,24 @@ def make_fused_fixed_window_kernel(
 
         # Those variables are used in the inner loop during loading of the window of
         # centroids
-        window_loading_centroid_idx = local_work_id % window_nb_centroids
-        window_loading_feature_offset = local_work_id // window_nb_centroids
+        window_loading_centroid_idx = local_work_id % window_n_centroids
+        window_loading_feature_offset = local_work_id // window_n_centroids
 
         # STEP 1: compute the closest centroid
-        # Outer loop: iterate on successive windows of size window_nb_centroids that 
+        # Outer loop: iterate on successive windows of size window_n_centroids that
         # cover all centroids in current_centroids_t
-        for _0 in range(nb_windows_per_feature):
+        for _0 in range(n_windows_per_feature):
 
-            # initialize the partial pseudo inertia for each of the window_nb_centroids
+            # initialize the partial pseudo inertia for each of the window_n_centroids
             # centroids in the window
-            for i in range(window_nb_centroids):
+            for i in range(window_n_centroids):
                 partial_dot_products[i] = zero
 
-            # the `window_nb_centroids` first work items cooperate on loading the
+            # the `window_n_centroids` first work items cooperate on loading the
             # values of centroids_half_l2_norm relevant to current window. Each work
             # item loads one single value.
             half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-            if local_work_id < window_nb_centroids:
+            if local_work_id < window_n_centroids:
                 if half_l2_norm_loading_idx < n_clusters:
                     l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
                 else:
@@ -437,9 +419,9 @@ def make_fused_fixed_window_kernel(
 
             first_feature_idx = 0
 
-            # Inner loop: interate on successive windows of size window_nb_features 
+            # Inner loop: interate on successive windows of size window_n_features
             # that cover all features for current given centroids
-            for _1 in range(nb_windows_per_centroid):
+            for _1 in range(n_windows_per_centroid):
 
                 centroid_window_first_loading_feature_idx = 0
 
@@ -467,17 +449,17 @@ def make_fused_fixed_window_kernel(
                     ] = value
 
                     centroid_window_first_loading_feature_idx += (
-                        nb_of_window_features_per_work_group
+                        n_window_features_per_work_group
                     )
 
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
-                dpex.barrier()
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
                 # Loop on all features in the current window and accumulate the dot
                 # products
-                for window_feature_idx in range(window_nb_features):
+                for window_feature_idx in range(window_n_features):
                     feature_idx = window_feature_idx + first_feature_idx
                     if (feature_idx < n_features) and (sample_idx < n_samples):
                         # performance for the line thereafter relies on L1 cache
@@ -486,7 +468,7 @@ def make_fused_fixed_window_kernel(
                         X_value = zero
                     # For this given feature, loop on all centroids in the current
                     # window and accumulate the dot products
-                    for window_centroid_idx in range(window_nb_centroids):
+                    for window_centroid_idx in range(window_n_centroids):
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
@@ -497,14 +479,14 @@ def make_fused_fixed_window_kernel(
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
                 # operations in the current iteration to be over for all work items.
-                dpex.barrier()
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                first_feature_idx += window_nb_features
+                first_feature_idx += window_n_features
 
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
             # inertia for the current sample.
-            for i in range(window_nb_centroids):
+            for i in range(window_n_centroids):
                 current_pseudo_inertia = (
                     centroids_window_half_l2_norm[i] - partial_dot_products[i]
                 )
@@ -515,9 +497,9 @@ def make_fused_fixed_window_kernel(
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
-            dpex.barrier()
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            first_centroid_idx += window_nb_centroids
+            first_centroid_idx += window_n_centroids
 
         # End of outer loop. By now min_idx and min_pseudo_inertia contains the expected
         # values.
@@ -554,28 +536,28 @@ def make_fused_fixed_window_kernel(
         if sample_idx >= n_samples:
             return
 
-        pseudo_inertia[sample_idx] = min_pseudo_inertia
+        per_sample_pseudo_inertia[sample_idx] = min_pseudo_inertia
 
         # each work item is assigned an array of centroids in a round robin manner
         privatization_idx = (
             sample_idx // preferred_work_group_size_multiple
-        ) % nb_centroids_private_copies
+        ) % n_centroids_private_copies
 
         dpex.atomic.add(
-            centroid_counts_private_copies,
+            cluster_sizes_private_copies,
             (privatization_idx, min_idx),
             one,
         )
 
         for feature_idx in range(n_features):
             dpex.atomic.add(
-                centroids_t_private_copies,
+                new_centroids_t_private_copies,
                 (privatization_idx, feature_idx, min_idx),
                 X_t[feature_idx, sample_idx],
             )
 
     return (
-        nb_centroids_private_copies,
+        n_centroids_private_copies,
         fused_kmeans[global_size, work_group_size],
     )
 
@@ -591,20 +573,20 @@ def make_assignment_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
-    window_nb_centroids = (
+    window_n_centroids = (
         preferred_work_group_size_multiple * centroids_window_width_multiplier
     )
-    nb_of_window_features_per_work_group = work_group_size // window_nb_centroids
+    n_window_features_per_work_group = work_group_size // window_n_centroids
     centroids_window_height_ratio_multiplier = (
-        centroids_window_height // nb_of_window_features_per_work_group
+        centroids_window_height // n_window_features_per_work_group
     )
 
-    window_nb_features = centroids_window_height
+    window_n_features = centroids_window_height
 
-    nb_windows_per_feature = math.ceil(n_clusters / window_nb_centroids)
+    n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    nb_windows_per_centroid = math.ceil(n_features / window_nb_features)
-    centroids_window_shape = (window_nb_features, (window_nb_centroids + 1))
+    n_windows_per_centroid = math.ceil(n_features / window_n_features)
+    centroids_window_shape = (window_n_features, (window_n_centroids + 1))
 
     inf = dtype(math.inf)
     zero = dtype(0.0)
@@ -618,7 +600,7 @@ def make_assignment_fixed_window_kernel(
         X_t,                                # IN    (n_features, n_samples)
         current_centroids_t,                # IN    (n_features, n_clusters)
         centroids_half_l2_norm,             # IN    (n_clusters,)
-        inertia,                            # OUT   (n_samples,)
+        per_sample_inertia,                 # OUT   (n_samples,)
         assignments_idx,                    # OUT   (n_samples,)
     ):
     # fmt: on
@@ -636,10 +618,10 @@ def make_assignment_fixed_window_kernel(
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
         centroids_window_half_l2_norm = dpex.local.array(
-            shape=window_nb_centroids, dtype=dtype
+            shape=window_n_centroids, dtype=dtype
         )
         partial_dot_products = dpex.private.array(
-            shape=window_nb_centroids, dtype=dtype
+            shape=window_n_centroids, dtype=dtype
         )
 
         first_centroid_idx = 0
@@ -649,16 +631,16 @@ def make_assignment_fixed_window_kernel(
 
         X_l2_norm = zero
 
-        window_loading_centroid_idx = local_work_id % window_nb_centroids
-        window_loading_feature_offset = local_work_id // window_nb_centroids
+        window_loading_centroid_idx = local_work_id % window_n_centroids
+        window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(nb_windows_per_feature):
+        for _0 in range(n_windows_per_feature):
 
-            for i in range(window_nb_centroids):
+            for i in range(window_n_centroids):
                 partial_dot_products[i] = zero
 
             half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-            if local_work_id < window_nb_centroids:
+            if local_work_id < window_n_centroids:
                 if half_l2_norm_loading_idx < n_clusters:
                     l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
                 else:
@@ -669,7 +651,7 @@ def make_assignment_fixed_window_kernel(
 
             first_feature_idx = 0
 
-            for _1 in range(nb_windows_per_centroid):
+            for _1 in range(n_windows_per_centroid):
 
                 centroid_window_first_loading_feature_idx = 0
 
@@ -694,19 +676,19 @@ def make_assignment_fixed_window_kernel(
                     ] = value
 
                     centroid_window_first_loading_feature_idx += (
-                        nb_of_window_features_per_work_group
+                        n_window_features_per_work_group
                     )
 
-                dpex.barrier()
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                for window_feature_idx in range(window_nb_features):
+                for window_feature_idx in range(window_n_features):
                     feature_idx = window_feature_idx + first_feature_idx
                     if (feature_idx < n_features) and (sample_idx < n_samples):
                         # performance for the line thereafter relies on L1 cache
                         X_value = X_t[feature_idx, sample_idx]
                     else:
                         X_value = zero
-                    for window_centroid_idx in range(window_nb_centroids):
+                    for window_centroid_idx in range(window_n_centroids):
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
@@ -719,11 +701,11 @@ def make_assignment_fixed_window_kernel(
                     if _0 == 0:
                         X_l2_norm += X_value * X_value
 
-                dpex.barrier()
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                first_feature_idx += window_nb_features
+                first_feature_idx += window_n_features
 
-            for i in range(window_nb_centroids):
+            for i in range(window_n_centroids):
                 current_pseudo_inertia = (
                     centroids_window_half_l2_norm[i] - partial_dot_products[i]
                 )
@@ -731,15 +713,15 @@ def make_assignment_fixed_window_kernel(
                     min_pseudo_inertia = current_pseudo_inertia
                     min_idx = first_centroid_idx + i
 
-            dpex.barrier()
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            first_centroid_idx += window_nb_centroids
+            first_centroid_idx += window_n_centroids
 
         # No update step, only store min_idx in the output array
         if sample_idx >= n_samples:
             return
 
         assignments_idx[sample_idx] = min_idx
-        inertia[sample_idx] = X_l2_norm + (two * min_pseudo_inertia)
+        per_sample_inertia[sample_idx] = X_l2_norm + (two * min_pseudo_inertia)
 
     return assignment[global_size, work_group_size]

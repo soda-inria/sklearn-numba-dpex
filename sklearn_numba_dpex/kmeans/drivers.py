@@ -179,7 +179,7 @@ class LLoydKMeansDriver:
         n_clusters = centers_init.shape[0]
 
         # Create a set of kernels
-        reset_inertia = make_initialize_to_zeros_1dim_kernel(
+        reset_per_sample_inertia = make_initialize_to_zeros_1dim_kernel(
             n_samples=n_samples, work_group_size=work_group_size, dtype=dtype
         )
 
@@ -193,7 +193,7 @@ class LLoydKMeansDriver:
             work_group_size=work_group_size,
         )
 
-        get_center_shifts = make_center_shift_kernel(
+        compute_center_shifts = make_center_shift_kernel(
             n_clusters, n_features, work_group_size=work_group_size, dtype=dtype
         )
 
@@ -210,7 +210,7 @@ class LLoydKMeansDriver:
         )
 
         (
-            nb_centroids_private_copies,
+            n_centroids_private_copies,
             fixed_window_fused_kernel,
         ) = make_fused_fixed_window_kernel(
             n_samples,
@@ -225,30 +225,30 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        reset_centroid_counts_private_copies = make_initialize_to_zeros_2dim_kernel(
+        reset_cluster_sizes_private_copies = make_initialize_to_zeros_2dim_kernel(
             n_samples=n_clusters,
-            n_features=nb_centroids_private_copies,
+            n_features=n_centroids_private_copies,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
         reset_centroids_private_copies = make_initialize_to_zeros_3dim_kernel(
-            dim0=nb_centroids_private_copies,
+            dim0=n_centroids_private_copies,
             dim1=n_features,
             dim2=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
-        reduce_centroid_counts_private_copies = make_sum_reduction_2dim_kernel(
+        reduce_cluster_sizes_private_copies = make_sum_reduction_2dim_kernel(
             n_samples=n_clusters,
-            n_features=nb_centroids_private_copies,
+            n_features=n_centroids_private_copies,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
         reduce_centroids_private_copies = make_sum_reduction_3dim_kernel(
-            dim0=nb_centroids_private_copies,
+            dim0=n_centroids_private_copies,
             dim1=n_features,
             dim2=n_clusters,
             work_group_size=work_group_size,
@@ -289,31 +289,27 @@ class LLoydKMeansDriver:
         centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
 
         # Allocate the necessary memory in the device global memory
-        centroids_t_copy_array = dpctl.tensor.empty_like(
-            centroids_t, device=self.device
-        )
-        best_centroids_t = dpctl.tensor.empty_like(
-            centroids_t_copy_array, device=self.device
-        )
+        new_centroids_t = dpctl.tensor.empty_like(centroids_t, device=self.device)
+        best_centroids_t = dpctl.tensor.empty_like(new_centroids_t, device=self.device)
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=dtype, device=self.device
         )
-        centroid_counts = dpctl.tensor.empty(
-            n_clusters, dtype=dtype, device=self.device
-        )
+        cluster_sizes = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
         center_shifts = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
-        inertia = dpctl.tensor.empty(n_samples, dtype=dtype, device=self.device)
+        per_sample_inertia = per_sample_pseudo_inertia = dpctl.tensor.empty(
+            n_samples, dtype=dtype, device=self.device
+        )
         assignments_idx = dpctl.tensor.empty(
             n_samples, dtype=np.uint32, device=self.device
         )
 
-        centroids_t_private_copies = dpctl.tensor.empty(
-            (nb_centroids_private_copies, n_features, n_clusters),
+        new_centroids_t_private_copies = dpctl.tensor.empty(
+            (n_centroids_private_copies, n_features, n_clusters),
             dtype=dtype,
             device=self.device,
         )
-        centroid_counts_private_copies = dpctl.tensor.empty(
-            (nb_centroids_private_copies, n_clusters),
+        cluster_sizes_private_copies = dpctl.tensor.empty(
+            (n_centroids_private_copies, n_clusters),
             dtype=dtype,
             device=self.device,
         )
@@ -321,7 +317,7 @@ class LLoydKMeansDriver:
         # The loop
         n_iteration = 0
         center_shifts_sum = np.inf
-        best_inertia = np.inf
+        best_pseudo_inertia = np.inf
         copyto(centroids_t, best_centroids_t)
 
         # TODO: should we conform to sklearn vanilla kmeans strategy and avoid
@@ -332,49 +328,51 @@ class LLoydKMeansDriver:
         while (n_iteration <= max_iter) and (center_shifts_sum > tol):
             half_l2_norm(centroids_t, centroids_half_l2_norm)
 
-            reset_inertia(inertia)
-            reset_centroid_counts_private_copies(centroid_counts_private_copies)
-            reset_centroids_private_copies(centroids_t_private_copies)
+            reset_per_sample_inertia(per_sample_pseudo_inertia)
+            reset_cluster_sizes_private_copies(cluster_sizes_private_copies)
+            reset_centroids_private_copies(new_centroids_t_private_copies)
 
             # TODO: implement special case where only one copy is needed
             fixed_window_fused_kernel(
                 X_t,
                 centroids_t,
                 centroids_half_l2_norm,
-                inertia,
-                centroids_t_private_copies,
-                centroid_counts_private_copies,
+                per_sample_pseudo_inertia,
+                new_centroids_t_private_copies,
+                cluster_sizes_private_copies,
             )
 
             # TODO: explore fusing the next two kernels to reduce synchronous
             # scheduling overhead.
-            reduce_centroid_counts_private_copies(
-                centroid_counts_private_copies, centroid_counts
+            reduce_cluster_sizes_private_copies(
+                cluster_sizes_private_copies, cluster_sizes
             )
             reduce_centroids_private_copies(
-                centroids_t_private_copies, centroids_t_copy_array
+                new_centroids_t_private_copies, new_centroids_t
             )
 
-            broadcast_division(centroids_t_copy_array, centroid_counts)
+            broadcast_division(new_centroids_t, cluster_sizes)
 
-            get_center_shifts(centroids_t, centroids_t_copy_array, center_shifts)
+            compute_center_shifts(centroids_t, new_centroids_t, center_shifts)
 
             center_shifts_sum = dpctl.tensor.asnumpy(
                 reduce_center_shifts(center_shifts)
             )[0]
 
-            inertia_sum = dpctl.tensor.asnumpy(reduce_inertia(inertia))[0]
+            pseudo_inertia = dpctl.tensor.asnumpy(
+                reduce_inertia(per_sample_pseudo_inertia)
+            )[0]
 
             # TODO: should we drop this check ?
             # (it should not be needed because we have theoritical guarantee that
             # inertia decreases, if it doesn't it should only be because of rounding
             # errors)
-            if inertia_sum < best_inertia:
-                best_inertia = inertia_sum
+            if pseudo_inertia < best_pseudo_inertia:
+                best_pseudo_inertia = pseudo_inertia
                 copyto(centroids_t, best_centroids_t)
 
-            centroids_t, centroids_t_copy_array = (
-                centroids_t_copy_array,
+            centroids_t, new_centroids_t = (
+                new_centroids_t,
                 centroids_t,
             )
 
@@ -383,25 +381,25 @@ class LLoydKMeansDriver:
         # Finally, run an assignment kernel to compute the assignments to the best
         # centroids found, along with the exact inertia.
         half_l2_norm(best_centroids_t, centroids_half_l2_norm)
-        reset_inertia(inertia)
+        reset_per_sample_inertia(per_sample_inertia)
 
         fixed_window_assignment_kernel(
             X_t,
             best_centroids_t,
             centroids_half_l2_norm,
-            inertia,
+            per_sample_inertia,
             assignments_idx,
         )
 
-        inertia_sum = dpctl.tensor.asnumpy(reduce_inertia(inertia))[0]
+        inertia = dpctl.tensor.asnumpy(reduce_inertia(per_sample_inertia))[0]
 
         # TODO: explore leveraging dpnp to benefit from USM to avoid moving
         # centroids back and forth between device and host memory in case
         # a subsequent `.predict` call is requested on the same GPU later.
         return (
             dpctl.tensor.asnumpy(assignments_idx).astype(np.int32),
-            inertia_sum,
-            np.ascontiguousarray(dpctl.tensor.asnumpy(best_centroids_t.T)),
+            inertia,
+            dpctl.tensor.asnumpy(best_centroids_t.T),
             n_iteration - 1,  # substract 1 to conform with vanilla sklearn count
         )
 
@@ -425,7 +423,7 @@ class LLoydKMeansDriver:
             dtype = np.float32
         elif dtype != X.dtype:
             text = (
-                f"Kmeans is set to compute with dtype {dtype} but the data has "
+                f"KMeans is set to compute with dtype {dtype} but the data has "
                 f"been submitted with type {X.dtype}."
             )
 
@@ -439,6 +437,12 @@ class LLoydKMeansDriver:
                 f"the input data matches the dtype required for computations."
             )
             warnings.warn(text, DataConversionWarning)
+            # TODO: instead of triggering a copy on the host side, we could use the
+            # dtype to allocate a shared USM buffer and fill it with casted values from
+            # X. In this case we should only warn when:
+            #     (dtype == np.float64) and not self.has_aspect_fp64
+            # The other cases would not trigger any additional memory copies could not
+            # be avoided.
             X = X.astype(dtype)
 
         centers_init_dtype = centers_init.dtype
