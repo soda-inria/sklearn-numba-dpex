@@ -99,10 +99,10 @@ def make_fused_fixed_window_kernel(
 
         The distance is the euclidean distance. Note that it is not necessary to
         compute the exact value to find the closest centroid. Indeed, minimizing
-            |x-y|^2 = |x|^2 - 2<x.y> + |y|^2
-        over y amounts to minimizing
-            (1/2)y^2 - xy .
-        Moreover the value (1/2)y^2 has been pre-computed in the array
+            |x-c|^2 = |x|^2 - 2<x.c> + |c|^2
+        over c for a given x amounts to minimizing
+            (1/2)c^2 - xc .
+        Moreover the value (1/2)c^2 has been pre-computed in the array
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
         """
