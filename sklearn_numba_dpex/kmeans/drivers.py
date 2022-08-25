@@ -8,18 +8,18 @@ from sklearn.exceptions import DataConversionWarning
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
 from sklearn_numba_dpex.kmeans.kernels import (
+    make_fused_fixed_window_kernel,
+    make_assignment_fixed_window_kernel,
+    make_centroid_shifts_kernel,
     make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
     make_copyto_2d_kernel,
     make_broadcast_division_1d_2d_kernel,
-    make_centroid_shifts_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_sum_reduction_1d_kernel,
     make_sum_reduction_2d_axis0_kernel,
     make_sum_reduction_3d_axis0_kernel,
-    make_fused_fixed_window_kernel,
-    make_assignment_fixed_window_kernel,
 )
 
 
@@ -193,8 +193,50 @@ class LLoydKMeansDriver:
         n_clusters = centers_init.shape[0]
 
         # Create a set of kernels
+        (
+            n_centroids_private_copies,
+            fixed_window_fused_kernel,
+        ) = make_fused_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            global_mem_cache_size=self.global_mem_cache_size,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        fixed_window_assignment_kernel = make_assignment_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
         reset_per_sample_inertia = make_initialize_to_zeros_1d_kernel(
             size=n_samples, work_group_size=work_group_size, dtype=dtype
+        )
+
+        reset_cluster_sizes_private_copies = make_initialize_to_zeros_2d_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        reset_centroids_private_copies = make_initialize_to_zeros_3d_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_features,
+            size2=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
         )
 
         copyto = make_copyto_2d_kernel(
@@ -235,37 +277,6 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        (
-            n_centroids_private_copies,
-            fixed_window_fused_kernel,
-        ) = make_fused_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            global_mem_cache_size=self.global_mem_cache_size,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
-            centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
-        reset_cluster_sizes_private_copies = make_initialize_to_zeros_2d_kernel(
-            size0=n_centroids_private_copies,
-            size1=n_clusters,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
-        reset_centroids_private_copies = make_initialize_to_zeros_3d_kernel(
-            size0=n_centroids_private_copies,
-            size1=n_features,
-            size2=n_clusters,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
         reduce_cluster_sizes_private_copies = make_sum_reduction_2d_axis0_kernel(
             size0=n_centroids_private_copies,
             size1=n_clusters,
@@ -277,17 +288,6 @@ class LLoydKMeansDriver:
             size0=n_centroids_private_copies,
             size1=n_features,
             size2=n_clusters,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
-        fixed_window_assignment_kernel = make_assignment_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=dtype,
         )
