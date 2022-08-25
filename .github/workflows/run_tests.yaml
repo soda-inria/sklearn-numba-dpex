@@ -8,6 +8,7 @@ jobs:
     name: Run test suite
     runs-on: ubuntu-latest
     container: jjerphan/numba_dpex_dev:latest
+      # TODO: setup runners with a compatible gpu and activate this option:
       # options: --device=/dev/dri  # enable gpu passthrough
 
     steps:

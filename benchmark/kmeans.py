@@ -29,9 +29,18 @@ class KMeansLloydTimeit:
     run_consistency_checks : bool
         If true, will check if all candidates on the test bench return the same
         results.
+        
+    skip_slow: bool
+        If true, will skip the timeit calls that are marked as slow. Default to false.
     """
 
-    def __init__(self, data_initialization_fn, max_iter, run_consistency_checks=True):
+    def __init__(
+        self,
+        data_initialization_fn,
+        max_iter,
+        skip_slow=False,
+        run_consistency_checks=True,
+    ):
         (
             self.X,
             self.sample_weight,
@@ -40,12 +49,9 @@ class KMeansLloydTimeit:
         self.max_iter = max_iter
         self.run_consistency_checks = run_consistency_checks
         self.results = None
+        self.skip_slow = skip_slow
 
-    def timeit(
-        self,
-        kmeans_single_lloyd_fn,
-        name,
-    ):
+    def timeit(self, kmeans_single_lloyd_fn, name, slow=False):
         """
         Parameters
         ----------
@@ -55,7 +61,13 @@ class KMeansLloydTimeit:
 
         name: str
             Name of the candidate to test
+
+        slow: bool
+            Set to true to skip the timeit when skip_slow is true. Default to false.
         """
+        if slow and self.skip_slow:
+            return
+
         max_iter = self.max_iter
         self._check_kmeans_single_lloyd_fn_signature(kmeans_single_lloyd_fn)
         n_clusters = self.centers_init.shape[0]
@@ -147,7 +159,6 @@ class KMeansLloydTimeit:
 
 
 if __name__ == "__main__":
-    from ext_helpers.sklearn import kmeans as sklearn_kmeans
     from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
     from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
@@ -156,10 +167,13 @@ if __name__ == "__main__":
     from sklearnex import config_context
     from numpy.random import default_rng
 
+    # TODO: expose CLI args.
+
     random_state = 123
     n_clusters = 127
     max_iter = 100
     tol = 0
+    skip_slow = True
     dtype = np.float32
     # NB: it seems that currently the estimators in the benchmark always return
     # close results but with significant differences for a few elements.
@@ -179,11 +193,11 @@ if __name__ == "__main__":
         return X, None, init
 
     kmeans_timer = KMeansLloydTimeit(
-        benchmark_data_initialization, max_iter, run_consistency_checks
+        benchmark_data_initialization, max_iter, skip_slow, run_consistency_checks
     )
 
     kmeans_timer.timeit(
-        sklearn_kmeans,
+        VANILLA_SKLEARN_LLOYD,
         name="Sklearn vanilla lloyd",
     )
 
@@ -194,17 +208,17 @@ if __name__ == "__main__":
         )
 
     with config_context(target_offload="gpu"):
-        kmeans_timer.timeit(
-            daal4py_kmeans,
-            name="daal4py lloyd GPU",
-        )
+        kmeans_timer.timeit(daal4py_kmeans, name="daal4py lloyd GPU", slow=True)
 
     for multiplier in [1, 2, 4, 8]:
         kmeans_timer.timeit(
             LLoydKMeansDriver(
-                device="cpu", dtype=dtype, work_group_size_multiplier=multiplier
+                device="cpu",
+                dtype=dtype,
+                work_group_size_multiplier=multiplier,
             ),
             name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
+            slow=True,
         )
 
         kmeans_timer.timeit(

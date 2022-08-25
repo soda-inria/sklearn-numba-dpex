@@ -19,10 +19,20 @@ _SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 _SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
 
 
-AVAILABLE_DTYPES = [np.float32]
-DEVICE = dpctl.SyclDevice()
-if DEVICE.has_aspect_fp64:
-    AVAILABLE_DTYPES.append(np.float64)
+_DEVICE = dpctl.SyclDevice()
+_DEVICE_NAME = _DEVICE.name
+_SUPPORTED_DTYPE = [np.float32]
+
+if _DEVICE.has_aspect_fp64:
+    _SUPPORTED_DTYPE.append(np.float64)
+
+
+def _fail_if_no_dtype_support(xfail_fn, dtype):
+    if dtype not in _SUPPORTED_DTYPE:
+        xfail_fn(
+            f"The default device {_DEVICE_NAME} does not have support for "
+            f"float64 operations."
+        )
 
 
 def test_kmeans_driver_signature():
@@ -30,8 +40,14 @@ def test_kmeans_driver_signature():
     assert driver_signature == _SKLEARN_LLOYD_SIGNATURE
 
 
-@pytest.mark.parametrize("dtype", AVAILABLE_DTYPES)
+# TODO: write a test to check that the estimator remains stable if a cluster is found to
+# have 0 samples.
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_kmeans_fit_same_results(dtype):
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
     # TODO: remove the manual monkey-patching and rely on engine registration
     # once properly implemented.
     random_seed = 42

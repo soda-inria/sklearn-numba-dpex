@@ -21,14 +21,12 @@ def test_opencl_requirement():
     )
 
 
-@dataclass
-class _FakeSyclDevice:
-    has_aspect_fp64: bool = True
-    max_work_group_size: int = 16
-    name: str = "Fake Sycl Device"
-
-
-def test_cl_device_params_warnings():
+def test_warnings_non_cl_device_params():
+    @dataclass
+    class _FakeSyclDevice:
+        has_aspect_fp64: bool = True
+        max_work_group_size: int = 16
+        name: str = "Fake Sycl Device Without OpenCL Support"
 
     device_params = _DeviceParams(_FakeSyclDevice())
     # Check that a warning is raised if a device is not detected by opencl
@@ -38,11 +36,13 @@ def test_cl_device_params_warnings():
     with pytest.warns(RuntimeWarning):
         device_params.global_mem_cache_size
 
+
+def test_no_warnings_cl_device_params():
     try:
         sycl_device = dpctl.SyclDevice("opencl")
         device_params = _DeviceParams(sycl_device)
     except dpctl.SyclDeviceCreationError:
-        return
+        pytest.xfail("No opencl SyclDevice available")
 
     # Ensure absence of warning if the device is detected by opencl
     with warnings.catch_warnings():

@@ -8,16 +8,16 @@ from sklearn.exceptions import DataConversionWarning
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
 from sklearn_numba_dpex.kmeans.kernels import (
-    make_initialize_to_zeros_1dim_kernel,
-    make_initialize_to_zeros_2dim_kernel,
-    make_initialize_to_zeros_3dim_kernel,
-    make_copyto_kernel,
-    make_broadcast_division_kernel,
-    make_center_shift_kernel,
-    make_half_l2_norm_dim0_kernel,
-    make_sum_reduction_1dim_kernel,
-    make_sum_reduction_2dim_kernel,
-    make_sum_reduction_3dim_kernel,
+    make_initialize_to_zeros_1d_kernel,
+    make_initialize_to_zeros_2d_kernel,
+    make_initialize_to_zeros_3d_kernel,
+    make_copyto_2d_kernel,
+    make_broadcast_division_1d_2d_kernel,
+    make_centroid_shifts_kernel,
+    make_half_l2_norm_2d_axis0_kernel,
+    make_sum_reduction_1d_kernel,
+    make_sum_reduction_2d_axis0_kernel,
+    make_sum_reduction_3d_axis0_kernel,
     make_fused_fixed_window_kernel,
     make_assignment_fixed_window_kernel,
 )
@@ -31,11 +31,6 @@ def _check_power_of_2(e):
 
 class LLoydKMeansDriver:
     """GPU optimized implementation of Lloyd's k-means.
-
-    Inspired by the "Fused Fixed" strategy exposed in:
-    Kruliš, M., & Kratochvíl, M. (2020, August). Detailed analysis and
-    optimization of CUDA K-means algorithm. In 49th International
-    Conference on Parallel Processing-ICPP (pp. 1-11).
 
     The current implementation is called "fused fixed", it consists in a sliding window
     of fixed size on the value of the centroids that work items use to accumulate the
@@ -78,17 +73,32 @@ class LLoydKMeansDriver:
     centroids_private_copies_max_cache_occupancy : float
         A maximum fraction of global_mem_cache_size that is allowed to be expected for
         use when estimating the maximum number of copies that can be used for
-        privatization. If None, will default to 0.7 .
+        privatization. If None, will default to 0.7.
 
     device: str
         A valid sycl device filter.
 
     X_layout: str
-        'F' or 'C'
+        'F' or 'C'. If None, will default to 'F'.
 
     dtype: np.float32 or np.float64
         The floating point precision that the kernels should use. If None, will adapt
         to the dtype of the data, else, will cast the data to the appropriate dtype.
+
+    Notes
+    -----
+    The implementation has been extensively inspired by the "Fused Fixed" strategy
+    exposed in [1]_, along with its reference implementatino by the same authors [2]_,
+    and the reader can also refer to the complementary slide deck [3]_  with schemas
+    that intuitively explain the main computation.
+
+    .. [1] Kruliš, M., & Kratochvíl, M. (2020, August). Detailed analysis and
+        optimization of CUDA K-means algorithm. In 49th International
+        Conference on Parallel Processing-ICPP (pp. 1-11).
+
+    .. [2] https://github.com/krulis-martin/cuda-kmeans
+
+    .. [3] https://jnamaral.github.io/icpp20/slides/Krulis_Detailed.pdf
 
     """
 
@@ -106,6 +116,9 @@ class LLoydKMeansDriver:
     ):
         dpctl_device = dpctl.SyclDevice(device)
         device_params = _DeviceParams(dpctl_device)
+
+        # TODO: set the best possible defaults for all the parameters based on an
+        # exhaustive grid search.
 
         self.global_mem_cache_size = (
             global_mem_cache_size or device_params.global_mem_cache_size
@@ -136,6 +149,7 @@ class LLoydKMeansDriver:
 
         self.device = dpctl_device
 
+        # FIXME: "C" is not available at the time (raises a ValueError).
         self.X_layout = X_layout or "F"
 
         self.has_aspect_fp64 = device_params.has_aspect_fp64
@@ -179,34 +193,46 @@ class LLoydKMeansDriver:
         n_clusters = centers_init.shape[0]
 
         # Create a set of kernels
-        reset_per_sample_inertia = make_initialize_to_zeros_1dim_kernel(
-            n_samples=n_samples, work_group_size=work_group_size, dtype=dtype
+        reset_per_sample_inertia = make_initialize_to_zeros_1d_kernel(
+            size=n_samples, work_group_size=work_group_size, dtype=dtype
         )
 
-        copyto = make_copyto_kernel(
-            n_clusters, n_features, work_group_size=work_group_size
+        copyto = make_copyto_2d_kernel(
+            size0=n_features, size1=n_clusters, work_group_size=work_group_size
         )
 
-        broadcast_division = make_broadcast_division_kernel(
-            n_samples=n_clusters,
-            n_features=n_features,
+        broadcast_division = make_broadcast_division_1d_2d_kernel(
+            size0=n_features,
+            size1=n_clusters,
             work_group_size=work_group_size,
         )
 
-        compute_center_shifts = make_center_shift_kernel(
-            n_clusters, n_features, work_group_size=work_group_size, dtype=dtype
+        compute_centroid_shifts = make_centroid_shifts_kernel(
+            n_clusters=n_clusters,
+            n_features=n_features,
+            work_group_size=work_group_size,
+            dtype=dtype,
         )
 
-        half_l2_norm = make_half_l2_norm_dim0_kernel(
-            n_clusters, n_features, work_group_size=work_group_size, dtype=dtype
+        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+            size0=n_features,
+            size1=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
         )
 
-        reduce_inertia = make_sum_reduction_1dim_kernel(
-            n_samples, work_group_size=work_group_size, device=self.device, dtype=dtype
+        reduce_inertia = make_sum_reduction_1d_kernel(
+            size=n_samples,
+            work_group_size=work_group_size,
+            device=self.device,
+            dtype=dtype,
         )
 
-        reduce_center_shifts = make_sum_reduction_1dim_kernel(
-            n_clusters, work_group_size=work_group_size, device=self.device, dtype=dtype
+        reduce_centroid_shifts = make_sum_reduction_1d_kernel(
+            size=n_clusters,
+            work_group_size=work_group_size,
+            device=self.device,
+            dtype=dtype,
         )
 
         (
@@ -225,32 +251,32 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        reset_cluster_sizes_private_copies = make_initialize_to_zeros_2dim_kernel(
-            n_samples=n_clusters,
-            n_features=n_centroids_private_copies,
+        reset_cluster_sizes_private_copies = make_initialize_to_zeros_2d_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
-        reset_centroids_private_copies = make_initialize_to_zeros_3dim_kernel(
-            dim0=n_centroids_private_copies,
-            dim1=n_features,
-            dim2=n_clusters,
+        reset_centroids_private_copies = make_initialize_to_zeros_3d_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_features,
+            size2=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
-        reduce_cluster_sizes_private_copies = make_sum_reduction_2dim_kernel(
-            n_samples=n_clusters,
-            n_features=n_centroids_private_copies,
+        reduce_cluster_sizes_private_copies = make_sum_reduction_2d_axis0_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
-        reduce_centroids_private_copies = make_sum_reduction_3dim_kernel(
-            dim0=n_centroids_private_copies,
-            dim1=n_features,
-            dim2=n_clusters,
+        reduce_centroids_private_copies = make_sum_reduction_3d_axis0_kernel(
+            size0=n_centroids_private_copies,
+            size1=n_features,
+            size2=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
@@ -295,7 +321,9 @@ class LLoydKMeansDriver:
             n_clusters, dtype=dtype, device=self.device
         )
         cluster_sizes = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
-        center_shifts = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
+        centroid_shifts = dpctl.tensor.empty(
+            n_clusters, dtype=dtype, device=self.device
+        )
         per_sample_inertia = per_sample_pseudo_inertia = dpctl.tensor.empty(
             n_samples, dtype=dtype, device=self.device
         )
@@ -316,16 +344,18 @@ class LLoydKMeansDriver:
 
         # The loop
         n_iteration = 0
-        center_shifts_sum = np.inf
+        centroid_shifts_sum = np.inf
         best_pseudo_inertia = np.inf
         copyto(centroids_t, best_centroids_t)
 
+        # TODO: Investigate possible speedup with a custom dpctl queue with a custom
+        # DAG of events and a final single "wait"
         # TODO: should we conform to sklearn vanilla kmeans strategy and avoid
         # computing an extra centroid update in the last iteration that will not be
         # used ?
         # It's not a significant difference anyway since when performance matters
         # usually we have n_iteration > 100
-        while (n_iteration <= max_iter) and (center_shifts_sum > tol):
+        while (n_iteration <= max_iter) and (centroid_shifts_sum > tol):
             half_l2_norm(centroids_t, centroids_half_l2_norm)
 
             reset_per_sample_inertia(per_sample_pseudo_inertia)
@@ -353,15 +383,15 @@ class LLoydKMeansDriver:
 
             broadcast_division(new_centroids_t, cluster_sizes)
 
-            compute_center_shifts(centroids_t, new_centroids_t, center_shifts)
+            compute_centroid_shifts(centroids_t, new_centroids_t, centroid_shifts)
 
-            center_shifts_sum = dpctl.tensor.asnumpy(
-                reduce_center_shifts(center_shifts)
-            )[0]
+            centroid_shifts_sum, *_ = dpctl.tensor.asnumpy(
+                reduce_centroid_shifts(centroid_shifts)
+            )
 
-            pseudo_inertia = dpctl.tensor.asnumpy(
+            pseudo_inertia, *_ = dpctl.tensor.asnumpy(
                 reduce_inertia(per_sample_pseudo_inertia)
-            )[0]
+            )
 
             # TODO: should we drop this check ?
             # (it should not be needed because we have theoritical guarantee that
@@ -441,8 +471,7 @@ class LLoydKMeansDriver:
             # dtype to allocate a shared USM buffer and fill it with casted values from
             # X. In this case we should only warn when:
             #     (dtype == np.float64) and not self.has_aspect_fp64
-            # The other cases would not trigger any additional memory copies could not
-            # be avoided.
+            # The other cases would not trigger any additional memory copies.
             X = X.astype(dtype)
 
         centers_init_dtype = centers_init.dtype
@@ -456,4 +485,8 @@ class LLoydKMeansDriver:
             )
             centers_init = centers_init.astype(dtype)
 
+        # TODO: document in the Readme that float32 precision is generally regarded as
+        # faster and accurate enough, and more suitable for GPU compute, and add a code
+        # snippet that explains how to ensure that the dtype of the input data is
+        # float32.
         return X, centers_init, dtype
