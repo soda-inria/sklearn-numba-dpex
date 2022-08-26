@@ -4,8 +4,8 @@ on:
   push: { branches: main }
 
 jobs:
-  test:
-    name: Run test suite
+  run-pre-commit-checks:
+    name: Run pre-commit checks
     runs-on: ubuntu-latest
 
     steps:
@@ -17,5 +17,5 @@ jobs:
         pip install pre-commit
         pre-commit install
 
-    - name: Run pre-commit checks
+    - name: Run checks
       run: pre-commit run

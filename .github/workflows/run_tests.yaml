@@ -4,7 +4,7 @@ on:
   push: { branches: main }
 
 jobs:
-  test:
+  run-test-suite:
     name: Run test suite
     runs-on: ubuntu-latest
     container: jjerphan/numba_dpex_dev:latest
