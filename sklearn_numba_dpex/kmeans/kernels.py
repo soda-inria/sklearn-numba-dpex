@@ -126,7 +126,7 @@ def make_fused_fixed_window_kernel(
         # In the inner loop each work item accumulates in private memory the
         # dot product of the sample at the sample_idx relatively to each centroid
         # in the window.
-        partial_dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
+        dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
         first_centroid_idx = 0
 
@@ -149,7 +149,7 @@ def make_fused_fixed_window_kernel(
             # initialize the partial pseudo inertia for each of the window_n_centroids
             # centroids in the window
             for i in range(window_n_centroids):
-                partial_dot_products[i] = zero
+                dot_products[i] = zero
 
             # the `window_n_centroids` first work items cooperate on loading the
             # values of centroids_half_l2_norm relevant to current window. Each work
@@ -219,7 +219,7 @@ def make_fused_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        partial_dot_products[window_centroid_idx] += (
+                        dot_products[window_centroid_idx] += (
                             centroid_value * X_value
                         )
 
@@ -235,7 +235,7 @@ def make_fused_fixed_window_kernel(
             # inertia for the current sample.
             for i in range(window_n_centroids):
                 current_sample_pseudo_inertia = (
-                    centroids_window_half_l2_norm[i] - partial_dot_products[i]
+                    centroids_window_half_l2_norm[i] - dot_products[i]
                 )
                 if current_sample_pseudo_inertia < min_sample_pseudo_inertia:
                     min_sample_pseudo_inertia = current_sample_pseudo_inertia
@@ -367,7 +367,7 @@ def make_assignment_fixed_window_kernel(
         centroids_window_half_l2_norm = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
-        partial_dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
+        dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
         first_centroid_idx = 0
 
@@ -382,7 +382,7 @@ def make_assignment_fixed_window_kernel(
         for _0 in range(n_windows_per_feature):
 
             for i in range(window_n_centroids):
-                partial_dot_products[i] = zero
+                dot_products[i] = zero
 
             half_l2_norm_loading_idx = first_centroid_idx + local_work_id
             if local_work_id < window_n_centroids:
@@ -437,7 +437,7 @@ def make_assignment_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        partial_dot_products[window_centroid_idx] += (
+                        dot_products[window_centroid_idx] += (
                             centroid_value * X_value
                         )
                     # The l2 norm of the current sample is needed to compute the exact
@@ -452,7 +452,7 @@ def make_assignment_fixed_window_kernel(
 
             for i in range(window_n_centroids):
                 current_sample_pseudo_inertia = (
-                    centroids_window_half_l2_norm[i] - partial_dot_products[i]
+                    centroids_window_half_l2_norm[i] - dot_products[i]
                 )
                 if current_sample_pseudo_inertia < min_sample_pseudo_inertia:
                     min_sample_pseudo_inertia = current_sample_pseudo_inertia
@@ -653,13 +653,13 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         if col_idx >= size1:
             return
 
-        partial_l2_norm = zero
+        l2_norm = zero
 
         for row_idx in range(size0):
             item = data[row_idx, col_idx]
-            partial_l2_norm += item * item
+            l2_norm += item * item
 
-        result[col_idx] = partial_l2_norm / two
+        result[col_idx] = l2_norm / two
 
     return half_l2_norm[global_size, work_group_size]
 
@@ -748,14 +748,14 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         n_groups = math.ceil(n_groups / (2 * work_group_size))
         global_size = n_groups * work_group_size
         kernel = partial_sum_reduction[global_size, work_group_size]
-        partial_result = dpctl.tensor.empty(n_groups, dtype=dtype, device=device)
-        kernels_and_empty_tensors_pairs.append((kernel, partial_result))
+        result = dpctl.tensor.empty(n_groups, dtype=dtype, device=device)
+        kernels_and_empty_tensors_pairs.append((kernel, result))
 
     def sum_reduction(summands):
-        for kernel, partial_result in kernels_and_empty_tensors_pairs:
-            kernel(summands, partial_result)
-            summands = partial_result
-        return partial_result
+        for kernel, result in kernels_and_empty_tensors_pairs:
+            kernel(summands, result)
+            summands = result
+        return result
 
     return sum_reduction
 
@@ -772,10 +772,10 @@ def make_sum_reduction_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         col_idx = dpex.get_global_id(0)
         if col_idx >= size1:
             return
-        partial_result = zero
+        sum_ = zero
         for row_idx in range(size0):
-            partial_result += summands[row_idx, col_idx]
-        result[col_idx] = partial_result
+            sum_ += summands[row_idx, col_idx]
+        result[col_idx] = sum_
 
     return sum_reduction[global_size, work_group_size]
 
@@ -797,10 +797,10 @@ def make_sum_reduction_3d_axis0_kernel(size0, size1, size2, work_group_size, dty
         k = ((group_idx % n_work_groups_for_dim2) * work_group_size) + item_idx
         if k >= size2:
             return
-        partial_result = zero
+        sum_ = zero
         for i in range(size0):
-            partial_result += summands[i, j, k]
-        result[j, k] = partial_result
+            sum_ += summands[i, j, k]
+        result[j, k] = sum_
 
     return sum_reduction[global_size, work_group_size]
 

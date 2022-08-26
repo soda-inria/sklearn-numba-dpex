@@ -13,7 +13,6 @@ VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 # TODO: maybe this class could be abstracted to use the same strategy with other
 # estimators ?
 class KMeansLloydTimeit:
-    _VANILLA_SKLEARN_LLOYD_SIGNATURE = inspect.signature(VANILLA_SKLEARN_LLOYD)
     """A helper class that standardizes a test bench for different implementations of
     the Lloyd algorithm.
 
@@ -29,10 +28,12 @@ class KMeansLloydTimeit:
     run_consistency_checks : bool
         If true, will check if all candidates on the test bench return the same
         results.
-        
+
     skip_slow: bool
         If true, will skip the timeit calls that are marked as slow. Default to false.
     """
+
+    _VANILLA_SKLEARN_LLOYD_SIGNATURE = inspect.signature(VANILLA_SKLEARN_LLOYD)
 
     def __init__(
         self,
