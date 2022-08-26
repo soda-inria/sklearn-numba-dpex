@@ -1,6 +1,5 @@
 import warnings
 
-
 # TODO: when dpctl.SyclDevice also exposes relevant attributes,
 # remove the dependency to opencl and only use dpctl.
 # A unittest in test_device_params check the availability of the relevant
@@ -93,16 +92,17 @@ def _get_cl_param(cl_device, value, default, device_name):
 def _warns_missing_cl_param(value, default, device_name):
     text = [
         f"Trying to fetch the parameter {value} for the executing device {device_name} "
-        f"from opencl interface "
+        "from opencl interface "
     ]
     if pyopencl is None:
         text.append("with pyopencl, but pyopencl is missing.")
     else:
         text.append(
-            "but opencl can't find the device. Ensure the opencl drivers are available on the "
-            "system for this device."
+            "but opencl can't find the device. Ensure the opencl drivers are available"
+            " on the system for this device."
         )
     text.append(
-        f"\nUsing default value {value} = {default} as a fallback, which might be inadapted."
+        f"\nUsing default value {value} = {default} as a fallback, which might be"
+        " inadapted."
     )
     warnings.warn("".join(text), RuntimeWarning)

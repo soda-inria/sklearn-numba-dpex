@@ -1,8 +1,8 @@
-import pytest
 import warnings
+from dataclasses import dataclass
 
 import dpctl
-from dataclasses import dataclass
+import pytest
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
