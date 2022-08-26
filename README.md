@@ -93,12 +93,15 @@ sudo apt install intel-basekit
 source /opt/intel/oneapi/compiler/latest/env/vars.sh
 ```
 
-Ensure that the `icx` command can be found in the PATH with `which icx`.
+Ensure that the `icx` command can be found in the PATH with the command:
+
+```
+which icx
+```
 
 Install numba-dpex in the same conda env as previously:
 
 ```
-
 git clone https://github.com/IntelPython/numba-dpex/
 cd numba-dpex
 pip install -e . --no-build-isolation
@@ -113,14 +116,14 @@ $ export PATH=/opt/intel/oneapi/compiler/latest/linux/bin-llvm:$PATH
 
 #### Using the docker image
 
-A docker image is available and provides an up-to-date, one-command install environment. You can either build it from the [Dockerfile](https://github.com/soda-inria/sklearn-numba-dpex/blob/main/docker/Dockerfile) :
+A docker image is available and provides an up-to-date, one-command install environment. You can either build it from the [Dockerfile](./docker/Dockerfile) :
 
 ```
 $ cd docker
 $ docker build . -t my_tag
 ```
 
-or pull the docker image from this publicly available repository:
+or pull the docker image from [this publicly available repository](https://hub.docker.com/repository/docker/jjerphan/numba_dpex_dev):
 
 ```
 $ docker pull jjerphan/numba_dpex_dev:latest
@@ -134,7 +137,7 @@ $ docker run --name my_container_name -it -v /my/host/volume/:/mounted/volume --
 
 where `my_tag` would be `jjerphan/numba_dpex_dev:latest` if you pulled from the repository.
 
-The flag `--device=/dev/dri` is **mandatory** to enable the gpu within the container, also the user starting the `docker run` command must have access to the gpu, e.g. by being a member of the `render` group.
+⚠ The flag `--device=/dev/dri` is **mandatory** to enable the gpu within the container, also the user starting the `docker run` command must have access to the gpu, e.g. by being a member of the `render` group.
 
 Unless using the flag `--rm` when starting a container, you can restart it after it was exited, with the command:
 
@@ -152,7 +155,7 @@ will introspect the available hardware, and should display working `opencl` cpu 
 
 ### Step 2: install the `wip-engines` branch of scikit-learn
 
-Once you're loaded into a numba_dpex development environment, following one of the two previous guides, follow those instructions:
+Once you have loaded into a `numba_dpex` development environment, following one of the two previous guides, follow those instructions:
 
 ```
 git clone https://github.com/ogrisel/scikit-learn
@@ -191,7 +194,7 @@ Some parameters in the `__main__` section of the file `./benchmark/kmeans.py` ar
 
 ### Notes about the preferred floating point precision
 
-In many machine learning applications, operations using single-precision (float32) floating point data are regarded as faster, accurate enough and more suitable for GPU compute. Besides, most GPUs used in machine learning projects are significantly faster with float32 than with double-precision (float64) floating point data.
+In many machine learning applications, operations using single-precision (float32) floating point data require twice as less memory that double-precision (float64), are regarded as faster, accurate enough and more suitable for GPU compute. Besides, most GPUs used in machine learning projects are significantly faster with float32 than with double-precision (float64) floating point data.
 
 To leverage the full potential of GPU execution, it's strongly advised to use a data loader that loads float32 data. By default, unless specified otherwise numpy array are created with type float64, so be especially careful to the type whenever the loader does not explicitly document the type nor expose a type option.
 
