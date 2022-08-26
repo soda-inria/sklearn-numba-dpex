@@ -1,14 +1,14 @@
 import math
 from functools import lru_cache
 
-import numba_dpex as dpex
 import dpctl
+import numba_dpex as dpex
 
 # General note on kernel implementation
 #
 # In many of those kernels, many values are defined outside of the definition of the
 # kernel. This trick is aimed at forcing the JIT compiler to detect those values as
-# constants. The compiler is supposed to unroll the loops that use constant values to 
+# constants. The compiler is supposed to unroll the loops that use constant values to
 # parameterize the number of iterations in the loop, which should reduce the execution
 # time.
 #
@@ -17,11 +17,12 @@ import dpctl
 # attribute.
 #
 # The drawback is that it triggers the JIT compilation of a new kernel for each
-# different input size, which could be a setback in some contexts but should not be 
-# an issue for KMeans since the size of the inputs remain constants accross iterations 
+# different input size, which could be a setback in some contexts but should not be
+# an issue for KMeans since the size of the inputs remain constants accross iterations
 # in the main loop.
 
 # TODO: write unittests for each distinct kernel.
+
 
 @lru_cache
 def make_fused_fixed_window_kernel(
@@ -71,16 +72,16 @@ def make_fused_fixed_window_kernel(
     # (NB: it's already supported by numba.cuda) X_t should be an input to the factory
     # rather than an input to the kernel.
     @dpex.kernel
-    # fmt: off
     def fused_kmeans(
+        # fmt: off
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
         per_sample_pseudo_inertia,         # OUT            (n_samples,)
-        new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)
-        cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)
+        new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
+        cluster_sizes_private_copies,  # OUT            (n_private_copies, n_clusters)  # noqa
     ):
-    # fmt: on
+        # fmt: on
         """One full iteration of LLoyd's k-means.
 
         The kernel is meant to be invoked on a 1D grid spanning the data samples of
@@ -219,9 +220,7 @@ def make_fused_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        dot_products[window_centroid_idx] += (
-                            centroid_value * X_value
-                        )
+                        dot_products[window_centroid_idx] += centroid_value * X_value
 
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
@@ -248,8 +247,8 @@ def make_fused_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-        # End of outer loop. By now min_idx and min_sample_pseudo_inertia contains the expected
-        # values.
+        # End of outer loop. By now min_idx and min_sample_pseudo_inertia
+        # contains the expected values.
 
         # STEP 2: update centroids.
 
@@ -341,16 +340,16 @@ def make_assignment_fixed_window_kernel(
 
     # TODO: factorize the fused fixed kernel and the assignment kernel using dpex.func
     # namespace. Ensure no impact on performance.
-    # fmt: off
     @dpex.kernel
     def assignment(
+        # fmt: off
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         current_centroids_t,      # IN             (n_features, n_clusters)
         centroids_half_l2_norm,   # IN             (n_clusters,)
         per_sample_inertia,       # OUT            (n_samples,)
-        assignments_idx,          # OUT            (n_samples,)
+        assignments_idx,  # OUT            (n_samples,)
     ):
-    # fmt: on
+        # fmt: on
         """
         This kernel is very similar to the fused fixed kernel, with a few
         differences:
@@ -437,9 +436,7 @@ def make_assignment_fixed_window_kernel(
                         centroid_value = centroids_window[
                             window_feature_idx, window_centroid_idx
                         ]
-                        dot_products[window_centroid_idx] += (
-                            centroid_value * X_value
-                        )
+                        dot_products[window_centroid_idx] += centroid_value * X_value
                     # The l2 norm of the current sample is needed to compute the exact
                     # value of the inertia. It is accumulated in the first iteration
                     # of the outer loop
@@ -483,10 +480,10 @@ def make_assignment_fixed_window_kernel(
 # performance since it saves costly indexing operations (like //)
 #    - investigate if flat 1D-like indexing also works for ND kernels, thus saving the
 # need to compute coordinates for each dimension for element-wise operations.
-#    - or using numba + dpnp to directly leverage kernels that are shipped in dpnp to 
+#    - or using numba + dpnp to directly leverage kernels that are shipped in dpnp to
 # replace numpy methods.
-# However, in light of our main goal that is bringing a GPU KMeans to scikit-learn, the 
-# importance of those TODOs is currently seen as secondary, since the execution time of 
+# However, in light of our main goal that is bringing a GPU KMeans to scikit-learn, the
+# importance of those TODOs is currently seen as secondary, since the execution time of
 # those kernels is only a small fraction of the total execution time and the
 # improvements that further optimizations can add will only be marginal. There is no
 # doubt, though, that a lot could be learnt about kernel programming in the process.
@@ -500,13 +497,13 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
     @dpex.kernel
-    # fmt: off
     def centroid_shifts(
+        # fmt: off
         centroids_t,        # IN    (n_features, n_clusters)
         new_centroids_t,    # IN    (n_features, n_clusters)
-        centroid_shifts,    # OUT   (n_clusters,)
+        centroid_shifts,  # OUT   (n_clusters,)
     ):
-    # fmt: on
+        # fmt: on
         sample_idx = dpex.get_global_id(0)
 
         if sample_idx >= n_clusters:
@@ -641,13 +638,13 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
-    # fmt: off
     @dpex.kernel
     def half_l2_norm(
-            data,     # IN        (size0, size1)
-            result    # OUT       (size1,)
-            ):    
-    # fmt: on
+        # fmt: off
+        data,    # IN        (size0, size1)
+        result,  # OUT       (size1,)
+    ):
+        # fmt: on
         col_idx = dpex.get_global_id(0)
 
         if col_idx >= size1:
@@ -678,8 +675,8 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
     operations.
 
     Once the reduction is done in a work group the result is written in global memory,
-    thus creating an intermediary result whose size is divided by 
-    (2 * work_group_size). This is repeated as many time as needed until only one value 
+    thus creating an intermediary result whose size is divided by
+    (2 * work_group_size). This is repeated as many time as needed until only one value
     remains in global memory.
 
     NB: work_group_size is assumed to be a power of 2.
@@ -690,12 +687,12 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
     zero = dtype(0.0)
 
     @dpex.kernel
-    # fmt: off
     def partial_sum_reduction(
+        # fmt: off
         summands,    # IN        (size,)
-        result,      # OUT       (math.ceil(size / (2 * work_group_size))
+        result,  # OUT       (math.ceil(size / (2 * work_group_size),)
     ):
-    # fmt: on
+        # fmt: on
         # NB: This kernel only perform a partial reduction
         group_id = dpex.get_group_id(0)
         local_work_id = dpex.get_local_id(0)
@@ -803,5 +800,3 @@ def make_sum_reduction_3d_axis0_kernel(size0, size1, size2, work_group_size, dty
         result[j, k] = sum_
 
     return sum_reduction[global_size, work_group_size]
-
-

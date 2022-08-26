@@ -1,19 +1,17 @@
-import pytest
 import inspect
 
-import sklearn
 import dpctl
-
 import numpy as np
+import pytest
+import sklearn
 from numpy.testing import assert_array_equal
 from sklearn import config_context
-from sklearn.datasets import make_blobs
-from sklearn.cluster import KMeans
 from sklearn.base import clone
+from sklearn.cluster import KMeans
+from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
-
 
 _SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 _SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
@@ -31,7 +29,7 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
     if dtype not in _SUPPORTED_DTYPE:
         xfail_fn(
             f"The default device {_DEVICE_NAME} does not have support for "
-            f"float64 operations."
+            "float64 operations."
         )
 
 
