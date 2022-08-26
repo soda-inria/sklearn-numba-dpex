@@ -1,3 +1,61 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sklearn-numba-dpex"
+version = "0.1.0"
+description = "Computational Engine for scikit-learn based on numba-dpex"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file="LICENSE.txt" }
+maintainers = [
+  { name="Olivier Grisel", email="olivier.grisel@ensta.org" },
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved",
+    "Programming Language :: Python",
+    "Topic :: Software Development",
+    "Topic :: Scientific/Engineering",
+    "Development Status :: 4 - Beta",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: Implementation :: CPython"
+]
+
+
+# TODO: remove pyopencl when dpctl exposes preferred_work_group_size_multiple
+# see https://github.com/IntelPython/dpctl/issues/886
+dependencies = [
+    "scikit-learn",
+    "numba-dpex",
+    "dpctl",
+    "pyopencl"
+]
+
+
+[project.optional-dependencies]
+benchmark = [
+    "scikit-learn-intelex",
+    "pandas"
+]
+
+
+[project.urls]
+"Homepage" = "https://github.com/ogrisel/sklearn-numba-dpex"
+
+
+[project.entry-points.sklearn_engines]
+kmeans = "sklearn_numba_dpex.cluster.kmeans:KMeansEngine"
+
 [tool.black]
 line-length = 88
 target_version = ['py38', 'py39', 'py310']
@@ -18,3 +76,6 @@ exclude = '''
 
 [tool.isort]
 profile = "black"
+
+
+# TODO: move sections from setup.cfg to pyproject.toml when applicable
