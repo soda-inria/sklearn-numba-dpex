@@ -355,6 +355,10 @@ class LLoydKMeansDriver:
         # used ?
         # It's not a significant difference anyway since when performance matters
         # usually we have n_iteration > 100
+        # TODO: there's an implicit choice in this code that will zero-out a centroid
+        # if its cluster is empty. It is not a good choice (a better choice would be to
+        # replace the centroid with a point in the dataset that is far for its closest
+        # centroid)
         while (n_iteration <= max_iter) and (centroid_shifts_sum > tol):
             half_l2_norm(centroids_t, centroids_half_l2_norm)
 
