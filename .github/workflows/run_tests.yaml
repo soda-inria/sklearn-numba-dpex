@@ -8,6 +8,8 @@ jobs:
     name: Run test suite
     runs-on: ubuntu-latest
     container: jjerphan/numba_dpex_dev:latest
+      # TODO: setup runners with a compatible gpu and activate this option:
+      # options: --device=/dev/dri  # enable gpu passthrough
 
     steps:
     - name: Checkout code
@@ -15,11 +17,12 @@ jobs:
 
     - name: Install sklearn-numba-dpex
       run: pip install -e . --no-build-isolation
-      
+
+    - name: Check device
+      run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
+
     - name: Install pytest
       run: pip install pytest
 
     - name: Run tests
-      run: |
-        pip install pytest
-        pytest .
+      run: pytest sklearn_numba_dpex/
