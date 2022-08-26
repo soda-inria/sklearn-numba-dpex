@@ -37,7 +37,7 @@ setup(
     # TODO: remove pyopencl when dpctl exposes preferred_work_group_size_multiple
     # see https://github.com/IntelPython/dpctl/issues/886
     install_requires=["scikit-learn", "numba-dpex", "dpctl", "pyopencl"],
-    extras_require=[dict(benchmark=["scikit-learn-intelex, pandas"])],
+    extras_require=dict(benchmark=["scikit-learn-intelex", "pandas"]),
     packages=["sklearn_numba_dpex"],
     entry_points={
         "sklearn_engines": ["kmeans=sklearn_numba_dpex.cluster.kmeans:KMeansEngine"]

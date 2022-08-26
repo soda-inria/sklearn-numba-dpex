@@ -16,7 +16,7 @@ jobs:
       uses: actions/checkout@v2
 
     - name: Install sklearn-numba-dpex
-      run: pip install -e . --no-build-isolation
+      run: pip install .
 
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
