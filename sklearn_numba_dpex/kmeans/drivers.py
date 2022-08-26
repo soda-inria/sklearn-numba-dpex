@@ -489,8 +489,4 @@ class LLoydKMeansDriver:
             )
             centers_init = centers_init.astype(dtype)
 
-        # TODO: document in the Readme that float32 precision is generally regarded as
-        # faster and accurate enough, and more suitable for GPU compute, and add a code
-        # snippet that explains how to ensure that the dtype of the input data is
-        # float32.
         return X, centers_init, dtype
