@@ -8,8 +8,7 @@ from sklearn.exceptions import DataConversionWarning
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
 from sklearn_numba_dpex.kmeans.kernels import (
-    make_fused_fixed_window_kernel,
-    make_assignment_fixed_window_kernel,
+    make_kmeans_fixed_window_kernels,
     make_centroid_shifts_kernel,
     make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
@@ -196,7 +195,8 @@ class LLoydKMeansDriver:
         (
             n_centroids_private_copies,
             fixed_window_fused_kernel,
-        ) = make_fused_fixed_window_kernel(
+            fixed_window_assignment_kernel,
+        ) = make_kmeans_fixed_window_kernels(
             n_samples,
             n_features,
             n_clusters,
@@ -205,17 +205,6 @@ class LLoydKMeansDriver:
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
             centroids_window_height=self.centroids_window_height,
             centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
-        fixed_window_assignment_kernel = make_assignment_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=dtype,
         )
