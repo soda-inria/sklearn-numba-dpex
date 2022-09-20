@@ -8,7 +8,8 @@ from sklearn.exceptions import DataConversionWarning
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
 from sklearn_numba_dpex.kmeans.kernels import (
-    make_kmeans_fixed_window_kernels,
+    make_lloyd_single_step_fixed_window_kernel,
+    make_compute_labels_inertia_fixed_window_kernel,
     make_centroid_shifts_kernel,
     make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
@@ -180,23 +181,21 @@ class LLoydKMeansDriver:
         """This call is expected to accept the same inputs than sklearn's private
         _kmeans_single_lloyd and produce the same outputs.
         """
-        # Input validation
-        X, centers_init, dtype = self._set_dtype(X, centers_init)
-
-        work_group_size = (
-            self.work_group_size_multiplier * self.preferred_work_group_size_multiple
-        )
-
-        n_features = X.shape[1]
-        n_samples = X.shape[0]
-        n_clusters = centers_init.shape[0]
+        (
+            X,
+            cluster_centers,
+            dtype,
+            work_group_size,
+            n_features,
+            n_samples,
+            n_clusters,
+        ) = self._check_inputs(X, centers_init)
 
         # Create a set of kernels
         (
             n_centroids_private_copies,
-            fixed_window_fused_kernel,
-            fixed_window_assignment_kernel,
-        ) = make_kmeans_fixed_window_kernels(
+            fused_lloyd_fixed_window_single_step,
+        ) = make_lloyd_single_step_fixed_window_kernel(
             n_samples,
             n_features,
             n_clusters,
@@ -205,6 +204,17 @@ class LLoydKMeansDriver:
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
             centroids_window_height=self.centroids_window_height,
             centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        fixed_window_assignment_kernel = make_compute_labels_inertia_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=dtype,
         )
@@ -281,27 +291,7 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        # Transfer the input data to device memory,
-        # TODO: let the user pass directly dpctl.tensor or dpnp arrays to avoid copies.
-        if self.X_layout == "C":
-            # TODO: support the C layout and benchmark it and default to it if
-            # performances are better
-            raise ValueError("C layout is currently not supported.")
-            X_t = dpctl.tensor.from_numpy(X, device=self.device).T
-            assert (
-                X_t.strides[0] == 1
-            )  # Fortran memory layout, equivalent to C layout on transposed
-        elif self.X_layout == "F":
-            X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
-            assert (
-                X_t.strides[1] == 1
-            )  # C memory layout, equivalent to Fortran layout on transposed
-        else:
-            raise ValueError(
-                f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
-            )
-
-        centroids_t = dpctl.tensor.from_numpy(centers_init.T, device=self.device)
+        X_t, centroids_t = self._load_transposed_data_to_device(X, centers_init)
 
         # Allocate the necessary memory in the device global memory
         new_centroids_t = dpctl.tensor.empty_like(centroids_t, device=self.device)
@@ -356,7 +346,7 @@ class LLoydKMeansDriver:
             reset_centroids_private_copies(new_centroids_t_private_copies)
 
             # TODO: implement special case where only one copy is needed
-            fixed_window_fused_kernel(
+            fused_lloyd_fixed_window_single_step(
                 X_t,
                 centroids_t,
                 centroids_half_l2_norm,
@@ -479,3 +469,45 @@ class LLoydKMeansDriver:
             centers_init = centers_init.astype(dtype)
 
         return X, centers_init, dtype
+
+    def _check_inputs(self, X, cluster_centers):
+        X, cluster_centers, dtype = self._set_dtype(X, cluster_centers)
+
+        work_group_size = (
+            self.work_group_size_multiplier * self.preferred_work_group_size_multiple
+        )
+
+        n_features = X.shape[1]
+        n_samples = X.shape[0]
+        n_clusters = cluster_centers.shape[0]
+        return (
+            X,
+            cluster_centers,
+            dtype,
+            work_group_size,
+            n_features,
+            n_samples,
+            n_clusters,
+        )
+
+    def _load_transposed_data_to_device(self, X, cluster_centers):
+        # Transfer the input data to device memory,
+        # TODO: let the user pass directly dpctl.tensor or dpnp arrays to avoid copies.
+        if self.X_layout == "C":
+            # TODO: support the C layout and benchmark it and default to it if
+            # performances are better
+            raise ValueError("C layout is currently not supported.")
+            X_t = dpctl.tensor.from_numpy(X, device=self.device).T
+            assert (
+                X_t.strides[0] == 1
+            )  # Fortran memory layout, equivalent to C layout on transposed
+        elif self.X_layout == "F":
+            X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
+            assert (
+                X_t.strides[1] == 1
+            )  # C memory layout, equivalent to Fortran layout on transposed
+        else:
+            raise ValueError(
+                f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
+            )
+        return X_t, dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
