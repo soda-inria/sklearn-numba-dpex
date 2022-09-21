@@ -194,7 +194,7 @@ cd benckmark
 python ./kmeans.py
 ```
 
-to run a benchmark for different k-means implementations and print a short summary of the performances.
+to run a benchmark for different k-means implementations and print a short summary of the performance.
 
 Some parameters in the `__main__` section of the file `./benchmark/kmeans.py` are exposed for quick edition (`n_clusters`, `max_iter`, `skip_slow`, ...).
 
