@@ -165,7 +165,7 @@ pip install -e . --no-build-isolation
 cd ..
 ```
 
-Then install this plugin in that same env:
+### Step 3: install this plugin
 
 ```
 git clone https://github.com/soda-inria/sklearn-numba-dpex
@@ -181,14 +181,20 @@ TODO: write some doc here instead.
 
 ### Running the benchmarks
 
-The commands:
+Repeat the pip installation step exposed in [step 3](#step-3-install-this-plugin) with the following edit:
+
+```
+pip install -e .[benchmark] --no-build-isolation
+```
+
+(i.e adding the _benchmark_ extra-require), followed by:
 
 ```
 cd benckmark
 python ./kmeans.py
 ```
 
-will run a benchmark for different k-means implementations and print a short summary of the performances.
+to run a benchmark for different k-means implementations and print a short summary of the performances.
 
 Some parameters in the `__main__` section of the file `./benchmark/kmeans.py` are exposed for quick edition (`n_clusters`, `max_iter`, `skip_slow`, ...).
 
