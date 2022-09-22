@@ -10,6 +10,9 @@ from sklearn_numba_dpex.utils._device import _DeviceParams
 from sklearn_numba_dpex.kmeans.kernels import (
     make_lloyd_single_step_fixed_window_kernel,
     make_compute_labels_inertia_fixed_window_kernel,
+    make_label_assignment_fixed_window_kernel,
+    make_compute_inertia_fixed_window_kernel,
+    make_compute_euclidean_distances_fixed_window_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
     make_initialize_to_zeros_1d_kernel,
@@ -166,7 +169,7 @@ class LLoydKMeansDriver:
                     f"support it."
                 )
 
-    def __call__(
+    def lloyd(
         self,
         X,
         sample_weight,
@@ -423,6 +426,194 @@ class LLoydKMeansDriver:
             dpctl.tensor.asnumpy(best_centroids_t.T),
             n_iteration - 1,  # substract 1 to conform with vanilla sklearn count
         )
+
+    def get_labels(
+        self,
+        X,
+        sample_weight,
+        x_squared_norms,
+        centers,
+        n_threads=1,
+        return_inertia=True,
+    ):
+        """This call is expected to accept the same inputs than sklearn's private
+        _labels_inertia and returns (labels, None)
+        """
+        (
+            X,
+            centers,
+            dtype,
+            work_group_size,
+            n_features,
+            n_samples,
+            n_clusters,
+        ) = self._check_inputs(X, centers)
+
+        # Create a set of kernels
+        label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+            size0=n_features,
+            size1=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        X_t, centroids_t = self._load_transposed_data_to_device(X, centers)
+
+        centroids_half_l2_norm = dpctl.tensor.empty(
+            n_clusters, dtype=dtype, device=self.device
+        )
+        assignments_idx = dpctl.tensor.empty(
+            n_samples, dtype=np.uint32, device=self.device
+        )
+
+        half_l2_norm(centroids_t, centroids_half_l2_norm)
+
+        label_assignment_fixed_window_kernel(
+            X_t,
+            centroids_t,
+            centroids_half_l2_norm,
+            assignments_idx,
+        )
+
+        return (dpctl.tensor.asnumpy(assignments_idx).astype(np.int32), None)
+
+    def get_inertia(
+        self,
+        X,
+        sample_weight,
+        x_squared_norms,
+        centers,
+        n_threads=1,
+        return_inertia=True,
+    ):
+        """This call is expected to accept the same inputs than sklearn's private
+        _labels_inertia and returns (None, inertia)
+        """
+        (
+            X,
+            centers,
+            dtype,
+            work_group_size,
+            n_features,
+            n_samples,
+            n_clusters,
+        ) = self._check_inputs(X, centers)
+
+        # Create a set of kernels
+        compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+            size0=n_features,
+            size1=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        reduce_inertia = make_sum_reduction_1d_kernel(
+            size=n_samples,
+            work_group_size=work_group_size,
+            device=self.device,
+            dtype=dtype,
+        )
+
+        X_t, centroids_t = self._load_transposed_data_to_device(X, centers)
+
+        centroids_half_l2_norm = dpctl.tensor.empty(
+            n_clusters, dtype=dtype, device=self.device
+        )
+        per_sample_inertia = dpctl.tensor.empty(
+            n_samples, dtype=dtype, device=self.device
+        )
+
+        half_l2_norm(centroids_t, centroids_half_l2_norm)
+
+        compute_inertia_fixed_window_kernel(
+            X_t,
+            centroids_t,
+            centroids_half_l2_norm,
+            per_sample_inertia,
+        )
+
+        inertia = dpctl.tensor.asnumpy(reduce_inertia(per_sample_inertia))[0]
+
+        return (None, inertia)
+
+    def get_euclidean_distances(
+        self, X, Y=None, *, Y_norm_squared=None, squared=False, X_norm_squared=None
+    ):
+        """This call is expected to accept the same inputs than sklearn's private
+        euclidean_distances and returns euclidean distances of each sample to each
+        cluster center
+        """
+        if squared:
+            raise NotImplementedError("Only squared=False is allowed")
+
+        # Input validation
+        (
+            X,
+            Y,
+            dtype,
+            work_group_size,
+            n_features,
+            n_samples,
+            n_clusters,
+        ) = self._check_inputs(X, Y)
+
+        label_assignment_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+            size0=n_features,
+            size1=n_clusters,
+            work_group_size=work_group_size,
+            dtype=dtype,
+        )
+
+        X_t, Y_t = self._load_transposed_data_to_device(X, Y)
+
+        Y_half_l2_norm = dpctl.tensor.empty(n_clusters, dtype=dtype, device=self.device)
+        euclidean_distances_t = dpctl.tensor.empty(
+            (n_clusters, n_samples), dtype=dtype, device=self.device
+        )
+
+        half_l2_norm(Y_t, Y_half_l2_norm)
+
+        label_assignment_fixed_window_kernel(
+            X_t,
+            Y_t,
+            Y_half_l2_norm,
+            euclidean_distances_t,
+        )
+
+        return dpctl.tensor.asnumpy(euclidean_distances_t).T
 
     def _set_dtype(self, X, centers_init):
         dtype = self.dtype or X.dtype

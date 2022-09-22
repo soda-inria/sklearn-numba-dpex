@@ -217,7 +217,7 @@ if __name__ == "__main__":
                 device="cpu",
                 dtype=dtype,
                 work_group_size_multiplier=multiplier,
-            ),
+            ).lloyd,
             name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
             slow=True,
         )
@@ -225,6 +225,6 @@ if __name__ == "__main__":
         kmeans_timer.timeit(
             LLoydKMeansDriver(
                 device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
-            ),
+            ).lloyd,
             name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
         )
