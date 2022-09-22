@@ -20,6 +20,7 @@
 import math
 from functools import lru_cache
 
+import numpy as np
 import dpctl
 import numba_dpex as dpex
 
@@ -56,6 +57,68 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
         centroid_shifts[sample_idx] = squared_centroid_diff
 
     return centroid_shifts[global_size, work_group_size]
+
+
+@lru_cache
+def make_reduce_centroid_data_kernel(
+    n_centroids_private_copies,
+    n_features,
+    n_clusters,
+    work_group_size,
+    dtype,
+):
+
+    n_work_groups_for_clusters = math.ceil(n_clusters / work_group_size)
+    n_work_items_for_clusters = n_work_groups_for_clusters * work_group_size
+    global_size = n_work_items_for_clusters * n_features
+    zero = dtype(0.0)
+    i_one = np.int32(1)
+    i_zero = np.int64(0)
+
+    # Optimized for C-contiguous array and assuming
+    # n_features * n_clusters >> preferred_work_group_size_multiple
+    @dpex.kernel
+    # fmt: off
+    def reduce_centroid_data(
+        cluster_sizes_private_copies,  # IN      (n_copies, n_clusters)
+        centroids_t_private_copies,    # IN      (n_copies, n_features, n_clusters)
+        cluster_sizes,                 # OUT     (n_clusters,)
+        centroids_t,                   # OUT     (n_features, n_clusters)
+        empty_clusters_list,           # OUT     (n_clusters,)
+        nb_empty_clusters,             # OUT     (1,)
+    ):
+    # fmt: on
+
+        group_idx = dpex.get_group_id(0)
+        item_idx = dpex.get_local_id(0)
+        feature_idx = group_idx // n_work_groups_for_clusters
+        cluster_idx = (
+            (group_idx % n_work_groups_for_clusters) * work_group_size
+        ) + item_idx
+        if cluster_idx >= n_clusters:
+            return
+
+        # reduce the centroid values
+        sum_ = zero
+        for copy_idx in range(n_centroids_private_copies):
+            sum_ += centroids_t_private_copies[copy_idx, feature_idx, cluster_idx]
+        centroids_t[feature_idx, cluster_idx] = sum_
+
+        # reduce the cluster sizes
+        if feature_idx == 0:
+            sum_ = zero
+            for copy_idx in range(n_centroids_private_copies):
+                sum_ += cluster_sizes_private_copies[copy_idx, cluster_idx]
+            cluster_sizes[cluster_idx] = sum_
+
+            # register empty clusters
+            if sum_ == zero:
+                current_nb_empty_clusters = dpex.atomic.add(
+                    nb_empty_clusters, i_zero, i_one
+                )
+                empty_clusters_list[current_nb_empty_clusters] = cluster_idx
+
+    return reduce_centroid_data[global_size, work_group_size]
 
 
 @lru_cache
@@ -290,48 +353,3 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         return result
 
     return sum_reduction
-
-
-@lru_cache
-def make_sum_reduction_2d_axis0_kernel(size0, size1, work_group_size, dtype):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
-    zero = dtype(0.0)
-
-    # Optimized for C-contiguous array and for
-    # size1 >> preferred_work_group_size_multiple
-    @dpex.kernel
-    def sum_reduction(summands, result):
-        col_idx = dpex.get_global_id(0)
-        if col_idx >= size1:
-            return
-        sum_ = zero
-        for row_idx in range(size0):
-            sum_ += summands[row_idx, col_idx]
-        result[col_idx] = sum_
-
-    return sum_reduction[global_size, work_group_size]
-
-
-@lru_cache
-def make_sum_reduction_3d_axis0_kernel(size0, size1, size2, work_group_size, dtype):
-    n_work_groups_for_dim2 = math.ceil(size2 / work_group_size)
-    n_work_items_for_dim2 = n_work_groups_for_dim2 * work_group_size
-    global_size = n_work_items_for_dim2 * size1
-    zero = dtype(0.0)
-
-    # Optimized for C-contiguous array and for
-    # (size1 * size2) >> preferred_work_group_size_multiple
-    @dpex.kernel
-    def sum_reduction(summands, result):
-        group_idx = dpex.get_group_id(0)
-        item_idx = dpex.get_local_id(0)
-        j = group_idx // n_work_groups_for_dim2
-        k = ((group_idx % n_work_groups_for_dim2) * work_group_size) + item_idx
-        if k >= size2:
-            return
-        sum_ = zero
-        for i in range(size0):
-            sum_ += summands[i, j, k]
-        result[j, k] = sum_
-
-    return sum_reduction[global_size, work_group_size]

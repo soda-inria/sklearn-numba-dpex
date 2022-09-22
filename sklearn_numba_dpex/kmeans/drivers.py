@@ -11,6 +11,7 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_lloyd_single_step_fixed_window_kernel,
     make_compute_labels_inertia_fixed_window_kernel,
     make_centroid_shifts_kernel,
+    make_reduce_centroid_data_kernel,
     make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
@@ -18,8 +19,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_broadcast_division_1d_2d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_sum_reduction_1d_kernel,
-    make_sum_reduction_2d_axis0_kernel,
-    make_sum_reduction_3d_axis0_kernel,
 )
 
 
@@ -276,17 +275,10 @@ class LLoydKMeansDriver:
             dtype=dtype,
         )
 
-        reduce_cluster_sizes_private_copies_kernel = make_sum_reduction_2d_axis0_kernel(
-            size0=n_centroids_private_copies,
-            size1=n_clusters,
-            work_group_size=work_group_size,
-            dtype=dtype,
-        )
-
-        reduce_centroids_private_copies_kernel = make_sum_reduction_3d_axis0_kernel(
-            size0=n_centroids_private_copies,
-            size1=n_features,
-            size2=n_clusters,
+        reduce_centroid_data_kernel = make_reduce_centroid_data_kernel(
+            n_centroids_private_copies=n_centroids_private_copies,
+            n_features=n_features,
+            n_clusters=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
@@ -320,6 +312,11 @@ class LLoydKMeansDriver:
             dtype=dtype,
             device=self.device,
         )
+        empty_clusters_list = dpctl.tensor.empty(
+            n_clusters, dtype=np.uint32, device=self.device
+        )
+
+        nb_empty_clusters = dpctl.tensor.empty(1, dtype=np.int32, device=self.device)
 
         # The loop
         n_iteration = 0
@@ -344,6 +341,7 @@ class LLoydKMeansDriver:
             reset_per_sample_inertia_kernel(per_sample_pseudo_inertia)
             reset_cluster_sizes_private_copies_kernel(cluster_sizes_private_copies)
             reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
+            nb_empty_clusters[0] = np.int32(0)
 
             # TODO: implement special case where only one copy is needed
             fused_lloyd_fixed_window_single_step_kernel(
@@ -355,14 +353,21 @@ class LLoydKMeansDriver:
                 cluster_sizes_private_copies,
             )
 
-            # TODO: explore fusing the next two kernels to reduce synchronous
-            # scheduling overhead.
-            reduce_cluster_sizes_private_copies_kernel(
-                cluster_sizes_private_copies, cluster_sizes
+            reduce_centroid_data_kernel(
+                cluster_sizes_private_copies,
+                new_centroids_t_private_copies,
+                cluster_sizes,
+                new_centroids_t,
+                empty_clusters_list,
+                nb_empty_clusters,
             )
-            reduce_centroids_private_copies_kernel(
-                new_centroids_t_private_copies, new_centroids_t
-            )
+
+            nb_empty_clusters_ = dpctl.tensor.asnumpy(nb_empty_clusters)[0]
+            if nb_empty_clusters_ > 0:
+                # TODO: instead of this warning, set the centroid for empty clusters
+                # to new points carefully chosen in the dataset. (mimic scikit-learn
+                # behavior where the points with the highest inertia are chosen)
+                warnings.warn("Found an empty cluster", RuntimeWarning)
 
             broadcast_division_kernel(new_centroids_t, cluster_sizes)
 

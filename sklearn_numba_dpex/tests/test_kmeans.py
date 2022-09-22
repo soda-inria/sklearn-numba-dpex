@@ -3,7 +3,9 @@ import inspect
 import dpctl
 import numpy as np
 import pytest
+import warnings
 import sklearn
+from numpy.random import default_rng
 from numpy.testing import assert_array_equal
 from sklearn import config_context
 from sklearn.base import clone
@@ -73,6 +75,60 @@ def test_kmeans_fit_same_results(dtype):
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_kmeans_fit_empty_clusters(dtype):
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
+    random_seed = 42
+    X, _ = make_blobs(random_state=random_seed)
+    X = X.astype(dtype)
+
+    n_clusters = inspect.signature(KMeans).parameters["n_clusters"].default
+    rng = default_rng(random_seed)
+    init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
+    init[0] = np.finfo(np.float32).max
+
+    kmeans_with_empty_cluster = KMeans(
+        random_state=random_seed,
+        algorithm="lloyd",
+        n_clusters=n_clusters,
+        init=init,
+        n_init=1,
+        max_iter=1,
+    )
+
+    # TODO: once the behavior of scikit learn for empty clusters has been implemented
+    # identically in sklearn_numba_dpex, the warning will be removed, and we will want
+    # to check instead that the results are equals (similarly to the test
+    # test_kmeans_fit_same_results)
+    with pytest.warns(RuntimeWarning, match="Found an empty cluster"):
+        try:
+            sklearn.cluster._kmeans._kmeans_single_lloyd = LLoydKMeansDriver(
+                work_group_size_multiplier=4, dtype=dtype
+            )
+            kmeans_with_empty_cluster.fit(X)
+        finally:
+            sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
+
+    kmeans_without_empty_cluster = KMeans(
+        random_state=random_seed,
+        algorithm="lloyd",
+        n_clusters=n_clusters,
+        n_init=1,
+        max_iter=1,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        try:
+            sklearn.cluster._kmeans._kmeans_single_lloyd = LLoydKMeansDriver(
+                work_group_size_multiplier=4, dtype=dtype
+            )
+            kmeans_without_empty_cluster.fit(X)
+        finally:
+            sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
 
 
 @pytest.mark.skip(reason="KMeans has not been implemented yet.")
