@@ -415,6 +415,7 @@ class KMeansDriver:
             assignments_idx,
         )
 
+        # inertia = per_sample_inertia.sum()
         inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))[0]
 
         # TODO: explore leveraging dpnp to benefit from USM to avoid moving
@@ -554,6 +555,7 @@ class KMeansDriver:
             per_sample_inertia,
         )
 
+        # inertia = per_sample_inertia.sum()
         inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))[0]
 
         return (None, inertia)
