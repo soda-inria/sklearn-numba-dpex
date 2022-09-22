@@ -13,7 +13,7 @@ from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
-from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
+from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
 _SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
 _SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
@@ -42,22 +42,22 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
 
 
 def test_lloyd_driver_signature():
-    driver_signature = inspect.signature(LLoydKMeansDriver().lloyd)
+    driver_signature = inspect.signature(KMeansDriver().lloyd)
     assert driver_signature == _SKLEARN_LLOYD_SIGNATURE
 
 
 def test_get_labels_driver_signature():
-    driver_signature = inspect.signature(LLoydKMeansDriver().get_labels)
+    driver_signature = inspect.signature(KMeansDriver().get_labels)
     assert driver_signature == _SKLEARN_LABELS_INERTIA_SIGNATURE
 
 
 def test_get_inertia_driver_signature():
-    driver_signature = inspect.signature(LLoydKMeansDriver().get_inertia)
+    driver_signature = inspect.signature(KMeansDriver().get_inertia)
     assert driver_signature == _SKLEARN_LABELS_INERTIA_SIGNATURE
 
 
 def test_euclidean_distances_driver_signature():
-    driver_signature = inspect.signature(LLoydKMeansDriver().get_euclidean_distances)
+    driver_signature = inspect.signature(KMeansDriver().get_euclidean_distances)
     assert driver_signature == _SKLEARN_EUCLIDEAN_DISTANCES_SIGNATURE
 
 
@@ -77,12 +77,12 @@ def test_kmeans_same_results(dtype):
 
     kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd", max_iter=1)
     kmeans_engine = clone(kmeans_vanilla)
-    engine = LLoydKMeansDriver(work_group_size_multiplier=4, dtype=dtype)
+    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
 
     # Fit a reference model with the default scikit-learn engine:
     kmeans_vanilla.fit(X)
 
-    # Fit a model with numba_dpex backend
+    # Fit a model with numba_dpex backendself._check_inputs
     try:
         # Temporarily monkeypatch scikit-learn internals to replace
         # them with this package implementation.
@@ -164,7 +164,7 @@ def test_kmeans_fit_empty_clusters(dtype):
     # Create an outlier centroid in initial centroids to have an empty cluster.
     init[0] = np.finfo(np.float32).max
 
-    engine = LLoydKMeansDriver(work_group_size_multiplier=4, dtype=dtype)
+    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
 
     kmeans_with_empty_cluster = KMeans(
         random_state=random_seed,

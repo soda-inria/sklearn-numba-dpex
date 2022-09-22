@@ -162,7 +162,7 @@ class KMeansLloydTimeit:
 if __name__ == "__main__":
     from ext_helpers.daal4py import kmeans as daal4py_kmeans
 
-    from sklearn_numba_dpex.kmeans.drivers import LLoydKMeansDriver
+    from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
     from sklearnex import config_context
@@ -213,7 +213,7 @@ if __name__ == "__main__":
 
     for multiplier in [1, 2, 4, 8]:
         kmeans_timer.timeit(
-            LLoydKMeansDriver(
+            KMeansDriver(
                 device="cpu",
                 dtype=dtype,
                 work_group_size_multiplier=multiplier,
@@ -223,7 +223,7 @@ if __name__ == "__main__":
         )
 
         kmeans_timer.timeit(
-            LLoydKMeansDriver(
+            KMeansDriver(
                 device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
             ).lloyd,
             name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",

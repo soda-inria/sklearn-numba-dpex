@@ -31,7 +31,7 @@ def _check_power_of_2(e):
     return e
 
 
-class LLoydKMeansDriver:
+class KMeansDriver:
     """GPU optimized implementation of Lloyd's k-means.
 
     The current implementation is called "fused fixed", it consists in a sliding window
