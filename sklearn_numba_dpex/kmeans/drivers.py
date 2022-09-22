@@ -437,8 +437,9 @@ class KMeansDriver:
         n_threads=1,
         return_inertia=True,
     ):
-        """This call is expected to accept the same inputs than sklearn's private
-        _labels_inertia and returns (labels, None)
+        """This call is expected to accept the same inputs than
+        `sklearn.cluster._kmeans._labels_inertia` while solely computing
+        the samples' labels, hence returning (labels, None).
         """
         (
             X,
@@ -498,8 +499,9 @@ class KMeansDriver:
         n_threads=1,
         return_inertia=True,
     ):
-        """This call is expected to accept the same inputs than sklearn's private
-        _labels_inertia and returns (None, inertia)
+        """This call is expected to accept the same inputs than
+        `sklearn.cluster._kmeans._labels_inertia` while solely computing
+        the samples' inertia, hence returning (None, inertia).
         """
         (
             X,
