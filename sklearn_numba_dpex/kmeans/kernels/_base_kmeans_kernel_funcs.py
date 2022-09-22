@@ -24,12 +24,12 @@ def _make_initialize_window_kernel_funcs(
         dot_products,                   # OUT
     ):
     # fmt: on
-        # initialize the partial pseudo inertia for each of the window_n_centroids
-        # centroids in the window
+        # Initialize the partial pseudo inertia dot product for each 
+        # of the window_n_centroids centroids in the window.
         for i in range(window_n_centroids):
             dot_products[i] = zero
 
-        # the `window_n_centroids` first work items cooperate on loading the
+        # The first `window_n_centroids` work items cooperate on loading the
         # values of centroids_half_l2_norm relevant to current window. Each work
         # item loads one single value.
         half_l2_norm_loading_idx = first_centroid_idx + local_work_id
@@ -59,7 +59,7 @@ def _make_initialize_window_kernel_funcs(
     # fmt: on
         centroid_window_first_loading_feature_idx = 0
 
-        # The work items in the work group load cooperatively the values in
+        # The work items in the work group cooperatively load the values in
         # shared memory. At each iteration, the work item loads one value and
         # adjacent work items load adjacent values.
         for _2 in range(centroids_window_height_ratio_multiplier):
