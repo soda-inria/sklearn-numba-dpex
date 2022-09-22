@@ -461,7 +461,7 @@ class KMeansDriver:
             dtype=dtype,
         )
 
-        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+        half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
             size0=n_features,
             size1=n_clusters,
             work_group_size=work_group_size,
@@ -477,7 +477,7 @@ class KMeansDriver:
             n_samples, dtype=np.uint32, device=self.device
         )
 
-        half_l2_norm(centroids_t, centroids_half_l2_norm)
+        half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
         label_assignment_fixed_window_kernel(
             X_t,
@@ -522,14 +522,14 @@ class KMeansDriver:
             dtype=dtype,
         )
 
-        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+        half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
             size0=n_features,
             size1=n_clusters,
             work_group_size=work_group_size,
             dtype=dtype,
         )
 
-        reduce_inertia = make_sum_reduction_1d_kernel(
+        reduce_inertia_kernel = make_sum_reduction_1d_kernel(
             size=n_samples,
             work_group_size=work_group_size,
             device=self.device,
@@ -545,7 +545,7 @@ class KMeansDriver:
             n_samples, dtype=dtype, device=self.device
         )
 
-        half_l2_norm(centroids_t, centroids_half_l2_norm)
+        half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
         compute_inertia_fixed_window_kernel(
             X_t,
@@ -554,7 +554,7 @@ class KMeansDriver:
             per_sample_inertia,
         )
 
-        inertia = dpctl.tensor.asnumpy(reduce_inertia(per_sample_inertia))[0]
+        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))[0]
 
         return (None, inertia)
 
@@ -590,7 +590,7 @@ class KMeansDriver:
             dtype=dtype,
         )
 
-        half_l2_norm = make_half_l2_norm_2d_axis0_kernel(
+        half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
             size0=n_features,
             size1=n_clusters,
             work_group_size=work_group_size,
@@ -604,7 +604,7 @@ class KMeansDriver:
             (n_clusters, n_samples), dtype=dtype, device=self.device
         )
 
-        half_l2_norm(Y_t, Y_half_l2_norm)
+        half_l2_norm_kernel(Y_t, Y_half_l2_norm)
 
         label_assignment_fixed_window_kernel(
             X_t,
