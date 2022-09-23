@@ -416,7 +416,9 @@ class KMeansDriver:
         )
 
         # inertia = per_sample_inertia.sum()
-        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))[0]
+        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))
+        # inertia is now a 1-sized numpy array, we transform it into a scalar:
+        inertia = inertia[0]
 
         # TODO: explore leveraging dpnp to benefit from USM to avoid moving
         # centroids back and forth between device and host memory in case
@@ -558,7 +560,9 @@ class KMeansDriver:
         )
 
         # inertia = per_sample_inertia.sum()
-        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))[0]
+        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))
+        # inertia is now a 1-sized numpy array, we transform it into a scalar:
+        inertia = inertia[0]
 
         return (None, inertia)
 
@@ -570,6 +574,9 @@ class KMeansDriver:
         cluster center
         """
         if squared:
+            # This implementation is used to monkey patch sklearn private functions'
+            # which are always called with `squared=False`. It's possible to support
+            # `squared=True`, but useless in this context, hence we raise an error.
             raise NotImplementedError("Only squared=False is allowed")
 
         # Input validation

@@ -278,6 +278,10 @@ def make_lloyd_single_step_fixed_window_kernel(
         # The privatization strategy also applies to the updates of the centroid
         # counts.
 
+        # NB: this check can't be moved at the top at the kernel, because if a work item
+        # exits early with a `return` it will never reach the barriers, thus causing a
+        # deadlock. Early returns are only possible when there are no barriers within
+        # the remaining set of instructions for the running kernel.
         if sample_idx >= n_samples:
             return
 
