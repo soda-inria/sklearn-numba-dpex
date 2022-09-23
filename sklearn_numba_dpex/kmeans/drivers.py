@@ -316,6 +316,7 @@ class LLoydKMeansDriver:
             n_clusters, dtype=np.uint32, device=self.device
         )
 
+        # nb_empty_clusters_ is a scalar handled in kernels via a one-element array.
         nb_empty_clusters = dpctl.tensor.empty(1, dtype=np.int32, device=self.device)
 
         # The loop

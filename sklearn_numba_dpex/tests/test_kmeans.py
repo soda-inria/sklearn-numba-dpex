@@ -88,6 +88,8 @@ def test_kmeans_fit_empty_clusters(dtype):
     n_clusters = inspect.signature(KMeans).parameters["n_clusters"].default
     rng = default_rng(random_seed)
     init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
+    # Create an outlier centroid in initial centroids
+    # to have an empty cluster.
     init[0] = np.finfo(np.float32).max
 
     kmeans_with_empty_cluster = KMeans(
