@@ -54,7 +54,7 @@ benchmark = [
 
 
 [project.entry-points.sklearn_engines]
-kmeans = "sklearn_numba_dpex.cluster.kmeans:KMeansEngine"
+kmeans = "sklearn_numba_dpex.kmeans.drivers:KMeansSklearnEngine"
 
 [tool.black]
 line-length = 88

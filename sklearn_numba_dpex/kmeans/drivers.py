@@ -1,9 +1,11 @@
 import math
 import warnings
+from functools import lru_cache
 
 import numpy as np
 import dpctl
 from sklearn.exceptions import DataConversionWarning
+from sklearn.cluster._kmeans import KMeansCythonEngine
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
@@ -31,6 +33,21 @@ def _check_power_of_2(e):
     return e
 
 
+class KMeansSklearnEngine(KMeansCythonEngine):
+    def kmeans_single(self, X, sample_weight, centers_init):
+        print("Using sklearn_numba_dpex engine for fitting KMeans...")
+        return KMeansDriver().lloyd(
+            X,
+            sample_weight,
+            centers_init,
+            max_iter=self.estimator.max_iter,
+            tol=self.tol,
+            n_threads=self._n_threads,
+            verbose=self.estimator.verbose,
+        )
+
+
+@lru_cache
 class KMeansDriver:
     """GPU optimized implementation of Lloyd's k-means.
 
