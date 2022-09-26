@@ -179,6 +179,23 @@ See the `sklearn_numba_dpex/tests` folder for example usage.
 
 TODO: write some doc here instead.
 
+### Running the tests
+
+To run the tests run the following:
+
+```
+pytest sklearn_numba_dpex/
+```
+
+To run the `scikit-learn` tests with the `sklearn_numba_dpex` engine you can run the following:
+
+```
+cd ./sklearn_tests
+pytest -p sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+```
+
+(change the `--pyargs` option accordingly to select other test suites). Note that the `sklearn_numba_dpex` pytest plugin will automatically activate the `sklearn_numba_dpex` engine for all tests, and tests that cover unsupported features (that trigger `sklearn_numba_dpex.exceptions.NotImplementedError`) will be automatically marked as xfailed.
+
 ### Running the benchmarks
 
 Repeat the pip installation step exposed in [step 3](#step-3-install-this-plugin) with the following edit:

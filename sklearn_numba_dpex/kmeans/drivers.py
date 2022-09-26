@@ -5,7 +5,11 @@ from functools import lru_cache
 import numpy as np
 import dpctl
 from sklearn.exceptions import DataConversionWarning
-from sklearn.cluster._kmeans import KMeansCythonEngine
+
+
+from sklearn_numba_dpex.exceptions import (
+    NotImplementedError as CustomNotImplementedError,
+)
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
@@ -31,20 +35,6 @@ def _check_power_of_2(e):
     if e != 2 ** (math.log2(e)):
         raise ValueError(f"Expected a power of 2, got {e}")
     return e
-
-
-class KMeansSklearnEngine(KMeansCythonEngine):
-    def kmeans_single(self, X, sample_weight, centers_init):
-        print("Using sklearn_numba_dpex engine for fitting KMeans...")
-        return KMeansDriver().lloyd(
-            X,
-            sample_weight,
-            centers_init,
-            max_iter=self.estimator.max_iter,
-            tol=self.tol,
-            n_threads=self._n_threads,
-            verbose=self.estimator.verbose,
-        )
 
 
 @lru_cache
@@ -208,7 +198,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers_init)
+        ) = self._check_inputs(X, centers_init, sample_weight)
 
         # Create a set of kernels
         (
@@ -697,7 +687,13 @@ class KMeansDriver:
 
         return X, centers_init, dtype
 
-    def _check_inputs(self, X, cluster_centers):
+    def _check_inputs(self, X, cluster_centers, sample_weight):
+        if (sample_weight is not None) and (np.unique(sample_weight).shape[0] > 1):
+            raise CustomNotImplementedError(
+                "The sklearn_numba_dpex engine for KMeans does not support non-uniform"
+                " sample weights."
+            )
+
         X, cluster_centers, dtype = self._set_dtype(X, cluster_centers)
 
         work_group_size = (
