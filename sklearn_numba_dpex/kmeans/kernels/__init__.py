@@ -1,6 +1,9 @@
 from .lloyd_single_step import make_lloyd_single_step_fixed_window_kernel
-
-
+from .compute_euclidean_distances import (
+    make_compute_euclidean_distances_fixed_window_kernel,
+)
+from .compute_inertia import make_compute_inertia_fixed_window_kernel
+from .compute_labels import make_label_assignment_fixed_window_kernel
 from .compute_labels_inertia import make_compute_labels_inertia_fixed_window_kernel
 from .utils import (
     make_centroid_shifts_kernel,
@@ -17,6 +20,9 @@ from .utils import (
 
 __all__ = (
     make_lloyd_single_step_fixed_window_kernel,
+    make_compute_euclidean_distances_fixed_window_kernel,
+    make_compute_inertia_fixed_window_kernel,
+    make_label_assignment_fixed_window_kernel,
     make_compute_labels_inertia_fixed_window_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
