@@ -183,7 +183,6 @@ class KMeansDriver:
         centers_init,
         max_iter=300,
         verbose=False,
-        x_squared_norms=None,
         tol=1e-4,
         n_threads=1,
     ):
@@ -441,7 +440,6 @@ class KMeansDriver:
         self,
         X,
         sample_weight,
-        x_squared_norms,
         centers,
         n_threads=1,
         return_inertia=True,
@@ -458,7 +456,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers)
+        ) = self._check_inputs(X, centers, sample_weight)
 
         # Create a set of kernels
         label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
@@ -503,7 +501,6 @@ class KMeansDriver:
         self,
         X,
         sample_weight,
-        x_squared_norms,
         centers,
         n_threads=1,
         return_inertia=True,
@@ -520,7 +517,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers)
+        ) = self._check_inputs(X, centers, sample_weight)
 
         # Create a set of kernels
         compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
@@ -595,7 +592,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, Y)
+        ) = self._check_inputs(X, Y, sample_weight=None)
 
         label_assignment_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
             n_samples,
@@ -688,7 +685,7 @@ class KMeansDriver:
         return X, centers_init, dtype
 
     def _check_inputs(self, X, cluster_centers, sample_weight):
-        if (sample_weight is not None) and (np.unique(sample_weight).shape[0] > 1):
+        if (sample_weight is not None) and ((sample_weight != sample_weight[0]).any()):
             raise CustomNotImplementedError(
                 "The sklearn_numba_dpex engine for KMeans does not support non-uniform"
                 " sample weights."

@@ -82,7 +82,7 @@ def test_kmeans_same_results(dtype):
     # Fit a reference model with the default scikit-learn engine:
     kmeans_vanilla.fit(X)
 
-    # Fit a model with numba_dpex backendself._check_inputs
+    # Fit a model with numba_dpex backend
     try:
         # Temporarily monkeypatch scikit-learn internals to replace
         # them with this package implementation.

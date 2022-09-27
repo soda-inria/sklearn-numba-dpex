@@ -6,7 +6,7 @@ except ImportError:
 from .drivers import KMeansDriver
 
 
-class KMeansSklearnEngine(KMeansCythonEngine):
+class KMeansEngine(KMeansCythonEngine):
     def kmeans_single(self, X, sample_weight, centers_init):
         return KMeansDriver().lloyd(
             X,
