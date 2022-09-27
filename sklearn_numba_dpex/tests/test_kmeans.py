@@ -82,14 +82,8 @@ def test_kmeans_same_results(dtype):
     # Fit a reference model with the default scikit-learn engine:
     kmeans_vanilla.fit(X)
 
-    # Fit a model with numba_dpex backend
-    try:
-        # Temporarily monkeypatch scikit-learn internals to replace
-        # them with this package implementation.
-        sklearn.cluster._kmeans._kmeans_single_lloyd = engine.lloyd
+    with config_context(engine_provider="sklearn_numba_dpex"):
         kmeans_engine.fit(X)
-    finally:
-        sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
 
     # ensure same results
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
@@ -98,11 +92,9 @@ def test_kmeans_same_results(dtype):
 
     # test fit_predict
     y_labels = kmeans_vanilla.fit_predict(X)
-    try:
-        sklearn.cluster._kmeans._kmeans_single_lloyd = engine.lloyd
+    with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.fit_predict(X)
-    finally:
-        sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
+
     assert_array_equal(y_labels, y_labels_engine)
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
@@ -110,19 +102,13 @@ def test_kmeans_same_results(dtype):
 
     # test fit_transform
     y_transform = kmeans_vanilla.fit_transform(X)
-    try:
-        sklearn.cluster._kmeans._kmeans_single_lloyd = engine.lloyd
-        sklearn.cluster._kmeans.euclidean_distances = engine.get_euclidean_distances
+    with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.fit_transform(X)
-    finally:
-        sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
-        sklearn.cluster._kmeans.euclidean_distances = _SKLEARN_EUCLIDEAN_DISTANCES
     assert_allclose(y_transform, y_transform_engine)
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
-    # test predict method (returns label assignments)
     y_labels = kmeans_vanilla.predict(X)
     try:
         sklearn.cluster._kmeans._labels_inertia = engine.get_labels

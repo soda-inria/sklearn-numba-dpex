@@ -23,9 +23,9 @@ jobs:
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
+    - name: Run sklearn_numba_dpex tests
+      run: pytest sklearn_numba_dpex/
+
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
       run: pytest -p sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
-
-    - name: Run sklearn_numba_dpex tests
-      run: pytest sklearn_numba_dpex/
