@@ -135,12 +135,12 @@ class KMeansDriver:
             or device_params.preferred_work_group_size_multiple
         )
 
+        # So far the best default value has been empirically found to be 2 so we use
+        # this default.
+        # TODO: when it's available in dpctl, use the `max_group_size` attribute
+        # exposed by the kernel instead ?
         self.work_group_size_multiplier = _check_power_of_2(
-            work_group_size_multiplier
-            or (
-                device_params.max_work_group_size
-                // self.preferred_work_group_size_multiple
-            )
+            work_group_size_multiplier or 2
         )
 
         self.centroids_window_width_multiplier = _check_power_of_2(
@@ -223,6 +223,7 @@ class KMeansDriver:
         verbose=False,
         tol=1e-4,
     ):
+
         (
             X,
             cluster_centers,
