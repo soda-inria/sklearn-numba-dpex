@@ -1,2 +1,2 @@
-class NotImplementedError(NotImplementedError):
+class FeatureNotAvailableError(Exception):
     pass

@@ -15,8 +15,6 @@ from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
-_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
-_SKLEARN_LLOYD_SIGNATURE = inspect.signature(_SKLEARN_LLOYD)
 
 _SKLEARN_LABELS_INERTIA = sklearn.cluster._kmeans._labels_inertia
 _SKLEARN_LABELS_INERTIA_SIGNATURE = inspect.signature(_SKLEARN_LABELS_INERTIA)
@@ -39,11 +37,6 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
             f"The default device {_DEVICE_NAME} does not have support for "
             "float64 operations."
         )
-
-
-def test_lloyd_driver_signature():
-    driver_signature = inspect.signature(KMeansDriver().lloyd)
-    assert driver_signature == _SKLEARN_LLOYD_SIGNATURE
 
 
 def test_get_labels_driver_signature():
@@ -77,7 +70,6 @@ def test_kmeans_same_results(dtype):
 
     kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd", max_iter=1)
     kmeans_engine = clone(kmeans_vanilla)
-    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
 
     # Fit a reference model with the default scikit-learn engine:
     kmeans_vanilla.fit(X)
@@ -108,6 +100,8 @@ def test_kmeans_same_results(dtype):
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+
+    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
 
     y_labels = kmeans_vanilla.predict(X)
     try:
@@ -150,8 +144,6 @@ def test_kmeans_fit_empty_clusters(dtype):
     # Create an outlier centroid in initial centroids to have an empty cluster.
     init[0] = np.finfo(np.float32).max
 
-    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
-
     kmeans_with_empty_cluster = KMeans(
         random_state=random_seed,
         algorithm="lloyd",
@@ -166,11 +158,8 @@ def test_kmeans_fit_empty_clusters(dtype):
     # to check instead that the results are equals (similarly to the test
     # test_kmeans_fit_same_results)
     with pytest.warns(RuntimeWarning, match="Found an empty cluster"):
-        try:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = engine.lloyd
+        with config_context(engine_provider="sklearn_numba_dpex"):
             kmeans_with_empty_cluster.fit(X)
-        finally:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
 
     kmeans_without_empty_cluster = KMeans(
         random_state=random_seed,
@@ -182,41 +171,5 @@ def test_kmeans_fit_empty_clusters(dtype):
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        try:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = engine.lloyd
+        with config_context(engine_provider="sklearn_numba_dpex"):
             kmeans_without_empty_cluster.fit(X)
-        finally:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = _SKLEARN_LLOYD
-
-
-@pytest.mark.skip(reason="plugin interface has not been implemented yet.")
-def test_kmeans_same_results_with_plugin_interface(global_random_seed):
-    X, _ = make_blobs(random_state=global_random_seed)
-
-    # Fit a reference model with the default scikit-learn engine:
-
-    kmeans_vanilla = KMeans(random_state=global_random_seed)
-    kmeans_engine = clone(kmeans_vanilla)
-
-    y_pred = kmeans_vanilla.fit_predict(X)
-    X_trans = kmeans_vanilla.transform(X)
-
-    # When a specific engine is specified by the use, it should do the
-    # necessary data conversions from numpy automatically:
-
-    with config_context(engine_provider="sklearn_numba_dpex"):
-        y_pred_dpnp = kmeans_engine.fit_predict(X)
-        X_trans_dpnp = kmeans_engine.transform(X)
-
-    assert_array_equal(y_pred_dpnp, y_pred)
-    assert_allclose(X_trans_dpnp, X_trans)
-
-    # TODO: convert X to dpnp datastructure explicitly
-    X_dpnp = X
-
-    with config_context(engine_provider="sklearn_numba_dpex"):
-        y_pred_dpnp2 = kmeans_engine.fit_predict(X_dpnp)
-        X_trans_dpnp2 = kmeans_engine.transform(X_dpnp)
-
-    assert_array_equal(y_pred_dpnp2, y_pred)
-    assert_allclose(X_trans_dpnp2, X_trans)
