@@ -28,4 +28,5 @@ jobs:
 
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
+      continue-on-error: true
       run: pytest -p sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
