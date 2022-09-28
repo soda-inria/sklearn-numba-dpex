@@ -476,8 +476,15 @@ class KMeansDriver:
         X,
         sample_weight,
         centers,
-        n_threads=1,
-        return_inertia=True,
+    ):
+        labels = self._get_labels(X, sample_weight, centers)
+        return dpctl.tensor.asnumpy(labels).astype(np.int32)
+
+    def _get_labels(
+        self,
+        X,
+        sample_weight,
+        centers,
     ):
         """This call is expected to accept the same inputs than
         `sklearn.cluster._kmeans._labels_inertia` while solely computing
@@ -531,15 +538,13 @@ class KMeansDriver:
             assignments_idx,
         )
 
-        return (dpctl.tensor.asnumpy(assignments_idx).astype(np.int32), None)
+        return assignments_idx
 
     def get_inertia(
         self,
         X,
         sample_weight,
         centers,
-        n_threads=1,
-        return_inertia=True,
     ):
         """This call is expected to accept the same inputs than
         `sklearn.cluster._kmeans._labels_inertia` while solely computing
@@ -605,36 +610,18 @@ class KMeansDriver:
         # inertia is now a 1-sized numpy array, we transform it into a scalar:
         inertia = inertia.astype(output_dtype)[0]
 
-        return (None, inertia)
+        return inertia
 
-    def get_euclidean_distances(
-        self, X, Y=None, *, Y_norm_squared=None, squared=False, X_norm_squared=None
-    ):
-        """This call is expected to accept the same inputs than sklearn's private
-        euclidean_distances and returns euclidean distances of each sample to each
-        cluster center
-        """
+    def get_euclidean_distances(self, X, Y):
 
         euclidean_distances, output_dtype = self._get_euclidean_distances(
             X,
             Y,
-            Y_norm_squared=Y_norm_squared,
-            squared=squared,
-            X_norm_squared=X_norm_squared,
         )
 
         return dpctl.tensor.asnumpy(euclidean_distances).astype(output_dtype)
 
-    def _get_euclidean_distances(
-        self, X, Y=None, *, Y_norm_squared=None, squared=False, X_norm_squared=None
-    ):
-
-        if squared:
-            # This implementation is used to monkey patch sklearn private functions'
-            # which are always called with `squared=False`. It's possible to support
-            # `squared=True`, but useless in this context, hence we raise an error.
-            raise NotImplementedError("Only squared=False is allowed")
-
+    def _get_euclidean_distances(self, X, Y):
         # Input validation
         (
             X,

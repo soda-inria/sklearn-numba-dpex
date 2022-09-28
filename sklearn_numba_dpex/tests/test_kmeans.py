@@ -4,7 +4,6 @@ import dpctl
 import numpy as np
 import pytest
 import warnings
-import sklearn
 from numpy.random import default_rng
 from numpy.testing import assert_array_equal
 from sklearn import config_context
@@ -12,15 +11,6 @@ from sklearn.base import clone
 from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
-
-from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
-
-
-_SKLEARN_LABELS_INERTIA = sklearn.cluster._kmeans._labels_inertia
-_SKLEARN_LABELS_INERTIA_SIGNATURE = inspect.signature(_SKLEARN_LABELS_INERTIA)
-
-_SKLEARN_EUCLIDEAN_DISTANCES = sklearn.cluster._kmeans.euclidean_distances
-_SKLEARN_EUCLIDEAN_DISTANCES_SIGNATURE = inspect.signature(_SKLEARN_EUCLIDEAN_DISTANCES)
 
 
 _DEVICE = dpctl.SyclDevice()
@@ -37,25 +27,6 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
             f"The default device {_DEVICE_NAME} does not have support for "
             "float64 operations."
         )
-
-
-def test_get_labels_driver_signature():
-    driver_signature = inspect.signature(KMeansDriver().get_labels)
-    assert driver_signature == _SKLEARN_LABELS_INERTIA_SIGNATURE
-
-
-def test_get_inertia_driver_signature():
-    driver_signature = inspect.signature(KMeansDriver().get_inertia)
-    assert driver_signature == _SKLEARN_LABELS_INERTIA_SIGNATURE
-
-
-def test_euclidean_distances_driver_signature():
-    driver_signature = inspect.signature(KMeansDriver().get_euclidean_distances)
-    assert driver_signature == _SKLEARN_EUCLIDEAN_DISTANCES_SIGNATURE
-
-
-# TODO: write a test to check that the estimator remains stable if a cluster is found to
-# have 0 samples.
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -86,7 +57,6 @@ def test_kmeans_same_results(dtype):
     y_labels = kmeans_vanilla.fit_predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.fit_predict(X)
-
     assert_array_equal(y_labels, y_labels_engine)
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
@@ -101,32 +71,22 @@ def test_kmeans_same_results(dtype):
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
-    engine = KMeansDriver(work_group_size_multiplier=4, dtype=dtype)
-
+    # # test predict method (returns labels)
     y_labels = kmeans_vanilla.predict(X)
-    try:
-        sklearn.cluster._kmeans._labels_inertia = engine.get_labels
+    with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.predict(X)
-    finally:
-        sklearn.cluster._kmeans._labels_inertia = _SKLEARN_LABELS_INERTIA
     assert_array_equal(y_labels, y_labels_engine)
 
     # test score method (returns negative inertia for each sample)
     y_scores = kmeans_vanilla.score(X)
-    try:
-        sklearn.cluster._kmeans._labels_inertia = engine.get_inertia
+    with config_context(engine_provider="sklearn_numba_dpex"):
         y_scores_engine = kmeans_engine.score(X)
-    finally:
-        sklearn.cluster._kmeans._labels_inertia = _SKLEARN_LABELS_INERTIA
     assert_allclose(y_scores, y_scores_engine)
 
     # test transform method (returns euclidean distances)
     y_transform = kmeans_vanilla.transform(X)
-    try:
-        sklearn.cluster._kmeans.euclidean_distances = engine.get_euclidean_distances
+    with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.transform(X)
-    finally:
-        sklearn.cluster._kmeans.euclidean_distances = _SKLEARN_EUCLIDEAN_DISTANCES
     assert_allclose(y_transform, y_transform_engine)
 
 

@@ -35,3 +35,18 @@ class KMeansEngine(KMeansCythonEngine):
             tol=self.tol,
             verbose=self.estimator.verbose,
         )
+
+    def get_labels(self, X, sample_weight):
+        return KMeansDriver().get_labels(
+            X, sample_weight, self.estimator.cluster_centers_
+        )
+
+    def get_euclidean_distances(self, X):
+        return KMeansDriver().get_euclidean_distances(
+            X, self.estimator.cluster_centers_
+        )
+
+    def get_score(self, X, sample_weight):
+        return KMeansDriver().get_inertia(
+            X, sample_weight, self.estimator.cluster_centers_
+        )
