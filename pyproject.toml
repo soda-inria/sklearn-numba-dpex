@@ -56,9 +56,6 @@ benchmark = [
 [project.entry-points.sklearn_engines]
 kmeans = "sklearn_numba_dpex.kmeans.engine:KMeansEngine"
 
-[project.entry-points.pytest11]
-sklearn_numba_dpex = "sklearn_numba_dpex.testing.sklearn_pytest_plugin"
-
 
 [tool.black]
 line-length = 88

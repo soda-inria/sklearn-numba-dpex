@@ -190,14 +190,14 @@ pytest sklearn_numba_dpex/
 To run the `scikit-learn` tests with the `sklearn_numba_dpex` engine you can run the following:
 
 ```
-pytest -p sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
 ```
 
 (change the `--pyargs` option accordingly to select other test suites). 
 
-The `sklearn_numba_dpex` pytest plugin will automatically activate the `sklearn_numba_dpex` engine for all tests.
+The `--sklearn-engine-provider sklearn_numba_dpex` option offered by the sklearn pytest plugin will automatically activate the `sklearn_numba_dpex` engine for all tests.
 
-Tests covering unsupported features (that trigger `sklearn_numba_dpex.exceptions.NotImplementedError`) will be automatically marked as xfailed.
+Tests covering unsupported features (that trigger `sklearn.exceptions.FeatureNotCoveredByPluginError`) will be automatically marked as xfailed.
 
 ### Running the benchmarks
 

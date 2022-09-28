@@ -1,2 +1,0 @@
-class FeatureNotAvailableError(Exception):
-    pass
