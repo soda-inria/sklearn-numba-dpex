@@ -8,11 +8,30 @@ from sklearn.exceptions import NotSupportedByEngineError
 from .drivers import KMeansDriver
 
 
+# At the moment not all steps are implemented with numba_dpex, we inherit missing steps
+# from the default sklearn KMeansCythonEngine for convenience, this inheritance will be
+# removed later on when the other parts have been implemented.
 class KMeansEngine(KMeansCythonEngine):
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
         try:
-            estimator._validate_data(X, accept_sparse=False)
+            # This pass of data validation only aims at detecting input types that are
+            # supported by the sklearn engine but not by KMeansEngine. For those inputs
+            # we raise a NotSupportedByEngineError exception.
+            # estimator._validate_data is called again in super().prepare_fit later on
+            # and will raise ValueError or TypeError for data that is not even
+            # compatible with the sklearn engine.
+            estimator._validate_data(
+                X,
+                accept_sparse=False,
+                dtype=None,
+                force_all_finite=False,
+                ensure_2d=False,
+                allow_nd=True,
+                ensure_min_samples=0,
+                ensure_min_features=0,
+                estimator=estimator,
+            )
         except Exception as e:
             raise NotSupportedByEngineError(
                 "The sklearn_nunmba_dpex engine for KMeans does not support the format of the inputed data."

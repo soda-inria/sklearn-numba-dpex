@@ -728,8 +728,11 @@ class KMeansDriver:
     def _check_inputs(self, X, cluster_centers, sample_weight):
         if (sample_weight is not None) and ((sample_weight != sample_weight[0]).any()):
             raise NotSupportedByEngineError(
-                "The sklearn_numba_dpex engine for KMeans does not support non-uniform"
-                " sample weights."
+                "The sklearn_numba_dpex engine for KMeans does not support "
+                "non-uniform sample weights at this time, but it is a planned "
+                "feature. More information about the progress toward support is "
+                "available on the issue tracker at: "
+                "https://github.com/soda-inria/sklearn-numba-dpex/issues/22  ."
             )
 
         X, cluster_centers, compute_dtype, output_dtype = self._set_dtype(
