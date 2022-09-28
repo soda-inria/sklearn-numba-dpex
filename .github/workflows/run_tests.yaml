@@ -18,7 +18,7 @@ jobs:
       # TODO: replace development branch for engines in scikit learn with a fixed commit
       # commit when it's stable / remove this step when it's officially released
     - name: Install pytest, @ogrisel sklearn branch "wip-engines", and sklearn-numba-dpex
-      run: pip install https://github.com/ogrisel/scikit-learn/archive/wip-engines.tar.gz pytest -e .
+      run: pip install pytest -e git+https://github.com/ogrisel/scikit-learn.git@wip-engines -e .
 
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
