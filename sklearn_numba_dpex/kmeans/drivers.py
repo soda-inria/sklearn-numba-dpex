@@ -4,7 +4,7 @@ from functools import lru_cache
 
 import numpy as np
 import dpctl
-from sklearn.exceptions import FeatureNotCoveredByPluginError, DataConversionWarning
+from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
 
@@ -165,7 +165,7 @@ class KMeansDriver:
                 raise ValueError(f"Valid types are float64, float32, but got f{dtype}")
             self.dtype = dtype
             if (self.dtype == np.float64) and not self.has_aspect_fp64:
-                raise FeatureNotCoveredByPluginError(
+                raise NotSupportedByEngineError(
                     f"Computations with precision f{self.dtype} has been explicitly "
                     f"requested to the KMeans driver but the device {dpctl_device.name} does not "
                     f"support it."
@@ -727,7 +727,7 @@ class KMeansDriver:
 
     def _check_inputs(self, X, cluster_centers, sample_weight):
         if (sample_weight is not None) and ((sample_weight != sample_weight[0]).any()):
-            raise FeatureNotCoveredByPluginError(
+            raise NotSupportedByEngineError(
                 "The sklearn_numba_dpex engine for KMeans does not support non-uniform"
                 " sample weights."
             )

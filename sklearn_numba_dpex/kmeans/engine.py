@@ -3,7 +3,7 @@ try:
 except ImportError:
     KMeansCythonEngine = object
 
-from sklearn.exceptions import FeatureNotCoveredByPluginError
+from sklearn.exceptions import NotSupportedByEngineError
 
 from .drivers import KMeansDriver
 
@@ -14,13 +14,13 @@ class KMeansEngine(KMeansCythonEngine):
         try:
             estimator._validate_data(X, accept_sparse=False)
         except Exception as e:
-            raise FeatureNotCoveredByPluginError(
+            raise NotSupportedByEngineError(
                 "The sklearn_nunmba_dpex engine for KMeans does not support the format of the inputed data."
             ) from e
 
         algorithm = estimator.algorithm
         if algorithm not in ("lloyd", "auto", "full"):
-            raise FeatureNotCoveredByPluginError(
+            raise NotSupportedByEngineError(
                 f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
             )
 
