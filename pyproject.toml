@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sklearn-numba-dpex"
-version = "0.1.0"
+version = "0.1.0dev0"
 description = "Computational Engine for scikit-learn based on numba-dpex"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -54,7 +54,8 @@ benchmark = [
 
 
 [project.entry-points.sklearn_engines]
-kmeans = "sklearn_numba_dpex.cluster.kmeans:KMeansEngine"
+kmeans = "sklearn_numba_dpex.kmeans.engine:KMeansEngine"
+
 
 [tool.black]
 line-length = 88

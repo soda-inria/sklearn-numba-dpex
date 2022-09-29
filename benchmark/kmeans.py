@@ -1,13 +1,9 @@
-from sklearn.cluster import KMeans
 from time import perf_counter
-import inspect
-from numpy.testing import assert_array_equal
-import sklearn
-from sklearn.utils._testing import assert_allclose
+
 import numpy as np
-
-
-VANILLA_SKLEARN_LLOYD = sklearn.cluster._kmeans._kmeans_single_lloyd
+import sklearn
+from numpy.testing import assert_array_equal
+from sklearn.cluster import KMeans
 
 
 # TODO: maybe this class could be abstracted to use the same strategy with other
@@ -33,8 +29,6 @@ class KMeansLloydTimeit:
         If true, will skip the timeit calls that are marked as slow. Default to false.
     """
 
-    _VANILLA_SKLEARN_LLOYD_SIGNATURE = inspect.signature(VANILLA_SKLEARN_LLOYD)
-
     def __init__(
         self,
         data_initialization_fn,
@@ -52,50 +46,48 @@ class KMeansLloydTimeit:
         self.results = None
         self.skip_slow = skip_slow
 
-    def timeit(self, kmeans_single_lloyd_fn, name, slow=False):
+    def timeit(self, name, engine_provider=None, is_slow=False):
         """
         Parameters
         ----------
-        kmeans_single_lloyd_fn : function
-            Is expected to have the same signature and the same interface than sklearn's
-            private function _kmeans_single_lloyd
-
         name: str
             Name of the candidate to test
 
-        slow: bool
+        engine_provider: str
+            The name of the engine provider to use for computations.
+
+        is_slow: bool
             Set to true to skip the timeit when skip_slow is true. Default to false.
         """
-        if slow and self.skip_slow:
+        if is_slow and self.skip_slow:
             return
 
         max_iter = self.max_iter
-        self._check_kmeans_single_lloyd_fn_signature(kmeans_single_lloyd_fn)
         n_clusters = self.centers_init.shape[0]
-        try:
-            centers_init = self.centers_init.copy()
-            X = self.X.copy()
-            sample_weight = (
-                None if self.sample_weight is None else self.sample_weight.copy()
-            )
+        centers_init = self.centers_init.copy()
+        X = self.X.copy()
+        sample_weight = (
+            None if self.sample_weight is None else self.sample_weight.copy()
+        )
 
-            est_kwargs = dict(
-                n_clusters=n_clusters,
-                init=centers_init,
-                n_init=1,
-                max_iter=max_iter,
-                tol=0,
-                # random_state is set but since we don't use kmeans++ or random
-                # init this parameter shouldn't have any impact on the outputs
-                random_state=42,
-                copy_x=True,
-                algorithm="lloyd",
-            )
+        est_kwargs = dict(
+            n_clusters=n_clusters,
+            init=centers_init,
+            n_init=1,
+            max_iter=max_iter,
+            tol=0,
+            # random_state is set but since we don't use kmeans++ or random
+            # init this parameter shouldn't have any impact on the outputs
+            random_state=42,
+            copy_x=True,
+            algorithm="lloyd",
+        )
 
-            sklearn.cluster._kmeans._kmeans_single_lloyd = kmeans_single_lloyd_fn
-            estimator = KMeans(**est_kwargs)
+        estimator = KMeans(**est_kwargs)
 
-            print(f"Running {name} with parameters max_iter={max_iter} tol={tol} ...")
+        print(f"Running {name} with parameters max_iter={max_iter} tol={tol} ...")
+
+        with sklearn.config_context(engine_provider=engine_provider):
 
             # dry run, to be fair for JIT implementations
             KMeans(**est_kwargs).set_params(max_iter=1).fit(
@@ -110,9 +102,6 @@ class KMeansLloydTimeit:
                 estimator, name, max_iter, assert_allclose=self.run_consistency_checks
             )
             print(f"Running {name} ... done in {t1 - t0}\n")
-
-        finally:
-            sklearn.cluster._kmeans._kmeans_single_lloyd = VANILLA_SKLEARN_LLOYD
 
     def _check_same_fit(self, estimator, name, max_iter, assert_allclose):
         runtime_error_message = (
@@ -150,23 +139,17 @@ class KMeansLloydTimeit:
                 err_msg=runtime_error_message,
             )
 
-    def _check_kmeans_single_lloyd_fn_signature(self, kmeans_single_lloyd_fn):
-        fn_signature = inspect.signature(kmeans_single_lloyd_fn)
-        if fn_signature != self._VANILLA_SKLEARN_LLOYD_SIGNATURE:
-            raise ValueError(
-                f"The signature of the submitted kmeans_single_lloyd_fn is expected to be "
-                f"{self._VANILLA_SKLEARN_LLOYD_SIGNATURE}, but got {fn_signature} ."
-            )
-
 
 if __name__ == "__main__":
-    from ext_helpers.daal4py import kmeans as daal4py_kmeans
-
-    from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
+    from numpy.random import default_rng
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
-    from sklearnex import config_context
-    from numpy.random import default_rng
+
+    from sklearn_numba_dpex.testing.config import override_attr_context
+    from sklearn_numba_dpex.kmeans.engine import KMeansEngine
+
+    from ext_helpers.daal4py import daal4py_kmeans_single
+    from sklearnex import config_context as sklearnex_config_context
 
     # TODO: expose CLI args.
 
@@ -181,7 +164,7 @@ if __name__ == "__main__":
     run_consistency_checks = False
 
     def benchmark_data_initialization(random_state=random_state, n_clusters=n_clusters):
-        X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True)
+        X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True, parser="auto")
         X = X.astype(dtype)
         scaler_x = MinMaxScaler()
         scaler_x.fit(X)
@@ -198,33 +181,44 @@ if __name__ == "__main__":
     )
 
     kmeans_timer.timeit(
-        VANILLA_SKLEARN_LLOYD,
         name="Sklearn vanilla lloyd",
     )
 
-    with config_context(target_offload="cpu"):
+    with override_attr_context(
+        KMeansEngine,
+        kmeans_single=daal4py_kmeans_single,
+    ), sklearnex_config_context(target_offload="cpu"):
         kmeans_timer.timeit(
-            daal4py_kmeans,
-            name="daal4py lloyd CPU",
+            name="daal4py lloyd CPU", engine_provider="sklearn_numba_dpex"
         )
 
-    with config_context(target_offload="gpu"):
-        kmeans_timer.timeit(daal4py_kmeans, name="daal4py lloyd GPU", slow=True)
+    with override_attr_context(
+        KMeansEngine,
+        kmeans_single=daal4py_kmeans_single,
+    ), sklearnex_config_context(target_offload="gpu"):
+        kmeans_timer.timeit(
+            name="daal4py lloyd GPU",
+            engine_provider="sklearn_numba_dpex",
+            is_sloww=True,
+        )
 
     for multiplier in [1, 2, 4, 8]:
-        kmeans_timer.timeit(
-            KMeansDriver(
-                device="cpu",
-                dtype=dtype,
-                work_group_size_multiplier=multiplier,
-            ).lloyd,
-            name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
-            slow=True,
-        )
 
-        kmeans_timer.timeit(
-            KMeansDriver(
-                device="gpu", dtype=dtype, work_group_size_multiplier=multiplier
-            ).lloyd,
-            name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
-        )
+        with override_attr_context(
+            KMeansEngine,
+            _DRIVER_CONFIG=dict(device="cpu", work_group_size_multiplier=multiplier),
+        ):
+            kmeans_timer.timeit(
+                name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
+                engine_provider="sklearn_numba_dpex",
+                is_slow=True,
+            )
+
+        with override_attr_context(
+            KMeansEngine,
+            _DRIVER_CONFIG=dict(device="gpu", work_group_size_multiplier=multiplier),
+        ):
+            kmeans_timer.timeit(
+                name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
+                engine_provider="sklearn_numba_dpex",
+            )
