@@ -12,6 +12,8 @@ from .drivers import KMeansDriver
 # from the default sklearn KMeansCythonEngine for convenience, this inheritance will be
 # removed later on when the other parts have been implemented.
 class KMeansEngine(KMeansCythonEngine):
+    _DRIVER_CONFIG = dict()
+
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
         try:
@@ -46,7 +48,7 @@ class KMeansEngine(KMeansCythonEngine):
         return super().prepare_fit(X, y, sample_weight)
 
     def kmeans_single(self, X, sample_weight, centers_init):
-        return KMeansDriver().lloyd(
+        return KMeansDriver(**self._DRIVER_CONFIG).lloyd(
             X,
             sample_weight,
             centers_init,
@@ -56,16 +58,16 @@ class KMeansEngine(KMeansCythonEngine):
         )
 
     def get_labels(self, X, sample_weight):
-        return KMeansDriver().get_labels(
+        return KMeansDriver(**self._DRIVER_CONFIG).get_labels(
             X, sample_weight, self.estimator.cluster_centers_
         )
 
     def get_euclidean_distances(self, X):
-        return KMeansDriver().get_euclidean_distances(
+        return KMeansDriver(**self._DRIVER_CONFIG).get_euclidean_distances(
             X, self.estimator.cluster_centers_
         )
 
     def get_score(self, X, sample_weight):
-        return KMeansDriver().get_inertia(
+        return KMeansDriver(**self._DRIVER_CONFIG).get_inertia(
             X, sample_weight, self.estimator.cluster_centers_
         )
