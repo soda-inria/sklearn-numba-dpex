@@ -66,7 +66,7 @@ def daal4py_kmeans_single(self, X, sample_weight, centers_init):
 # from daal4py.sklearn.cluster._k_means_0_23 import _daal4py_k_means_fit
 
 
-# def kmeans_daal4py_kmeans_singlesingle(self, X, sample_weight, centers_init):
+# def kmeans_daal4py_kmeans_single(self, X, sample_weight, centers_init):
 
 #     (
 #         best_cluster_centers,

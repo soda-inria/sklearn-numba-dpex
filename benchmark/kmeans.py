@@ -46,21 +46,20 @@ class KMeansLloydTimeit:
         self.results = None
         self.skip_slow = skip_slow
 
-    def timeit(self, name, engine_provider=None, slow=False):
+    def timeit(self, name, engine_provider=None, is_slow=False):
         """
         Parameters
         ----------
-        kmeans_single_lloyd_fn : function
-            Is expected to have the same signature and the same interface than sklearn's
-            private function _kmeans_single_lloyd
-
         name: str
             Name of the candidate to test
 
-        slow: bool
+        engine_provider: str
+            The name of the engine provider to use for computations.
+
+        is_slow: bool
             Set to true to skip the timeit when skip_slow is true. Default to false.
         """
-        if slow and self.skip_slow:
+        if is_slow and self.skip_slow:
             return
 
         max_iter = self.max_iter
@@ -198,7 +197,9 @@ if __name__ == "__main__":
         kmeans_single=daal4py_kmeans_single,
     ), sklearnex_config_context(target_offload="gpu"):
         kmeans_timer.timeit(
-            name="daal4py lloyd GPU", engine_provider="sklearn_numba_dpex", slow=True
+            name="daal4py lloyd GPU",
+            engine_provider="sklearn_numba_dpex",
+            is_sloww=True,
         )
 
     for multiplier in [1, 2, 4, 8]:
@@ -210,7 +211,7 @@ if __name__ == "__main__":
             kmeans_timer.timeit(
                 name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
                 engine_provider="sklearn_numba_dpex",
-                slow=True,
+                is_slow=True,
             )
 
         with override_attr_context(
