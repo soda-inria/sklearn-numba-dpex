@@ -187,25 +187,6 @@ def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dty
 
 
 @lru_cache
-def make_copyto_2d_kernel(size0, size1, work_group_size):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
-
-    # Optimized for C-contiguous array and for
-    # size1 >> preferred_work_group_size_multiple
-    @dpex.kernel
-    def copyto_kernel(input_array, target_array):
-        col_idx = dpex.get_global_id(0)
-
-        if col_idx >= size1:
-            return
-
-        for row_idx in range(size0):
-            target_array[row_idx, col_idx] = input_array[row_idx, col_idx]
-
-    return copyto_kernel[global_size, work_group_size]
-
-
-@lru_cache
 def make_broadcast_division_1d_2d_kernel(size0, size1, work_group_size):
     global_size = math.ceil(size1 / work_group_size) * work_group_size
 
