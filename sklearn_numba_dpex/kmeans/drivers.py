@@ -16,7 +16,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
-    make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
     make_broadcast_division_1d_2d_kernel,
@@ -242,6 +241,8 @@ class KMeansDriver:
             n_features,
             n_clusters,
             with_sample_weight=sample_weight is not None,
+            return_inertia=bool(verbose),
+            compute_exact_inertia=True,
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
@@ -261,10 +262,6 @@ class KMeansDriver:
             centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=compute_dtype,
-        )
-
-        reset_per_sample_inertia_kernel = make_initialize_to_zeros_1d_kernel(
-            size=n_samples, work_group_size=work_group_size, dtype=compute_dtype
         )
 
         reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
@@ -342,7 +339,7 @@ class KMeansDriver:
         centroid_shifts = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
-        per_sample_inertia = per_sample_pseudo_inertia = dpctl.tensor.empty(
+        per_sample_inertia = dpctl.tensor.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
         assignments_idx = dpctl.tensor.empty(
@@ -368,35 +365,23 @@ class KMeansDriver:
         # The loop
         n_iteration = 0
         centroid_shifts_sum = np.inf
-        best_pseudo_inertia = np.inf
 
         # TODO: Investigate possible speedup with a custom dpctl queue with a custom
         # DAG of events and a final single "wait"
-        # TODO: should we conform to sklearn vanilla kmeans strategy and avoid
-        # computing an extra centroid update in the last iteration that will not be
-        # used ?
-        # It's not a significant difference anyway since when performance matters
-        # usually we have n_iteration > 100
-        # TODO: there's an implicit choice in this code that will zero-out a centroid
-        # if its cluster is empty. It is not a good choice (a better choice would be to
-        # replace the centroid with a point in the dataset that is far for its closest
-        # centroid)
         while (n_iteration < max_iter) and (centroid_shifts_sum > tol):
             half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
-            reset_per_sample_inertia_kernel(per_sample_pseudo_inertia)
             reset_cluster_sizes_private_copies_kernel(cluster_sizes_private_copies)
             reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
             nb_empty_clusters[0] = np.int32(0)
 
             # TODO: implement special case where only one copy is needed
-
             fused_lloyd_fixed_window_single_step_kernel(
                 X_t,
                 sample_weight,
                 centroids_t,
                 centroids_half_l2_norm,
-                per_sample_pseudo_inertia,
+                per_sample_inertia,
                 new_centroids_t_private_copies,
                 cluster_sizes_private_copies,
             )
@@ -427,20 +412,14 @@ class KMeansDriver:
                 reduce_centroid_shifts_kernel(centroid_shifts)
             )
 
-            pseudo_inertia, *_ = dpctl.tensor.asnumpy(
-                reduce_inertia_kernel(per_sample_pseudo_inertia)
-            )
-
             if verbose:
-                # HACK: rather than:
-                # f"Iteration {n_iteration}, pseudo_inertia {pseudo_inertia}"
-                # we print:
-                print(
-                    f"Iteration {n_iteration}, inertia {pseudo_inertia} (pseudo inertia)."
+                # ???: verbosity comes at the cost of performance since it triggers
+                # computing exact inertia at each iteration. Shouldn't this be
+                # documented ?
+                inertia, *_ = dpctl.tensor.asnumpy(
+                    reduce_inertia_kernel(per_sample_inertia)
                 )
-                # to validate sklearn test on verbosity (because we go against sklearn
-                # design choice of computing exact inertia when verbosity=True at the
-                # cost of a significant overhead)
+                print(f"Iteration {n_iteration}, inertia {inertia}")
 
             # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
             # and keep an additional copy of centroids that is updated only if the
@@ -483,7 +462,6 @@ class KMeansDriver:
         # Finally, run an assignment kernel to compute the assignments to the best
         # centroids found, along with the exact inertia.
         half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
-        reset_per_sample_inertia_kernel(per_sample_inertia)
 
         fixed_window_assignment_kernel(
             X_t,
@@ -667,7 +645,6 @@ class KMeansDriver:
         return dpctl.tensor.asnumpy(euclidean_distances).astype(output_dtype)
 
     def _get_euclidean_distances(self, X, Y):
-        # Input validation
         (
             X,
             _,

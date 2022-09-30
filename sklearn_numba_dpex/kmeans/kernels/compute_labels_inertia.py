@@ -75,7 +75,7 @@ def make_compute_labels_inertia_fixed_window_kernel(
     # fmt: off
     def labels_inertia(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
-        sample_weight,           # IN READ-ONLY   (n_features,) if with_sample_weight else (1,)
+        sample_weight,            # IN READ-ONLY   (n_features,) if with_sample_weight else (1,)
         centroids_t,              # IN             (n_features, n_clusters)
         centroids_half_l2_norm,   # IN             (n_clusters,)
         per_sample_inertia,       # OUT            (n_samples,)

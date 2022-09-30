@@ -35,6 +35,8 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_features,
     n_clusters,
     with_sample_weight,
+    return_inertia,
+    compute_exact_inertia,
     preferred_work_group_size_multiple,
     global_mem_cache_size,
     centroids_window_width_multiplier,
@@ -72,6 +74,19 @@ def make_lloyd_single_step_fixed_window_kernel(
         dtype=dtype,
     )
 
+    if return_inertia and compute_exact_inertia:
+        _accumulate_dot_products_and_X_l2_norm = (
+            _make_accumulate_dot_products_kernel_func(
+                n_samples,
+                n_features,
+                centroids_window_height,
+                window_n_centroids,
+                with_X_l2_norm=True,
+                dtype=dtype,
+            )
+        )
+        two = dtype(2)
+
     n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
     n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
 
@@ -108,7 +123,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         sample_weight,                     # IN READ-ONLY   (n_features,) if with_sample_weight else (1,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
-        per_sample_pseudo_inertia,         # OUT            (n_samples,)
+        per_sample_inertia,                # OUT            (n_samples,)
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
@@ -215,13 +230,22 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # before going forward
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                _accumulate_dot_products(
-                    sample_idx,
-                    first_feature_idx,
-                    X_t,
-                    centroids_window,
-                    dot_products,
-                )
+                if return_inertia and compute_exact_inertia and _0 == 0:
+                    X_l2_norm = _accumulate_dot_products_and_X_l2_norm(
+                        sample_idx,
+                        first_feature_idx,
+                        X_t,
+                        centroids_window,
+                        dot_products,
+                    )
+                else:
+                    _accumulate_dot_products(
+                        sample_idx,
+                        first_feature_idx,
+                        X_t,
+                        centroids_window,
+                        dot_products,
+                    )
 
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
@@ -250,6 +274,24 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
+
+        # NB: this check can't be moved at the top at the kernel, because if a work item
+        # exits early with a `return` it will never reach the barriers, thus causing a
+        # deadlock. Early returns are only possible when there are no barriers within
+        # the remaining set of instructions for the running kernel.
+        if sample_idx >= n_samples:
+            return
+
+        if with_sample_weight:
+            weight = sample_weight[sample_idx]
+
+        if return_inertia:
+            inertia = min_sample_pseudo_inertia
+            if compute_exact_inertia:
+                inertia = X_l2_norm + (two * min_sample_pseudo_inertia)
+            if with_sample_weight:
+                inertia = inertia * weight
+            per_sample_inertia[sample_idx] = inertia
 
         # STEP 2: update centroids.
 
@@ -280,18 +322,34 @@ def make_lloyd_single_step_fixed_window_kernel(
         # The privatization strategy also applies to the updates of the centroid
         # counts.
 
-        # NB: this check can't be moved at the top at the kernel, because if a work item
-        # exits early with a `return` it will never reach the barriers, thus causing a
-        # deadlock. Early returns are only possible when there are no barriers within
-        # the remaining set of instructions for the running kernel.
-        if sample_idx >= n_samples:
-            return
+        # STEP 2: update centroids.
 
-        if with_sample_weight:
-            weight = sample_weight[sample_idx]
-            per_sample_pseudo_inertia[sample_idx] = min_sample_pseudo_inertia * weight
-        else:
-            per_sample_pseudo_inertia[sample_idx] = min_sample_pseudo_inertia
+        # Each work item updates n_features values in global memory for the centroid
+        # at position min_idx. All work items across all work groups have read access to
+        # global memory and may run similar update instructions at the same time. That
+        # creates race conditions, so update operations need to be enclosed in atomic
+        # operations that act like locks and will sequentialize updates when different
+        # work items collide on a given value.
+
+        # However there is a very significant performance cost to sequentialization,
+        # which we mitigate with a strategy of "privatization" for reducing the
+        # probability of collisions. The array of centroids is duplicated in global
+        # memory as many time as possible and each sub-group of work items of size
+        # `preferred_work_group_size_multiple` is assigned to a different duplicata and
+        # update the values of this single duplicata.
+
+        # The resulting copies of centroids updates will then need to be reduced to a
+        # single array of centroids in a complementary kernel.
+
+        # The privatization is more effective when there is a low number of centroid
+        # values (equal to (n_clusters * n_features)) comparatively to the global
+        # number of work items, i.e. when the probability of collision is high. At the
+        # opposite end where the probability of collision is low, privatization might
+        # be detrimental to performance and we might prefer simpler, faster code
+        # with updates directly made into the final array of centroids.
+
+        # The privatization strategy also applies to the updates of the centroid
+        # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
         privatization_idx = (

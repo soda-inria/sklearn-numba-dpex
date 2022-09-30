@@ -8,7 +8,6 @@ from .compute_labels_inertia import make_compute_labels_inertia_fixed_window_ker
 from .utils import (
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
-    make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
     make_broadcast_division_1d_2d_kernel,
@@ -25,7 +24,6 @@ __all__ = (
     "make_compute_labels_inertia_fixed_window_kernel",
     "make_centroid_shifts_kernel",
     "make_reduce_centroid_data_kernel",
-    "make_initialize_to_zeros_1d_kernel",
     "make_initialize_to_zeros_2d_kernel",
     "make_initialize_to_zeros_3d_kernel",
     "make_broadcast_division_1d_2d_kernel",

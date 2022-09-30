@@ -122,24 +122,6 @@ def make_reduce_centroid_data_kernel(
 
 
 @lru_cache
-def make_initialize_to_zeros_1d_kernel(size, work_group_size, dtype):
-
-    global_size = math.ceil(size / work_group_size) * work_group_size
-    zero = dtype(0)
-
-    @dpex.kernel
-    def initialize_to_zeros(data):
-        item_idx = dpex.get_global_id(0)
-
-        if item_idx >= size:
-            return
-
-        data[item_idx] = zero
-
-    return initialize_to_zeros[global_size, work_group_size]
-
-
-@lru_cache
 def make_initialize_to_zeros_2d_kernel(size0, size1, work_group_size, dtype):
 
     n_items = size0 * size1
