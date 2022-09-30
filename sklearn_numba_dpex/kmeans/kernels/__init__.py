@@ -6,6 +6,7 @@ from .compute_inertia import make_compute_inertia_fixed_window_kernel
 from .compute_labels import make_label_assignment_fixed_window_kernel
 from .compute_labels_inertia import make_compute_labels_inertia_fixed_window_kernel
 from .utils import (
+    make_relocate_empty_clusters_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
     make_initialize_to_zeros_2d_kernel,
@@ -13,6 +14,7 @@ from .utils import (
     make_broadcast_division_1d_2d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_sum_reduction_1d_kernel,
+    make_argpartition_from_partition_kernel,
 )
 
 
@@ -22,6 +24,7 @@ __all__ = (
     "make_compute_inertia_fixed_window_kernel",
     "make_label_assignment_fixed_window_kernel",
     "make_compute_labels_inertia_fixed_window_kernel",
+    "make_relocate_empty_clusters_kernel",
     "make_centroid_shifts_kernel",
     "make_reduce_centroid_data_kernel",
     "make_initialize_to_zeros_2d_kernel",
@@ -29,4 +32,5 @@ __all__ = (
     "make_broadcast_division_1d_2d_kernel",
     "make_half_l2_norm_2d_axis0_kernel",
     "make_sum_reduction_1d_kernel",
+    "make_argpartition_from_partition_kernel",
 )

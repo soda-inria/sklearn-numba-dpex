@@ -26,6 +26,71 @@ import numba_dpex as dpex
 
 
 @lru_cache
+def make_relocate_empty_clusters_kernel(
+    n_relocated_clusters, n_features, with_sample_weight, work_group_size, dtype
+):
+    n_work_groups_for_cluster = math.ceil(n_features / work_group_size)
+    n_work_items_for_cluster = n_work_groups_for_cluster * work_group_size
+    global_size = n_work_items_for_cluster * n_relocated_clusters
+
+    zero = dtype(0.0)
+    if not with_sample_weight:
+        one = dtype(1.0)
+
+    @dpex.kernel
+    # fmt: off
+    def relocate_empty_clusters(
+        X_t,                        # IN READ-ONLY   (n_features, n_samples)
+        sample_weight,              # IN READ-ONLY   (n_samples,)
+        assignments_idx,            # IN             (n_samples,)
+        samples_far_from_center,    # IN             (n_samples,)
+        empty_clusters_list,        # IN             (n_clusters,)
+        per_sample_inertia,         # INOUT          (n_samples,)
+        centroids_t,                # INOUT          (n_features, n_clusters)
+        cluster_sizes               # INOUT          (n_clusters,)
+            ):
+    # fmt: on
+        group_idx = dpex.get_group_id(0)
+        item_idx = dpex.get_local_id(0)
+        relocated_idx = group_idx // n_work_groups_for_cluster
+        feature_idx = ((group_idx % n_work_groups_for_cluster) * work_group_size) + item_idx
+
+        if feature_idx >= n_features:
+            return
+
+        relocated_cluster_idx = empty_clusters_list[relocated_idx]
+        new_location_X_idx = samples_far_from_center[relocated_idx]
+        new_location_previous_assignment = assignments_idx[new_location_X_idx]
+
+        new_centroid_value = X_t[feature_idx, new_location_X_idx]
+        X_centroid_addend = new_centroid_value
+        if with_sample_weight:
+            new_location_weight = sample_weight[new_location_X_idx]
+            X_centroid_addend *= new_location_weight
+
+        # Cancel the contribution to the updated centroids of the sample that was once
+        # assigned to  new_location_previous_assignment but is now assigned to the
+        # cluster of the centroids that relocates to this sample
+        centroids_t[feature_idx, new_location_previous_assignment] -= X_centroid_addend
+
+        # The relocated centroid has only one contribution now, which is the sample
+        # to which it has been relocated to
+        centroids_t[feature_idx, relocated_cluster_idx] = new_centroid_value
+
+        # Likewise, we update the weights in the clusters
+        if feature_idx == 0:
+            per_sample_inertia[new_location_X_idx] = zero
+            if with_sample_weight:
+                cluster_sizes[new_location_previous_assignment] -= new_location_weight
+                cluster_sizes[relocated_cluster_idx] = new_location_weight
+            else:
+                cluster_sizes[new_location_previous_assignment] -= one
+                cluster_sizes[relocated_cluster_idx] = one
+
+    return relocate_empty_clusters[global_size, work_group_size]
+
+
+@lru_cache
 def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
     global_size = math.ceil(n_clusters / work_group_size) * work_group_size
     zero = dtype(0.0)
@@ -73,7 +138,7 @@ def make_reduce_centroid_data_kernel(
     global_size = n_work_items_for_clusters * n_features
     zero = dtype(0.0)
     i_one = np.int32(1)
-    i_zero = np.int64(0)
+    l_zero = np.int64(0)
 
     # Optimized for C-contiguous array and assuming
     # n_features * n_clusters >> preferred_work_group_size_multiple
@@ -114,7 +179,7 @@ def make_reduce_centroid_data_kernel(
             # register empty clusters
             if sum_ == zero:
                 current_nb_empty_clusters = dpex.atomic.add(
-                    nb_empty_clusters, i_zero, i_one
+                    nb_empty_clusters, l_zero, i_one
                 )
                 empty_clusters_list[current_nb_empty_clusters] = cluster_idx
 
@@ -316,3 +381,71 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         return result
 
     return sum_reduction
+
+
+@lru_cache
+def make_argpartition_from_partition_kernel(size, work_group_size):
+    global_size = math.ceil(size / work_group_size) * work_group_size
+    l_zero = np.int64(0)
+    l_one = np.int64(1)
+    l_two = np.int64(2)
+    i_one = np.int32(1)
+
+    @dpex.kernel
+    # fmt: off
+    def argpartition_from_partition(
+            data,                           # IN       (size,)
+            partition,                      # IN       (size,)
+            argpartition,                   # OUT      (size,)
+            tmp_buffer,                     # INOUT    (4, )
+        ):
+    # fmt: on
+        item_idx = dpex.get_global_id(0)
+        if item_idx >= size:
+            return
+
+        k = tmp_buffer[-i_one]
+        max_idx = k - i_one
+
+        # if the k greatest items have been found already, just exit
+        current_position = tmp_buffer[l_one]
+        if current_position >= max_idx:
+            return
+
+        # exit if the value for the current work item is inferior to the cutoff value
+        cutoff = partition[size - k]
+        item_value = data[item_idx]
+        if item_value < cutoff:
+            return
+
+        # register the global, total number of values above or equal to the cutoff
+        # seen so far
+        current_nb_found = dpex.atomic.add(
+            tmp_buffer,
+            l_zero,
+            i_one
+            )
+
+        # if the value is strictly higher to the cutoff, add it to the output
+        if item_value > cutoff:
+            current_position = dpex.atomic.add(
+                tmp_buffer,
+                l_one,
+                i_one
+            )
+            argpartition[current_position] = item_idx
+
+        # if the value if equal to the cutoff, we only want to add it to the list if
+        # it does not override a value that is strictly higher.
+        # To this end, we write it at the end of the list, and only if the total number
+        # of written values so far does not exceed k.
+        # TODO: this does not work, need to write a second kernel for cutoff values.
+        elif current_nb_found < k:
+            current_position = dpex.atomic.add(
+                tmp_buffer,
+                l_two,
+                i_one
+                )
+            argpartition[max_idx - current_position] = item_idx
+
+    return argpartition_from_partition[global_size, work_group_size]

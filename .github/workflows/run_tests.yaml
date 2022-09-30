@@ -28,8 +28,10 @@ jobs:
 
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      # TODO: enable the test for cluster relocalization when it's properly supported
-      # by the KMeans engine in sklearn_numba_dpex. More information about the
-      # progress toward support is available on the issue tracker at:
-      # https://github.com/soda-inria/sklearn-numba-dpex/issues/24
-      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means -k "not test_kmeans_relocated_clusters"
+      # TODO: the test test_kmeans_relocated_clusters on the sklearn side assumes a
+      # deterministic behavior of the np.argpartition function regarding how are
+      # ordered equal results, which is wrong because the order is undetermined.
+      # For the moment that prevents us from passing it because our kernels for
+      # argpartition have a different order. The test should be changed upstream so it
+      # doesn't have to rely on order in case of equality.
+      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
