@@ -11,6 +11,14 @@ not yet in a working state at the moment:
 
 - `wip-engines` branch on https://github.com/ogrisel/scikit-learn 
 
+## List of Included Engines
+
+- `sklearn.cluster.KMeans` for the standard LLoyd's algorithm on dense data arrays.
+  The k-means++ initialization scheme is not implemented yet but this is planned.
+  
+  No implementation of k-means for sparse input data or for the "Elkan" algorithm is
+  included at the moment.
+
 ## Getting started:
 
 ### Step 1: Installing a `numba_dpex` environment
