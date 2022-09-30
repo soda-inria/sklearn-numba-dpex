@@ -264,6 +264,18 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
+        compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            with_sample_weight=sample_weight is not None,
+            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=compute_dtype,
+        )
+
         reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
             size0=n_centroids_private_copies,
             size1=n_clusters,
@@ -397,10 +409,7 @@ class KMeansDriver:
 
             nb_empty_clusters_ = dpctl.tensor.asnumpy(nb_empty_clusters)[0]
             if nb_empty_clusters_ > 0:
-                # TODO: instead of this warning, set the centroid for empty clusters
-                # to new points carefully chosen in the dataset. (mimic scikit-learn
-                # behavior where the points with the highest inertia are chosen)
-                warnings.warn("Found an empty cluster", RuntimeWarning)
+                pass
 
             broadcast_division_kernel(new_centroids_t, cluster_sizes)
 
@@ -416,6 +425,9 @@ class KMeansDriver:
                 # ???: verbosity comes at the cost of performance since it triggers
                 # computing exact inertia at each iteration. Shouldn't this be
                 # documented ?
+                # sklearn even goes further and re-computes inertia on updated clusters
+                # rather than old clusters but surely it probably isn't worth the
+                # computational cost ?
                 inertia, *_ = dpctl.tensor.asnumpy(
                     reduce_inertia_kernel(per_sample_inertia)
                 )
