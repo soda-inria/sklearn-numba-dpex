@@ -22,6 +22,9 @@ else:
     from daal4py.sklearn.cluster._k_means_0_23 import KMeans
 
 
+from sklearn.exceptions import NotSupportedByEngineError
+
+
 # TODO: instead of relying on monkey patching, find a way to register a distinct entry
 # point that can load a distinct engine outside of setup.py (impossible ?)
 
@@ -35,6 +38,11 @@ def daal4py_kmeans_single(self, X, sample_weight, centers_init):
         raise RuntimeError(
             "Expected to monkey patch an Engine that provides the `lloyd algorithm, "
             f"but got `estimator._algorithm = {self.estimator._algorithm}` instead "
+        )
+
+    if sample_weight is not None and any(sample_weight != sample_weight[0]):
+        raise NotSupportedByEngineError(
+            "Non unary sample_weight is not supported by daal4py."
         )
 
     est = KMeans(

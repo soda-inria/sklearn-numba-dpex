@@ -36,7 +36,6 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_clusters,
     with_sample_weight,
     return_inertia,
-    compute_exact_inertia,
     preferred_work_group_size_multiple,
     global_mem_cache_size,
     centroids_window_width_multiplier,
@@ -74,7 +73,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         dtype=dtype,
     )
 
-    if return_inertia and compute_exact_inertia:
+    if return_inertia:
         _accumulate_dot_products_and_X_l2_norm = (
             _make_accumulate_dot_products_kernel_func(
                 n_samples,
@@ -230,7 +229,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # before going forward
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                if return_inertia and compute_exact_inertia and _0 == 0:
+                if return_inertia and _0 == 0:
                     X_l2_norm = _accumulate_dot_products_and_X_l2_norm(
                         sample_idx,
                         first_feature_idx,
@@ -287,40 +286,10 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         if return_inertia:
             inertia = min_sample_pseudo_inertia
-            if compute_exact_inertia:
-                inertia = X_l2_norm + (two * min_sample_pseudo_inertia)
+            inertia = X_l2_norm + (two * min_sample_pseudo_inertia)
             if with_sample_weight:
                 inertia = inertia * weight
             per_sample_inertia[sample_idx] = inertia
-
-        # STEP 2: update centroids.
-
-        # Each work item updates n_features values in global memory for the centroid
-        # at position min_idx. All work items across all work groups have read access to
-        # global memory and may run similar update instructions at the same time. That
-        # creates race conditions, so update operations need to be enclosed in atomic
-        # operations that act like locks and will sequentialize updates when different
-        # work items collide on a given value.
-
-        # However there is a very significant performance cost to sequentialization,
-        # which we mitigate with a strategy of "privatization" for reducing the
-        # probability of collisions. The array of centroids is duplicated in global
-        # memory as many time as possible and each sub-group of work items of size
-        # `preferred_work_group_size_multiple` is assigned to a different duplicata and
-        # update the values of this single duplicata.
-
-        # The resulting copies of centroids updates will then need to be reduced to a
-        # single array of centroids in a complementary kernel.
-
-        # The privatization is more effective when there is a low number of centroid
-        # values (equal to (n_clusters * n_features)) comparatively to the global
-        # number of work items, i.e. when the probability of collision is high. At the
-        # opposite end where the probability of collision is low, privatization might
-        # be detrimental to performance and we might prefer simpler, faster code
-        # with updates directly made into the final array of centroids.
-
-        # The privatization strategy also applies to the updates of the centroid
-        # counts.
 
         # STEP 2: update centroids.
 

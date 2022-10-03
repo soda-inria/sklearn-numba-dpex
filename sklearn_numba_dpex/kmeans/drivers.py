@@ -242,7 +242,6 @@ class KMeansDriver:
             n_clusters,
             with_sample_weight=sample_weight is not None,
             return_inertia=bool(verbose),
-            compute_exact_inertia=True,
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
@@ -814,10 +813,16 @@ class KMeansDriver:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
+
+        if sample_weight is not None:
+            sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
+        else:
+            sample_weight = dpctl.tensor.empty(1, dtype=X.dtype, device=self.device)
+
+        cluster_centers = dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
+
         return (
             X_t,
-            dpctl.tensor.from_numpy(sample_weight, device=self.device)
-            if sample_weight is not None
-            else dpctl.tensor.empty(1, dtype=X.dtype, device=self.device),
-            dpctl.tensor.from_numpy(cluster_centers.T, device=self.device),
+            sample_weight,
+            cluster_centers,
         )
