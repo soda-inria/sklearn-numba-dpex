@@ -34,6 +34,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
+    return_inertia,
     preferred_work_group_size_multiple,
     global_mem_cache_size,
     centroids_window_width_multiplier,
@@ -71,6 +72,19 @@ def make_lloyd_single_step_fixed_window_kernel(
         dtype=dtype,
     )
 
+    if return_inertia:
+        _accumulate_dot_products_and_X_l2_norm = (
+            _make_accumulate_dot_products_kernel_func(
+                n_samples,
+                n_features,
+                centroids_window_height,
+                window_n_centroids,
+                with_X_l2_norm=True,
+                dtype=dtype,
+            )
+        )
+        two = dtype(2)
+
     n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
     n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
 
@@ -86,7 +100,6 @@ def make_lloyd_single_step_fixed_window_kernel(
         // n_cluster_bytes
     )
 
-    one = dtype(1.0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -104,9 +117,10 @@ def make_lloyd_single_step_fixed_window_kernel(
     # fmt: off
     def fused_lloyd_single_step(
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
+        sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
-        per_sample_pseudo_inertia,         # OUT            (n_samples,)
+        per_sample_inertia,                # OUT            (n_samples,)
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
@@ -213,13 +227,22 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # before going forward
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                _accumulate_dot_products(
-                    sample_idx,
-                    first_feature_idx,
-                    X_t,
-                    centroids_window,
-                    dot_products,
-                )
+                if return_inertia and _0 == 0:
+                    X_l2_norm = _accumulate_dot_products_and_X_l2_norm(
+                        sample_idx,
+                        first_feature_idx,
+                        X_t,
+                        centroids_window,
+                        dot_products,
+                    )
+                else:
+                    _accumulate_dot_products(
+                        sample_idx,
+                        first_feature_idx,
+                        X_t,
+                        centroids_window,
+                        dot_products,
+                    )
 
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
@@ -248,6 +271,20 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
+
+        # NB: this check can't be moved at the top at the kernel, because if a work item
+        # exits early with a `return` it will never reach the barriers, thus causing a
+        # deadlock. Early returns are only possible when there are no barriers within
+        # the remaining set of instructions for the running kernel.
+        if sample_idx >= n_samples:
+            return
+
+        weight = sample_weight[sample_idx]
+
+        if return_inertia:
+            inertia = min_sample_pseudo_inertia
+            inertia = (X_l2_norm + (two * min_sample_pseudo_inertia)) * weight
+            per_sample_inertia[sample_idx] = inertia
 
         # STEP 2: update centroids.
 
@@ -278,15 +315,6 @@ def make_lloyd_single_step_fixed_window_kernel(
         # The privatization strategy also applies to the updates of the centroid
         # counts.
 
-        # NB: this check can't be moved at the top at the kernel, because if a work item
-        # exits early with a `return` it will never reach the barriers, thus causing a
-        # deadlock. Early returns are only possible when there are no barriers within
-        # the remaining set of instructions for the running kernel.
-        if sample_idx >= n_samples:
-            return
-
-        per_sample_pseudo_inertia[sample_idx] = min_sample_pseudo_inertia
-
         # each work item is assigned an array of centroids in a round robin manner
         privatization_idx = (
             sample_idx // preferred_work_group_size_multiple
@@ -295,14 +323,14 @@ def make_lloyd_single_step_fixed_window_kernel(
         dpex.atomic.add(
             cluster_sizes_private_copies,
             (privatization_idx, min_idx),
-            one,
+            weight
         )
 
         for feature_idx in range(n_features):
             dpex.atomic.add(
                 new_centroids_t_private_copies,
                 (privatization_idx, feature_idx, min_idx),
-                X_t[feature_idx, sample_idx],
+                X_t[feature_idx, sample_idx] * weight,
             )
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return (

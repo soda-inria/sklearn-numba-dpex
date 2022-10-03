@@ -28,5 +28,8 @@ jobs:
 
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      continue-on-error: true
-      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+      # TODO: enable the test for cluster relocalization when it's properly supported
+      # by the KMeans engine in sklearn_numba_dpex. More information about the
+      # progress toward support is available on the issue tracker at:
+      # https://github.com/soda-inria/sklearn-numba-dpex/issues/24
+      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means -k "not test_kmeans_relocated_clusters"

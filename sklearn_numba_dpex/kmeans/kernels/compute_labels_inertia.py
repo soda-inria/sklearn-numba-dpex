@@ -74,6 +74,7 @@ def make_compute_labels_inertia_fixed_window_kernel(
     # fmt: off
     def labels_inertia(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
+        sample_weight,            # IN READ-ONLY   (n_features,)
         centroids_t,              # IN             (n_features, n_clusters)
         centroids_half_l2_norm,   # IN             (n_clusters,)
         per_sample_inertia,       # OUT            (n_samples,)
@@ -171,7 +172,7 @@ def make_compute_labels_inertia_fixed_window_kernel(
             return
 
         assignments_idx[sample_idx] = min_idx
-        per_sample_inertia[sample_idx] = X_l2_norm + (two * min_sample_pseudo_inertia)
+        per_sample_inertia[sample_idx] = (X_l2_norm + (two * min_sample_pseudo_inertia)) * sample_weight[sample_idx]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return labels_inertia[global_size, work_group_size]

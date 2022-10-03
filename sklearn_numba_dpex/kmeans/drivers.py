@@ -16,10 +16,8 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
-    make_initialize_to_zeros_1d_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
-    make_copyto_2d_kernel,
     make_broadcast_division_1d_2d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_sum_reduction_1d_kernel,
@@ -224,6 +222,7 @@ class KMeansDriver:
 
         (
             X,
+            sample_weight,
             cluster_centers,
             compute_dtype,
             output_dtype,
@@ -231,7 +230,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers_init, sample_weight)
+        ) = self._check_inputs(X, sample_weight, centers_init)
 
         # Create a set of kernels
         (
@@ -241,6 +240,7 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
+            return_inertia=bool(verbose),
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
@@ -261,10 +261,6 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        reset_per_sample_inertia_kernel = make_initialize_to_zeros_1d_kernel(
-            size=n_samples, work_group_size=work_group_size, dtype=compute_dtype
-        )
-
         reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
             size0=n_centroids_private_copies,
             size1=n_clusters,
@@ -278,10 +274,6 @@ class KMeansDriver:
             size2=n_clusters,
             work_group_size=work_group_size,
             dtype=compute_dtype,
-        )
-
-        copyto_kernel = make_copyto_2d_kernel(
-            size0=n_features, size1=n_clusters, work_group_size=work_group_size
         )
 
         broadcast_division_kernel = make_broadcast_division_1d_2d_kernel(
@@ -326,11 +318,15 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, centroids_t = self._load_transposed_data_to_device(X, cluster_centers)
+        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
+            X,
+            sample_weight,
+            cluster_centers,
+        )
 
         # Allocate the necessary memory in the device global memory
         new_centroids_t = dpctl.tensor.empty_like(centroids_t, device=self.device)
-        best_centroids_t = dpctl.tensor.empty_like(new_centroids_t, device=self.device)
+
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
@@ -340,13 +336,12 @@ class KMeansDriver:
         centroid_shifts = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
-        per_sample_inertia = per_sample_pseudo_inertia = dpctl.tensor.empty(
+        per_sample_inertia = dpctl.tensor.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
         assignments_idx = dpctl.tensor.empty(
             n_samples, dtype=np.uint32, device=self.device
         )
-
         new_centroids_t_private_copies = dpctl.tensor.empty(
             (n_centroids_private_copies, n_features, n_clusters),
             dtype=compute_dtype,
@@ -367,25 +362,12 @@ class KMeansDriver:
         # The loop
         n_iteration = 0
         centroid_shifts_sum = np.inf
-        best_pseudo_inertia = np.inf
-
-        copyto_kernel(centroids_t, best_centroids_t)
 
         # TODO: Investigate possible speedup with a custom dpctl queue with a custom
         # DAG of events and a final single "wait"
-        # TODO: should we conform to sklearn vanilla kmeans strategy and avoid
-        # computing an extra centroid update in the last iteration that will not be
-        # used ?
-        # It's not a significant difference anyway since when performance matters
-        # usually we have n_iteration > 100
-        # TODO: there's an implicit choice in this code that will zero-out a centroid
-        # if its cluster is empty. It is not a good choice (a better choice would be to
-        # replace the centroid with a point in the dataset that is far for its closest
-        # centroid)
-        while (n_iteration <= max_iter) and (centroid_shifts_sum > tol):
+        while (n_iteration < max_iter) and (centroid_shifts_sum > tol):
             half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
-            reset_per_sample_inertia_kernel(per_sample_pseudo_inertia)
             reset_cluster_sizes_private_copies_kernel(cluster_sizes_private_copies)
             reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
             nb_empty_clusters[0] = np.int32(0)
@@ -393,9 +375,10 @@ class KMeansDriver:
             # TODO: implement special case where only one copy is needed
             fused_lloyd_fixed_window_single_step_kernel(
                 X_t,
+                sample_weight,
                 centroids_t,
                 centroids_half_l2_norm,
-                per_sample_pseudo_inertia,
+                per_sample_inertia,
                 new_centroids_t_private_copies,
                 cluster_sizes_private_copies,
             )
@@ -426,17 +409,34 @@ class KMeansDriver:
                 reduce_centroid_shifts_kernel(centroid_shifts)
             )
 
-            pseudo_inertia, *_ = dpctl.tensor.asnumpy(
-                reduce_inertia_kernel(per_sample_pseudo_inertia)
-            )
+            if verbose:
+                # ???: verbosity comes at the cost of performance since it triggers
+                # computing exact inertia at each iteration. Shouldn't this be
+                # documented ?
+                inertia, *_ = dpctl.tensor.asnumpy(
+                    reduce_inertia_kernel(per_sample_inertia)
+                )
+                print(f"Iteration {n_iteration}, inertia {inertia}")
 
-            # TODO: should we drop this check ?
-            # (it should not be needed because we have theoritical guarantee that
-            # inertia decreases, if it doesn't it should only be because of rounding
-            # errors)
-            if pseudo_inertia < best_pseudo_inertia:
-                best_pseudo_inertia = pseudo_inertia
-                copyto_kernel(centroids_t, best_centroids_t)
+            # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
+            # and keep an additional copy of centroids that is updated only if the
+            # value of the pseudo_inertia is smaller than all the past values.
+            #
+            # (the check should not be needed because we have theoritical guarantee
+            # that inertia decreases, if it doesn't it should only be because of
+            # rounding errors ?)
+            #
+            # To this purpose this code could be inserted here:
+            #
+            # if pseudo_inertia < best_pseudo_inertia:
+            #     best_pseudo_inertia = pseudo_inertia
+            #     copyto_kernel(centroids_t, best_centroids_t)
+            #
+            # Note that what that is saved as "best centroid" is the array before the
+            # update, to which the pseudo inertia that is computed at this iteration
+            # refers. For this reason, this strategy is not compatible with sklearn
+            # unit tests, that consider new_centroids_t (the array after the update)
+            # to be the best centroids at  each iteration.
 
             centroids_t, new_centroids_t = (
                 new_centroids_t,
@@ -445,14 +445,25 @@ class KMeansDriver:
 
             n_iteration += 1
 
+        if verbose:
+            converged_at = n_iteration - 1
+            if centroid_shifts_sum == 0:  # NB: possible if tol = 0
+                print(f"Converged at iteration {converged_at}: strict convergence.")
+
+            elif centroid_shifts_sum <= tol:
+                print(
+                    f"Converged at iteration {converged_at}: center shift "
+                    f"{centroid_shifts_sum} within tolerance {tol}."
+                )
+
         # Finally, run an assignment kernel to compute the assignments to the best
         # centroids found, along with the exact inertia.
-        half_l2_norm_kernel(best_centroids_t, centroids_half_l2_norm)
-        reset_per_sample_inertia_kernel(per_sample_inertia)
+        half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
         fixed_window_assignment_kernel(
             X_t,
-            best_centroids_t,
+            sample_weight,
+            centroids_t,
             centroids_half_l2_norm,
             per_sample_inertia,
             assignments_idx,
@@ -466,8 +477,8 @@ class KMeansDriver:
         return (
             assignments_idx,
             inertia,
-            best_centroids_t.T,
-            n_iteration - 1,  # substract 1 to conform with vanilla sklearn count
+            centroids_t.T,
+            n_iteration,
             output_dtype,
         )
 
@@ -477,13 +488,12 @@ class KMeansDriver:
         sample_weight,
         centers,
     ):
-        labels = self._get_labels(X, sample_weight, centers)
+        labels = self._get_labels(X, centers)
         return dpctl.tensor.asnumpy(labels).astype(np.int32)
 
     def _get_labels(
         self,
         X,
-        sample_weight,
         centers,
     ):
         """This call is expected to accept the same inputs than
@@ -492,6 +502,7 @@ class KMeansDriver:
         """
         (
             X,
+            _,
             centers,
             compute_dtype,
             _,
@@ -499,7 +510,11 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers, sample_weight)
+        ) = self._check_inputs(
+            X,
+            sample_weight=_IgnoreSampleWeight,
+            cluster_centers=centers,
+        )
 
         # Create a set of kernels
         label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
@@ -520,7 +535,7 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, centroids_t = self._load_transposed_data_to_device(X, centers)
+        X_t, _, centroids_t = self._load_transposed_data_to_device(X, None, centers)
 
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
@@ -552,6 +567,7 @@ class KMeansDriver:
         """
         (
             X,
+            sample_weight,
             centers,
             compute_dtype,
             output_dtype,
@@ -559,7 +575,7 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, centers, sample_weight)
+        ) = self._check_inputs(X, sample_weight, centers)
 
         # Create a set of kernels
         compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
@@ -587,7 +603,9 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, centroids_t = self._load_transposed_data_to_device(X, centers)
+        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
+            X, sample_weight, centers
+        )
 
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
@@ -600,6 +618,7 @@ class KMeansDriver:
 
         compute_inertia_fixed_window_kernel(
             X_t,
+            sample_weight,
             centroids_t,
             centroids_half_l2_norm,
             per_sample_inertia,
@@ -622,9 +641,9 @@ class KMeansDriver:
         return dpctl.tensor.asnumpy(euclidean_distances).astype(output_dtype)
 
     def _get_euclidean_distances(self, X, Y):
-        # Input validation
         (
             X,
+            _,
             Y,
             compute_dtype,
             output_dtype,
@@ -632,7 +651,11 @@ class KMeansDriver:
             n_features,
             n_samples,
             n_clusters,
-        ) = self._check_inputs(X, Y, sample_weight=None)
+        ) = self._check_inputs(
+            X,
+            sample_weight=_IgnoreSampleWeight,
+            cluster_centers=Y,
+        )
 
         label_assignment_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
             n_samples,
@@ -652,7 +675,7 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, Y_t = self._load_transposed_data_to_device(X, Y)
+        X_t, _, Y_t = self._load_transposed_data_to_device(X, None, Y)
 
         Y_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
@@ -671,7 +694,7 @@ class KMeansDriver:
         )
         return euclidean_distances_t.T, output_dtype()
 
-    def _set_dtype(self, X, centers_init):
+    def _set_dtype(self, X, sample_weight, centers_init):
         input_dtype = output_dtype = np.dtype(X.dtype).type
         compute_dtype = np.dtype(self.dtype or input_dtype).type
         copy = True
@@ -701,7 +724,7 @@ class KMeansDriver:
         if copy:
             text += (
                 f" A copy of the data casted to type {compute_dtype} will be created. "
-                f"To save memory and prevent this warning, ensure that the dtype of "
+                f"To save memory and suppress this warning, ensure that the dtype of "
                 f"the input data matches the dtype required for computations."
             )
             warnings.warn(text, DataConversionWarning)
@@ -718,26 +741,37 @@ class KMeansDriver:
                 f"The centers have been passed with type {centers_init_dtype} but "
                 f"type {compute_dtype} is expected. A copy will be created with the "
                 f"correct type {compute_dtype}. Ensure that the centers are passed "
-                f"with the correct dtype to save memory and disable this warning.",
+                f"with the correct dtype to save memory and suppress this warning.",
                 DataConversionWarning,
             )
             centers_init = centers_init.astype(compute_dtype)
 
-        return X, centers_init, compute_dtype, output_dtype
-
-    def _check_inputs(self, X, cluster_centers, sample_weight):
-        if (sample_weight is not None) and ((sample_weight != sample_weight[0]).any()):
-            raise NotSupportedByEngineError(
-                "The sklearn_numba_dpex engine for KMeans does not support "
-                "non-uniform sample weights at this time, but it is a planned "
-                "feature. More information about the progress toward support is "
-                "available on the issue tracker at: "
-                "https://github.com/soda-inria/sklearn-numba-dpex/issues/22  ."
+        if (sample_weight is not _IgnoreSampleWeight) and (
+            sample_weight.dtype != compute_dtype
+        ):
+            warnings.warn(
+                f"sample_weight has been passed with type {sample_weight.dtype} but "
+                f"type {compute_dtype} is expected. A copy will be created with the "
+                f"correct type {compute_dtype}. Ensure that sample_weight is passed "
+                f"with the correct dtype to save memory and suppress this warning.",
+                DataConversionWarning,
             )
+            sample_weight = sample_weight.astype(compute_dtype)
 
-        X, cluster_centers, compute_dtype, output_dtype = self._set_dtype(
-            X, cluster_centers
-        )
+        return X, sample_weight, centers_init, compute_dtype, output_dtype
+
+    def _check_inputs(self, X, sample_weight, cluster_centers):
+
+        if sample_weight is None:
+            sample_weight = np.ones(len(X), dtype=(self.dtype or X.dtype))
+
+        (
+            X,
+            sample_weight,
+            cluster_centers,
+            compute_dtype,
+            output_dtype,
+        ) = self._set_dtype(X, sample_weight, cluster_centers)
 
         work_group_size = (
             self.work_group_size_multiplier * self.preferred_work_group_size_multiple
@@ -748,6 +782,7 @@ class KMeansDriver:
         n_clusters = cluster_centers.shape[0]
         return (
             X,
+            sample_weight,
             cluster_centers,
             compute_dtype,
             output_dtype,
@@ -757,7 +792,7 @@ class KMeansDriver:
             n_clusters,
         )
 
-    def _load_transposed_data_to_device(self, X, cluster_centers):
+    def _load_transposed_data_to_device(self, X, sample_weight, cluster_centers):
         # Transfer the input data to device memory,
         # TODO: let the user pass directly dpctl.tensor or dpnp arrays to avoid copies.
         if self.X_layout == "C":
@@ -777,4 +812,16 @@ class KMeansDriver:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
-        return X_t, dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
+
+        sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
+        cluster_centers = dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
+
+        return (
+            X_t,
+            sample_weight,
+            cluster_centers,
+        )
+
+
+class _IgnoreSampleWeight:
+    pass

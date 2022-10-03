@@ -33,8 +33,6 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
 def test_kmeans_same_results(dtype):
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 
-    # TODO: remove the manual monkey-patching and rely on engine registration
-    # once properly implemented.
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
