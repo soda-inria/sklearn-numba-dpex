@@ -240,7 +240,6 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
-            with_sample_weight=sample_weight is not None,
             return_inertia=bool(verbose),
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
@@ -255,7 +254,6 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
-            with_sample_weight=sample_weight is not None,
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
             centroids_window_height=self.centroids_window_height,
@@ -514,7 +512,7 @@ class KMeansDriver:
             n_clusters,
         ) = self._check_inputs(
             X,
-            sample_weight=None,
+            sample_weight=_IgnoreSampleWeight,
             cluster_centers=centers,
         )
 
@@ -584,7 +582,6 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
-            with_sample_weight=sample_weight is not None,
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
             centroids_window_height=self.centroids_window_height,
@@ -656,7 +653,7 @@ class KMeansDriver:
             n_clusters,
         ) = self._check_inputs(
             X,
-            sample_weight=None,
+            sample_weight=_IgnoreSampleWeight,
             cluster_centers=Y,
         )
 
@@ -749,7 +746,9 @@ class KMeansDriver:
             )
             centers_init = centers_init.astype(compute_dtype)
 
-        if sample_weight is not None and sample_weight.dtype != compute_dtype:
+        if (sample_weight is not _IgnoreSampleWeight) and (
+            sample_weight.dtype != compute_dtype
+        ):
             warnings.warn(
                 f"sample_weight has been passed with type {sample_weight.dtype} but "
                 f"type {compute_dtype} is expected. A copy will be created with the "
@@ -763,8 +762,8 @@ class KMeansDriver:
 
     def _check_inputs(self, X, sample_weight, cluster_centers):
 
-        if sample_weight is not None and not (sample_weight != sample_weight[0]).any():
-            sample_weight = None
+        if sample_weight is None:
+            sample_weight = np.ones(len(X), dtype=(self.dtype or X.dtype))
 
         (
             X,
@@ -814,11 +813,7 @@ class KMeansDriver:
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
 
-        if sample_weight is not None:
-            sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
-        else:
-            sample_weight = dpctl.tensor.empty(1, dtype=X.dtype, device=self.device)
-
+        sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
         cluster_centers = dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
 
         return (
@@ -826,3 +821,7 @@ class KMeansDriver:
             sample_weight,
             cluster_centers,
         )
+
+
+class _IgnoreSampleWeight:
+    pass

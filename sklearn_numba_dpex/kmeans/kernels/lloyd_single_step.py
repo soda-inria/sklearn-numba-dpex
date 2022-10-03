@@ -34,7 +34,6 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
-    with_sample_weight,
     return_inertia,
     preferred_work_group_size_multiple,
     global_mem_cache_size,
@@ -101,7 +100,6 @@ def make_lloyd_single_step_fixed_window_kernel(
         // n_cluster_bytes
     )
 
-    one = dtype(1.0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -119,7 +117,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     # fmt: off
     def fused_lloyd_single_step(
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
-        sample_weight,                     # IN READ-ONLY   (n_features,) if with_sample_weight else (1,)
+        sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
         per_sample_inertia,                # OUT            (n_samples,)
@@ -281,14 +279,11 @@ def make_lloyd_single_step_fixed_window_kernel(
         if sample_idx >= n_samples:
             return
 
-        if with_sample_weight:
-            weight = sample_weight[sample_idx]
+        weight = sample_weight[sample_idx]
 
         if return_inertia:
             inertia = min_sample_pseudo_inertia
-            inertia = X_l2_norm + (two * min_sample_pseudo_inertia)
-            if with_sample_weight:
-                inertia = inertia * weight
+            inertia = (X_l2_norm + (two * min_sample_pseudo_inertia)) * weight
             per_sample_inertia[sample_idx] = inertia
 
         # STEP 2: update centroids.
@@ -328,14 +323,14 @@ def make_lloyd_single_step_fixed_window_kernel(
         dpex.atomic.add(
             cluster_sizes_private_copies,
             (privatization_idx, min_idx),
-            weight if with_sample_weight else one
+            weight
         )
 
         for feature_idx in range(n_features):
             dpex.atomic.add(
                 new_centroids_t_private_copies,
                 (privatization_idx, feature_idx, min_idx),
-                X_t[feature_idx, sample_idx] * weight if with_sample_weight else X_t[feature_idx, sample_idx],
+                X_t[feature_idx, sample_idx] * weight,
             )
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return (

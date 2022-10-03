@@ -5,7 +5,6 @@ import numba_dpex as dpex
 
 from ._base_kmeans_kernel_funcs import (
     _make_initialize_window_kernel_funcs,
-    _make_update_closest_centroid_kernel_func,
     _make_accumulate_dot_products_kernel_func,
 )
 
