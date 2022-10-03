@@ -812,7 +812,7 @@ class KMeansDriver:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
-        if sample_weight is not _IgnoreSampleWeight:
+        if sample_weight is not None:
             sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
         cluster_centers = dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
 
