@@ -20,7 +20,7 @@
 # See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2004_intel_drivers
 #
 # TODO: make a custom build with other base images to test compatibility
-# with other OSes
+# with other OSes.
 ARG BASE_IMAGE_VERSION=latest-72882d570b860258739a83bc23609c6f6dd3002f
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
 
