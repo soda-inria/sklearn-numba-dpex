@@ -18,31 +18,20 @@ jobs:
     # NB: pushing on main and editing Deployment secrets edition is only accessible to
     # collaborators
     environment: Deployment
-    # NB: using the debug image of kaniko makes it easier because the shell access enables
-    # scripting the configuration of docker authentication.
-    # It seems that github actions make it possible to directly run a container entry point
-    # as a step and passing arguments like we would do when using `docker run` but this option is
-    # poorly documented for the moment and only suggested by externals resources
-    # like https://dev.to/mihinduranasinghe/using-docker-containers-in-jobs-github-actions-3eof
-    # TODO: with the appropriate workflow syntax, use the non-debug image of kaniko
-    container: gcr.io/kaniko-project/executor:debug
     steps:
       - name: Checkout code
-        # TODO: actions/checkout@v2 and actions/checkout@v3 does not work with busybox
-        # containers. Update when fixed. See:
-        # https://github.com/actions/checkout/issues/334
-        uses: actions/checkout@v1
+        uses: actions/checkout@v3
 
-      - name: create the docker auth file
-        env:
-          DOCKER_AUTH_CONFIG: ${{secrets.DOCKER_AUTH_CONFIG}}
-        run: mkdir -p /kaniko/.docker && echo ${DOCKER_AUTH_CONFIG} > /kaniko/.docker/config.json
-
-      # NB: currently the builds fail probably because of lack of storage on the runner
       - name: build and publish the docker image
         env:
           DOCKER_PUSH_URL: ${{secrets.DOCKER_PUSH_URL}}
+          DOCKER_PUSH_USERNAME: ${{secrets.DOCKER_PUSH_USERNAME}}
+          DOCKER_PUSH_PASSWORD: ${{secrets.DOCKER_PUSH_PASSWORD}}
         run: >-
-             /kaniko/executor --context $GITHUB_WORKSPACE
-             --dockerfile $GITHUB_WORKSPACE/docker/Dockerfile
-             --destination $DOCKER_PUSH_URL/numba_dpex_dev:latest
+             DOCKER_IMAGE_NAME=numba_dpex_dev
+             && DOCKER_IMAGE_TAG=latest
+             && DOCKER_IMAGE_REF=$DOCKER_PUSH_URL/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
+             && docker build $GITHUB_WORKSPACE/docker/Dockerbuild -t $DOCKER_IMAGE_REF
+             && docker login -u $DOCKER_PUSH_USERNAME -p $DOCKER_PUSH_PASSWORD
+             && docker push $DOCKER_IMAGE_REF
+             && docker logout
