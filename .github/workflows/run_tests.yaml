@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
       # TODO: replace development branch for engines in scikit learn with a fixed commit
       # commit when it's stable / remove this step when it's officially released

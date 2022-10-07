@@ -4,23 +4,22 @@
 #
 # The ARGs in the header of this file can be changed as needed (either by
 # editing the file or with the command line).
-# The build can be fairly long (up to one hour on low-end machines.)
+# The build can be fairly long (up to one hour on low-end machines).
 # To start a container, use e.g.:
 #
 #      sudo docker run --rm --name my_container -it -v /my/host/volume/:/mounted/volume --device=/dev/dri numba_dpex_dev
 #
 # The --device=/dev/dri option enables GPU passthrough (as long as the user
-# has permissions, e.g. by being a member of the video group)
+# has permissions, e.g. by being a member of the video group).
 #
 # The image is publicly available on dockerhub with the tag jjerphan/numba_dpex_dev:latest .
 
-# The `ubuntu2004_intel_drivers` ships an up-to-date installation of the
+# The `ubuntu2004_intel_drivers` base ships an up-to-date installation of the
 # intel runtime, including drivers and opencl and level_zero runtimes.
 #
 # See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2004_intel_drivers
 #
-# TODO: make a custom build with other base images to test compatibiliry
-# TODO: Automate and schedule the build of this image and the push to dockerhub.
+# TODO: make a custom build with other base images to test compatibility
 # with other OSes
 ARG BASE_IMAGE_VERSION=latest-72882d570b860258739a83bc23609c6f6dd3002f
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
@@ -34,7 +33,7 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # More about sycl docker image Dockerfiles: https://github.com/intel/llvm/tree/sycl/devops/containers
 # and https://github.com/intel/llvm/blob/sycl/sycl/doc/developer/DockerBKMs.md
 
-# FIXME: The base image is missing a package required for enabling the `level_zero` 
+# FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
 ARG L0_LOADER_DEB_VERSION=1.8.5
@@ -74,7 +73,7 @@ ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.2.0.262.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 
-# Some build steps requires a high enough version of cmake.
+# Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
 ARG CMAKE_VERSION=3.23

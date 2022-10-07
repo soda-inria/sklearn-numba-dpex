@@ -3,7 +3,7 @@ name: Build and push the dev docker image
 on:
   # triggers on push to the main branch if docker/Dockerfile has been modified
   # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#running-your-workflow-only-when-a-push-to-specific-branches-occurs
-  push: 
+  push:
     branches: main
     paths: docker/Dockerfile
   # also triggers every monday at midnight
@@ -15,27 +15,34 @@ jobs:
   build-and-push-dev-image:
     name: Build and push the development docker image using kaniko
     runs-on: ubuntu-latest
-    # NB: pushing on main and editing Deployment secrets edition is only accessible to 
+    # NB: pushing on main and editing Deployment secrets edition is only accessible to
     # collaborators
     environment: Deployment
-    # NB: using the debug image of kaniko makes it easier because the shell access enables 
-    # scripting the configuration of docker auth.
-    # It seems that github actions make it possible to directly run a container entry point 
+    # NB: using the debug image of kaniko makes it easier because the shell access enables
+    # scripting the configuration of docker authentication.
+    # It seems that github actions make it possible to directly run a container entry point
     # as a step and passing arguments like we would do when using `docker run` but this option is
     # poorly documented for the moment and only suggested by externals resources
     # like https://dev.to/mihinduranasinghe/using-docker-containers-in-jobs-github-actions-3eof
-    # TODO: using the appropriate syntax use the non-debug image of kaniko
+    # TODO: with the appropriate workflow syntax, use the non-debug image of kaniko
     container: gcr.io/kaniko-project/executor:debug
     steps:
+      - name: Checkout code
+        # TODO: actions/checkout@v2 and actions/checkout@v3 does not work with busybox
+        # containers. Update when fixed. See:
+        # https://github.com/actions/checkout/issues/334
+        uses: actions/checkout@v1
+
       - name: create the docker auth file
-        env: 
+        env:
           DOCKER_AUTH_CONFIG: ${{secrets.DOCKER_AUTH_CONFIG}}
-        run: mkdir -p /kaniko/.docker && cat ${DOCKER_AUTH_CONFIG} > /kaniko/.docker/config.json
-        
+        run: mkdir -p /kaniko/.docker && echo ${DOCKER_AUTH_CONFIG} > /kaniko/.docker/config.json
+
+      # NB: currently the builds fail probably because of lack of storage on the runner
       - name: build and publish the docker image
-        env: 
+        env:
           DOCKER_PUSH_URL: ${{secrets.DOCKER_PUSH_URL}}
         run: >-
-             /kaniko/executor --context ${GITHUB_WORKSPACE} 
-             --dockerfile ${GITHUB_WORKSPACE}/docker/Dockerfile 
-             --destination ${DOCKER_PUSH_URL}/numba_dpex_dev:latest
+             /kaniko/executor --context $GITHUB_WORKSPACE
+             --dockerfile $GITHUB_WORKSPACE/docker/Dockerfile
+             --destination $DOCKER_PUSH_URL/numba_dpex_dev:latest
