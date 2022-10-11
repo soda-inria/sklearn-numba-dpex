@@ -156,7 +156,7 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
     && rm -Rf $TMPDIR/*
 
 
-FROM l0_base AS base_config
+FROM oneapi_dpcpp_binaries_installer AS base_config
 ARG ONEAPI_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
@@ -343,10 +343,8 @@ RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-ARG ONEAPI_INSTALL_DIR
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
-COPY --from=oneapi_dpcpp_binaries_installer $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
 
 
 # Install the 3 packages and the spirv-tools binaries and headers
