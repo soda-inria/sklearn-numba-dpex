@@ -31,7 +31,7 @@ jobs:
              DOCKER_IMAGE_NAME=numba_dpex_dev
              && DOCKER_IMAGE_TAG=latest
              && DOCKER_IMAGE_REF=$DOCKER_PUSH_URL/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
-             && docker build $GITHUB_WORKSPACE/docker -t $DOCKER_IMAGE_REF
+             && DOCKER_BUILDKIT=1 docker build $GITHUB_WORKSPACE/docker -t $DOCKER_IMAGE_REF --no-cache
              && docker login -u $DOCKER_PUSH_USERNAME -p $DOCKER_PUSH_PASSWORD
              && docker push $DOCKER_IMAGE_REF
              && docker logout

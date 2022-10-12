@@ -128,7 +128,7 @@ A docker image is available and provides an up-to-date, one-command install envi
 
 ```
 $ cd docker
-$ docker build . -t my_tag
+$ DOCKER_BUILDKIT=1 docker build . -t my_tag
 ```
 
 or pull the docker image from [this publicly available repository](https://hub.docker.com/repository/docker/jjerphan/numba_dpex_dev):

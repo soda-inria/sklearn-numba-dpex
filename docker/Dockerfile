@@ -1,6 +1,9 @@
+# syntax=docker/dockerfile:1.3
+# NB: at least 1.3 is needed to benefit from ARG expansion in bind mount arguments
+
 # This Dockerfile can be built from scratch with e.g. the command
 #
-#     docker build . -t numba_dpex_dev
+#     DOCKER_BUILDKIT=1 docker build . -t numba_dpex_dev
 #
 # The ARGs in the header of this file can be changed as needed (either by
 # editing the file or with the command line).
@@ -21,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-72882d570b860258739a83bc23609c6f6dd3002f
+ARG BASE_IMAGE_VERSION=latest-f3cc5b196af0d6f69df8c67543f160bb73425b5a
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -36,7 +39,7 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
-ARG L0_LOADER_DEB_VERSION=1.8.5
+ARG L0_LOADER_DEB_VERSION=1.8.8
 ARG L0_LOADER_DEB_PLATFORM=u18.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
@@ -68,15 +71,15 @@ ARG PYTHON_VERSION=3.9.13
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/18673
-ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.2.0.262.sh
+ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/18852
+ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.3.0.8767.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
-ARG CMAKE_VERSION=3.23
+ARG CMAKE_VERSION=3.24
 ARG CMAKE_VERSION_BUILD=2
 
 
@@ -85,7 +88,7 @@ ARG CMAKE_VERSION_BUILD=2
 ARG DPCTL_GIT_BRANCH=0.13.0
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.10.1
+ARG DPNP_GIT_BRANCH=0.10.2
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
@@ -156,7 +159,7 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
     && rm -Rf $TMPDIR/*
 
 
-FROM oneapi_dpcpp_binaries_installer AS base_config
+FROM l0_base AS base_config
 ARG ONEAPI_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
@@ -262,7 +265,6 @@ RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         scikit-build${SCIKIT_BUILD_VERSION} \
     && pip cache purge
 # install the oneapi devel environment
-COPY --from=oneapi_devel_installer $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
 ENV CMAKE_GENERATOR="Ninja"
 
 
@@ -276,7 +278,8 @@ ARG DPCTL_GIT_BRANCH
 ARG DPCTL_GIT_URL
 ARG DPCTL_BUILD_DIR=$TMPDIR/dpctl
 ARG SKBUILD_ARGS="-- -DCMAKE_C_COMPILER:PATH=icx -DCMAKE_CXX_COMPILER:PATH=icpx"
-RUN mkdir -p $DPCTL_BUILD_DIR \
+RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
+    mkdir -p $DPCTL_BUILD_DIR \
     && cd $DPCTL_BUILD_DIR \
     && git clone --recursive -b $DPCTL_GIT_BRANCH --depth 1 $DPCTL_GIT_URL . \
     && source $ONEAPI_INSTALL_DIR/setvars.sh \
@@ -296,8 +299,9 @@ ARG DPNP_BUILD_DIR=$TMPDIR/dpnp
 ARG DPNP_GIT_BRANCH
 ARG DPNP_GIT_URL
 ARG DPNP_DEBUG=1
-COPY --from=dpctl_builder $TMPDIR/dpctl*.whl $TMPDIR
-RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL $TMPDIR/dpctl*.whl \
+RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
+    --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
+    pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL $TMPDIR/dpctl/dpctl*.whl \
     && pip cache purge \
     && mkdir -p $DPNP_BUILD_DIR \
     && cd $DPNP_BUILD_DIR \
@@ -322,10 +326,11 @@ ARG NUMBA_DPEX_GIT_BRANCH
 ARG NUMBA_DPEX_GIT_URL
 ARG INTEL_PYPI_URL
 ARG BASE_PYPI_URL
-COPY --from=dpctl_builder $TMPDIR/dpctl*.whl $TMPDIR
-COPY --from=dpnp_builder $TMPDIR/dpnp*.whl $TMPDIR
-RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
-        $TMPDIR/dpctl*.whl $TMPDIR/dpnp*.whl \
+RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
+    --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
+    --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
+    pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
+        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
     && pip cache purge \
     && mkdir -p $NUMBA_DPEX_BUILD_DIR \
     && cd $NUMBA_DPEX_BUILD_DIR \
@@ -343,12 +348,13 @@ RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
+COPY --from=oneapi_dpcpp_binaries_installer  $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 
 
 # Install the 3 packages and the spirv-tools binaries and headers
-FROM runtime_environment AS numba_dpex_dev_installer
+FROM runtime_environment AS numba_dpex_dev
 ARG TMPDIR
 ARG INTEL_PYPI_URL
 ARG BASE_PYPI_URL
@@ -356,22 +362,20 @@ ARG INTEL_NUMPY_VERSION
 ARG INTEL_SCIPY_VERSION
 ARG INTEL_NUMBA_VERSION
 ARG PACKAGING_VERSION
-COPY --from=dpctl_builder $TMPDIR/dpctl*.whl $TMPDIR
-COPY --from=dpnp_builder $TMPDIR/dpnp*.whl $TMPDIR
-COPY --from=numba_dpex_builder $TMPDIR/numba_dpex*.whl $TMPDIR
-RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
+RUN --mount=type=tmpfs,target=$TMPDIR \
+    --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
+    --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
+    --mount=type=bind,target=$TMPDIR/numba_dpex,source=$TMPDIR,from=numba_dpex_builder \
+    pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
-        "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl*.whl $TMPDIR/dpnp*.whl \
-        $TMPDIR/numba_dpex*.whl packaging${PACKAGING_VERSION} \
+        "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
+        $TMPDIR/numba_dpex/numba_dpex*.whl packaging${PACKAGING_VERSION} \
         # HACK this package is not in the dependency tree of any of the top
         # packages but probably should, in the meantime we add it manually
         mkl-dpcpp \
     && pip cache purge
-
-FROM runtime_environment AS numba_dpex_dev
-COPY --from=numba_dpex_dev_installer $VIRTUAL_ENV $VIRTUAL_ENV
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         spirv-tools spirv-headers \
     && rm -Rf /var/lib/apt/lists/*
