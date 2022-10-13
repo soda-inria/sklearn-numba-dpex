@@ -38,7 +38,6 @@ def make_relocate_empty_clusters_kernel(
     global_size = n_work_items_for_cluster * n_relocated_clusters
 
     n_selected_gt_threshold = n_selected_gt_threshold - 1
-
     zero = dtype(0.0)
 
     @dpex.kernel
@@ -71,23 +70,30 @@ def make_relocate_empty_clusters_kernel(
         new_location_previous_assignment = assignments_idx[new_location_X_idx]
 
         new_centroid_value = X_t[feature_idx, new_location_X_idx]
-        X_centroid_addend = new_centroid_value
         new_location_weight = sample_weight[new_location_X_idx]
-        X_centroid_addend *= new_location_weight
+        X_centroid_addend = new_centroid_value * new_location_weight
 
         # Cancel the contribution to the updated centroids of the sample that was once
-        # assigned to  new_location_previous_assignment but is now assigned to the
+        # assigned to new_location_previous_assignment but is now assigned to the
         # cluster of the centroids that relocates to this sample
-        centroids_t[feature_idx, new_location_previous_assignment] -= X_centroid_addend
+        dpex.atomic.sub(
+            centroids_t,
+            (feature_idx, new_location_previous_assignment),
+            X_centroid_addend
+            )
 
         # The relocated centroid has only one contribution now, which is the sample
         # to which it has been relocated to
         centroids_t[feature_idx, relocated_cluster_idx] = new_centroid_value
 
         # Likewise, we update the weights in the clusters
-        if feature_idx == 0:
+        if feature_idx == zero:
             per_sample_inertia[new_location_X_idx] = zero
-            cluster_sizes[new_location_previous_assignment] -= new_location_weight
+            dpex.atomic.sub(
+                cluster_sizes,
+                new_location_previous_assignment,
+                new_location_weight
+            )
             cluster_sizes[relocated_cluster_idx] = new_location_weight
 
     return relocate_empty_clusters[global_size, work_group_size]
@@ -107,7 +113,7 @@ def make_select_samples_far_from_centroid_kernel(
     # fmt: off
     def select_samples_far_from_centroid(
             distance_to_centroid,           # IN       (n_samples,)
-            selected_samples_idx,           # IN       (n_samples,)
+            selected_samples_idx,           # OUT      (n_samples,)
             n_selected_gt_threshold,        # OUT      (1, )
             n_selected_eq_threshold,        # OUT      (1, )
         ):
@@ -147,6 +153,7 @@ def make_select_samples_far_from_centroid_kernel(
                 one
                 )
             selected_samples_idx[selected_idx] = sample_idx
+            return
 
         selected_idx = -dpex.atomic.add(
             n_selected_eq_threshold,

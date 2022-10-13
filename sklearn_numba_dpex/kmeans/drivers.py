@@ -449,7 +449,6 @@ class KMeansDriver:
                     work_group_size,
                     compute_dtype,
                 )
-
             broadcast_division_kernel(new_centroids_t, cluster_sizes)
 
             compute_centroid_shifts_kernel(
@@ -551,7 +550,6 @@ class KMeansDriver:
         work_group_size,
         compute_dtype,
     ):
-
         # NB: partition/argpartition kernels are hard to implement right, we use dpnp
         # implementation of `partition` and process to an additional pass on the data
         # to finish the argpartition.
