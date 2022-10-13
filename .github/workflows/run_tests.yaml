@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
       # TODO: replace development branch for engines in scikit learn with a fixed commit
       # commit when it's stable / remove this step when it's officially released
@@ -36,4 +36,4 @@ jobs:
       # to rely on order in case of equality.
       # Until then this test is disabled but similar tests are internalized in
       # sklearn_numba_dpex.
-      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+      run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means -k "not test_kmeans_relocated_clusters"

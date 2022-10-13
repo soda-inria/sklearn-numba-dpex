@@ -30,7 +30,6 @@ def make_relocate_empty_clusters_kernel(
     n_relocated_clusters,
     n_features,
     n_selected_gt_threshold,
-    with_sample_weight,
     work_group_size,
     dtype,
 ):
@@ -41,8 +40,6 @@ def make_relocate_empty_clusters_kernel(
     n_selected_gt_threshold = n_selected_gt_threshold - 1
 
     zero = dtype(0.0)
-    if not with_sample_weight:
-        one = dtype(1.0)
 
     @dpex.kernel
     # fmt: off
@@ -75,9 +72,8 @@ def make_relocate_empty_clusters_kernel(
 
         new_centroid_value = X_t[feature_idx, new_location_X_idx]
         X_centroid_addend = new_centroid_value
-        if with_sample_weight:
-            new_location_weight = sample_weight[new_location_X_idx]
-            X_centroid_addend *= new_location_weight
+        new_location_weight = sample_weight[new_location_X_idx]
+        X_centroid_addend *= new_location_weight
 
         # Cancel the contribution to the updated centroids of the sample that was once
         # assigned to  new_location_previous_assignment but is now assigned to the
@@ -91,12 +87,8 @@ def make_relocate_empty_clusters_kernel(
         # Likewise, we update the weights in the clusters
         if feature_idx == 0:
             per_sample_inertia[new_location_X_idx] = zero
-            if with_sample_weight:
-                cluster_sizes[new_location_previous_assignment] -= new_location_weight
-                cluster_sizes[relocated_cluster_idx] = new_location_weight
-            else:
-                cluster_sizes[new_location_previous_assignment] -= one
-                cluster_sizes[relocated_cluster_idx] = one
+            cluster_sizes[new_location_previous_assignment] -= new_location_weight
+            cluster_sizes[relocated_cluster_idx] = new_location_weight
 
     return relocate_empty_clusters[global_size, work_group_size]
 

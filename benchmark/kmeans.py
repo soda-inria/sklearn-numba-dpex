@@ -1,9 +1,11 @@
 from time import perf_counter
+from inspect import signature
 
 import numpy as np
 import sklearn
 from numpy.testing import assert_array_equal
 from sklearn.cluster import KMeans
+from sklearn.exceptions import NotSupportedByEngineError
 
 
 # TODO: maybe this class could be abstracted to use the same strategy with other
@@ -35,12 +37,19 @@ class KMeansLloydTimeit:
         max_iter,
         skip_slow=False,
         run_consistency_checks=True,
+        **data_initialization_kwargs,
     ):
         (
             self.X,
-            self.sample_weight,
+            self.sample_weight_,
             self.centers_init,
-        ) = data_initialization_fn()
+        ) = data_initialization_fn(**data_initialization_kwargs)
+
+        self.sample_weight = data_initialization_kwargs.get(
+            "sample_weight",
+            signature(data_initialization_fn).parameters["sample_weight"].default,
+        )
+
         self.max_iter = max_iter
         self.run_consistency_checks = run_consistency_checks
         self.results = None
@@ -67,7 +76,7 @@ class KMeansLloydTimeit:
         centers_init = self.centers_init.copy()
         X = self.X.copy()
         sample_weight = (
-            None if self.sample_weight is None else self.sample_weight.copy()
+            None if self.sample_weight_ is None else self.sample_weight_.copy()
         )
 
         est_kwargs = dict(
@@ -85,14 +94,22 @@ class KMeansLloydTimeit:
 
         estimator = KMeans(**est_kwargs)
 
-        print(f"Running {name} with parameters max_iter={max_iter} tol={tol} ...")
+        print(
+            f"Running {name} with parameters sample_weight={self.sample_weight} "
+            f"n_clusters={n_clusters} data_shape={X.shape} max_iter={max_iter} "
+            "tol={tol} ..."
+        )
 
         with sklearn.config_context(engine_provider=engine_provider):
 
             # dry run, to be fair for JIT implementations
-            KMeans(**est_kwargs).set_params(max_iter=1).fit(
-                X, sample_weight=sample_weight
-            )
+            try:
+                KMeans(**est_kwargs).set_params(max_iter=1).fit(
+                    X, sample_weight=sample_weight
+                )
+            except NotSupportedByEngineError as e:
+                print((repr(e) + "\n"))
+                return
 
             t0 = perf_counter()
             estimator.fit(X, sample_weight=sample_weight)
@@ -154,6 +171,7 @@ if __name__ == "__main__":
     # TODO: expose CLI args.
 
     random_state = 123
+    sample_weight = "random"  # None, "unary", or "random"
     n_clusters = 127
     max_iter = 100
     tol = 0
@@ -163,7 +181,11 @@ if __name__ == "__main__":
     # close results but with significant differences for a few elements.
     run_consistency_checks = False
 
-    def benchmark_data_initialization(random_state=random_state, n_clusters=n_clusters):
+    def benchmark_data_initialization(
+        random_state,
+        n_clusters,
+        sample_weight,
+    ):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True, parser="auto")
         X = X.astype(dtype)
         scaler_x = MinMaxScaler()
@@ -174,10 +196,29 @@ if __name__ == "__main__":
         # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
         init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
-        return X, None, init
+
+        if sample_weight is None:
+            pass
+        elif sample_weight == "unary":
+            sample_weight = np.ones(len(X), dtype=dtype)
+        elif sample_weight == "random":
+            sample_weight = rng.random(size=len(X)).astype(dtype)
+        else:
+            raise ValueError(
+                'Expected sample_weight in {None, "unary", "random"}, got'
+                f" {sample_weight} instead."
+            )
+
+        return X, sample_weight, init
 
     kmeans_timer = KMeansLloydTimeit(
-        benchmark_data_initialization, max_iter, skip_slow, run_consistency_checks
+        benchmark_data_initialization,
+        max_iter,
+        skip_slow,
+        run_consistency_checks,
+        random_state=random_state,
+        n_clusters=n_clusters,
+        sample_weight=sample_weight,
     )
 
     kmeans_timer.timeit(
@@ -199,10 +240,12 @@ if __name__ == "__main__":
         kmeans_timer.timeit(
             name="daal4py lloyd GPU",
             engine_provider="sklearn_numba_dpex",
-            is_sloww=True,
+            is_slow=True,
         )
 
-    for multiplier in [1, 2, 4, 8]:
+    work_group_size_multipliers = [1, 2, 4, 8]
+
+    for multiplier in work_group_size_multipliers:
 
         with override_attr_context(
             KMeansEngine,

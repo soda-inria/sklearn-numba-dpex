@@ -1,0 +1,37 @@
+name: Build and push the dev docker image
+
+on:
+  # triggers on push to the main branch if docker/Dockerfile has been modified
+  # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#running-your-workflow-only-when-a-push-to-specific-branches-occurs
+  push:
+    branches: main
+    paths: docker/Dockerfile
+  # also triggers every monday at midnight
+  # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
+  schedule:
+    - cron: '00 00 * * 1'
+
+jobs:
+  build-and-push-dev-image:
+    name: Build and push the development docker image
+    runs-on: ubuntu-latest
+    # NB: pushing on main and editing Deployment secrets edition is only accessible to
+    # collaborators
+    environment: Deployment
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: build and publish the docker image
+        env:
+          DOCKER_PUSH_URL: ${{secrets.DOCKER_PUSH_URL}}
+          DOCKER_PUSH_USERNAME: ${{secrets.DOCKER_PUSH_USERNAME}}
+          DOCKER_PUSH_PASSWORD: ${{secrets.DOCKER_PUSH_PASSWORD}}
+        run: >-
+             DOCKER_IMAGE_NAME=numba_dpex_dev
+             && DOCKER_IMAGE_TAG=latest
+             && DOCKER_IMAGE_REF=$DOCKER_PUSH_URL/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
+             && DOCKER_BUILDKIT=1 docker build $GITHUB_WORKSPACE/docker -t $DOCKER_IMAGE_REF --no-cache
+             && docker login -u $DOCKER_PUSH_USERNAME -p $DOCKER_PUSH_PASSWORD
+             && docker push $DOCKER_IMAGE_REF
+             && docker logout

@@ -33,5 +33,4 @@ __all__ = (
     "make_broadcast_division_1d_2d_kernel",
     "make_half_l2_norm_2d_axis0_kernel",
     "make_sum_reduction_1d_kernel",
-    "make_argpartition_from_partition_kernel",
 )

@@ -12,6 +12,22 @@ from sklearn.utils._testing import assert_allclose
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
 
+_DEVICE = dpctl.SyclDevice()
+_DEVICE_NAME = _DEVICE.name
+_SUPPORTED_DTYPE = [np.float32]
+
+if _DEVICE.has_aspect_fp64:
+    _SUPPORTED_DTYPE.append(np.float64)
+
+
+def _fail_if_no_dtype_support(xfail_fn, dtype):
+    if dtype not in _SUPPORTED_DTYPE:
+        xfail_fn(
+            f"The default device {_DEVICE_NAME} does not have support for "
+            "float64 operations."
+        )
+
+
 def test_dpnp_implements_argpartition():
     # Detect if dpnp exposes an argpartition kernel and alert that sklearn-numba-dpex
     # can be adapted accordingly.
@@ -23,6 +39,7 @@ def test_dpnp_implements_argpartition():
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_kmeans_same_results(dtype):
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
