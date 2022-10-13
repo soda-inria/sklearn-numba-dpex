@@ -88,7 +88,7 @@ ARG CMAKE_VERSION_BUILD=2
 ARG DPCTL_GIT_BRANCH=0.13.0
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.10.2
+ARG DPNP_GIT_BRANCH=0.10.1
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
@@ -348,7 +348,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-COPY --from=oneapi_dpcpp_binaries_installer  $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
+COPY --from=oneapi_dpcpp_binaries_installer $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 
