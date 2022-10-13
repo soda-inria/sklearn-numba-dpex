@@ -84,7 +84,7 @@ def make_relocate_empty_clusters_kernel(
 
         # The relocated centroid has only one contribution now, which is the sample
         # to which it has been relocated to
-        centroids_t[feature_idx, relocated_cluster_idx] = new_centroid_value
+        centroids_t[feature_idx, relocated_cluster_idx] = X_centroid_addend
 
         # Likewise, we update the weights in the clusters
         if feature_idx == zero:

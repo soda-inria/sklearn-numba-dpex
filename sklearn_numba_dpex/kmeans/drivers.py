@@ -236,6 +236,8 @@ class KMeansDriver:
         ) = self._check_inputs(X, sample_weight, centers_init)
 
         verbose = bool(verbose)
+        use_uniform_weights = (sample_weight == sample_weight[0]).all()
+        verbose_and_use_uniform_weights = verbose and use_uniform_weights
 
         # Create a set of kernels
         (
@@ -266,8 +268,19 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        if verbose:
+        if verbose_and_use_uniform_weights:
             label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
+                n_samples,
+                n_features,
+                n_clusters,
+                preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+                centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+                centroids_window_height=self.centroids_window_height,
+                work_group_size=work_group_size,
+                dtype=compute_dtype,
+            )
+        elif verbose:
+            compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
                 n_samples,
                 n_features,
                 n_clusters,
@@ -415,9 +428,10 @@ class KMeansDriver:
                 # at the cost of an additional pass on data, rather than computing
                 # inertia by default during the first pass on data in case there's an
                 # empty cluster.
-                if verbose:
-                    # if verbose, inertia already has been computed in the main kernel
-                    # we only need to compute assignments
+                if verbose_and_use_uniform_weights:
+                    # if verbose and if sample_weight is uniform, distances to closest
+                    # centroids already have been computed in the main kernel we only
+                    # need to compute assignments
                     label_assignment_fixed_window_kernel(
                         X_t,
                         centroids_t,
@@ -425,7 +439,7 @@ class KMeansDriver:
                         assignments_idx,
                     )
                 else:
-                    # else, compute inertia + assignments
+                    # else, compute distances + assignments
                     fixed_window_assignment_kernel(
                         X_t,
                         dpctl.tensor.ones_like(sample_weight),
@@ -449,6 +463,16 @@ class KMeansDriver:
                     work_group_size,
                     compute_dtype,
                 )
+
+                if verbose_and_use_uniform_weights:
+                    compute_inertia_fixed_window_kernel(
+                        X_t,
+                        sample_weight,
+                        centroids_t,
+                        centroids_half_l2_norm,
+                        per_sample_inertia,
+                    )
+
             broadcast_division_kernel(new_centroids_t, cluster_sizes)
 
             compute_centroid_shifts_kernel(
