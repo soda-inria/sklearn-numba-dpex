@@ -1,10 +1,7 @@
-import inspect
-
-import dpctl
 import numpy as np
+import dpnp
 import pytest
-import warnings
-from numpy.random import default_rng
+import dpctl
 from numpy.testing import assert_array_equal
 from sklearn import config_context
 from sklearn.base import clone
@@ -12,27 +9,20 @@ from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
-
-_DEVICE = dpctl.SyclDevice()
-_DEVICE_NAME = _DEVICE.name
-_SUPPORTED_DTYPE = [np.float32]
-
-if _DEVICE.has_aspect_fp64:
-    _SUPPORTED_DTYPE.append(np.float64)
+from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
 
-def _fail_if_no_dtype_support(xfail_fn, dtype):
-    if dtype not in _SUPPORTED_DTYPE:
-        xfail_fn(
-            f"The default device {_DEVICE_NAME} does not have support for "
-            "float64 operations."
-        )
+def test_dpnp_implements_argpartition():
+    # Detect if dpnp exposes an argpartition kernel and alert that sklearn-numba-dpex
+    # can be adapted accordingly.
+    assert not hasattr(dpnp, "argpartition"), (
+        "An argpartition function is now available in dpnp, it should now be used in "
+        "place of dpnp.partition in sklearn_numba_dpex.kmeans.drivers ."
+    )
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_kmeans_same_results(dtype):
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
-
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
@@ -86,3 +76,66 @@ def test_kmeans_same_results(dtype):
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.transform(X)
     assert_allclose(y_transform, y_transform_engine)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_kmeans_relocated_clusters(dtype):
+    """Copied and adapted from sklearn's unit tests"""
+    # check that empty clusters are relocated as expected
+    X = np.array([[0, 0], [0.5, 0], [0.5, 1], [1, 1]], dtype=dtype)
+
+    # second center too far from others points will be empty at first iter
+    init_centers = np.array([[0.5, 0.5], [3, 3]], dtype=dtype)
+
+    kmeans = KMeans(n_clusters=2, n_init=1, init=init_centers)
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        kmeans.fit(X)
+
+    expected_n_iter = 3
+    expected_inertia = 0.25
+    assert_allclose(kmeans.inertia_, expected_inertia)
+    assert kmeans.n_iter_ == expected_n_iter
+
+    try:
+        expected_labels = [0, 0, 1, 1]
+        expected_centers = [[0.25, 0], [0.75, 1]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)
+    except AssertionError:
+        expected_labels = [1, 1, 0, 0]
+        expected_centers = [[0.25, 0], [0.75, 1]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_kmeans_relocated_clusters_2(dtype):
+    """Copied and adapted from sklearn's unit tests"""
+
+    # Synthetic dataset with 3 obvious clusters of different sizes
+    X = np.array([-10.0, -9.5, -9, -8.5, -8, -1, 1, 9, 9.5, 10], dtype=dtype).reshape(
+        -1, 1
+    )
+    # centers all initialized to the first point of X
+    # With this initialization, all points will be assigned to the first center
+    init_centers = np.array([-10.0, -10, -10]).reshape(-1, 1)
+
+    kmeans = KMeans(n_clusters=2, n_init=1, n_iter=1, init=init_centers)
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        kmeans.fit(X)
+
+    expected_n_iter = 3
+    expected_inertia = 0.25
+    assert_allclose(kmeans.inertia_, expected_inertia)
+    assert kmeans.n_iter_ == expected_n_iter
+
+    try:
+        expected_labels = [0, 0, 1, 1]
+        expected_centers = [[0.25, 0], [0.75, 1]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)
+    except AssertionError:
+        expected_labels = [1, 1, 0, 0]
+        expected_centers = [[0.25, 0], [0.75, 1]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)

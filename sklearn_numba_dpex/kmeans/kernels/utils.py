@@ -27,11 +27,18 @@ import numba_dpex as dpex
 
 @lru_cache
 def make_relocate_empty_clusters_kernel(
-    n_relocated_clusters, n_features, with_sample_weight, work_group_size, dtype
+    n_relocated_clusters,
+    n_features,
+    n_selected_gt_threshold,
+    with_sample_weight,
+    work_group_size,
+    dtype,
 ):
     n_work_groups_for_cluster = math.ceil(n_features / work_group_size)
     n_work_items_for_cluster = n_work_groups_for_cluster * work_group_size
     global_size = n_work_items_for_cluster * n_relocated_clusters
+
+    n_selected_gt_threshold = n_selected_gt_threshold - 1
 
     zero = dtype(0.0)
     if not with_sample_weight:
@@ -50,6 +57,10 @@ def make_relocate_empty_clusters_kernel(
         cluster_sizes               # INOUT          (n_clusters,)
             ):
     # fmt: on
+        """NB: because of how the array was created, samples_far_from_center values
+        are located between (n_selected_gt_threshold - relocated_idx) and
+        (relocated_idx) indices.
+        """
         group_idx = dpex.get_group_id(0)
         item_idx = dpex.get_local_id(0)
         relocated_idx = group_idx // n_work_groups_for_cluster
@@ -59,7 +70,7 @@ def make_relocate_empty_clusters_kernel(
             return
 
         relocated_cluster_idx = empty_clusters_list[relocated_idx]
-        new_location_X_idx = samples_far_from_center[relocated_idx]
+        new_location_X_idx = samples_far_from_center[n_selected_gt_threshold - relocated_idx]
         new_location_previous_assignment = assignments_idx[new_location_X_idx]
 
         new_centroid_value = X_t[feature_idx, new_location_X_idx]
@@ -88,6 +99,71 @@ def make_relocate_empty_clusters_kernel(
                 cluster_sizes[relocated_cluster_idx] = one
 
     return relocate_empty_clusters[global_size, work_group_size]
+
+
+@lru_cache
+def make_select_samples_far_from_centroid_kernel(
+    threshold, n_selected, n_samples, work_group_size
+):
+    global_size = math.ceil(n_selected / work_group_size) * work_group_size
+    zero = np.int64(0)
+    one = np.int32(1)
+    max_n_selected_gt_threshold = np.int32(n_selected - 1)
+    min_selected_eq_threshold = np.int32(2)
+
+    @dpex.kernel
+    # fmt: off
+    def select_samples_far_from_centroid(
+            distance_to_centroid,           # IN       (n_samples,)
+            selected_samples_idx,           # IN       (n_samples,)
+            n_selected_gt_threshold,        # OUT      (1, )
+            n_selected_eq_threshold,        # OUT      (1, )
+        ):
+    # fmt: on
+        """This kernel writes in selected_samples_idx the idx of the top n_selected
+        items in distance_to_centroid with highest values.
+
+        threshold is expected to have been pre-computed (by partitioning) such that
+        there are at most (n_selected-1) values that are strictly greater than
+        threshold, and at least n_selected values that are greater or equal than
+        threshold.
+
+        Because the exact number of values strictly equal to the threshold is not known
+        and that the goal is to select the top n_selected greater items above threshold,
+        we write indices of values strictly greater than threshold at the beginning of
+        the array, and indices of values equal to threshold at the end of the array.
+        """
+
+        sample_idx = dpex.get_global_id(0)
+        if sample_idx >= n_samples:
+            return
+
+        n_selected_gt_threshold_ = n_selected_gt_threshold[zero]
+        n_selected_eq_threshold_ = n_selected_eq_threshold[zero]
+        if ((n_selected_gt_threshold_ == max_n_selected_gt_threshold)
+            and (n_selected_eq_threshold_ == min_selected_eq_threshold)):
+            return
+
+        distance_to_centroid_ = distance_to_centroid[sample_idx]
+        if distance_to_centroid_ < threshold:
+            return
+
+        if distance_to_centroid_ > threshold:
+            selected_idx = dpex.atomic.add(
+                n_selected_gt_threshold,
+                zero,
+                one
+                )
+            selected_samples_idx[selected_idx] = sample_idx
+
+        selected_idx = -dpex.atomic.add(
+            n_selected_eq_threshold,
+            zero,
+            one
+            )
+        selected_samples_idx[selected_idx] = sample_idx
+
+    return select_samples_far_from_centroid[global_size, work_group_size]
 
 
 @lru_cache
@@ -150,7 +226,7 @@ def make_reduce_centroid_data_kernel(
         cluster_sizes,                 # OUT     (n_clusters,)
         centroids_t,                   # OUT     (n_features, n_clusters)
         empty_clusters_list,           # OUT     (n_clusters,)
-        nb_empty_clusters,             # OUT     (1,)
+        n_empty_clusters,              # OUT     (1,)
     ):
     # fmt: on
 
@@ -178,10 +254,10 @@ def make_reduce_centroid_data_kernel(
 
             # register empty clusters
             if sum_ == zero:
-                current_nb_empty_clusters = dpex.atomic.add(
-                    nb_empty_clusters, l_zero, i_one
+                current_n_empty_clusters = dpex.atomic.add(
+                    n_empty_clusters, l_zero, i_one
                 )
-                empty_clusters_list[current_nb_empty_clusters] = cluster_idx
+                empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
     return reduce_centroid_data[global_size, work_group_size]
 
@@ -342,13 +418,13 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
             local_data[local_work_id] = summands[augend_idx] + summands[addend_idx]
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-        current_nb_work_items = work_group_size
+        current_n_work_items = work_group_size
         for i in range(local_n_iterations - 1):
             # We discard half of the remaining active work items at each iteration
-            current_nb_work_items = current_nb_work_items // 2
-            if local_work_id < current_nb_work_items:
+            current_n_work_items = current_n_work_items // 2
+            if local_work_id < current_n_work_items:
                 local_data[local_work_id] += local_data[
-                    local_work_id + current_nb_work_items
+                    local_work_id + current_n_work_items
                 ]
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -381,71 +457,3 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         return result
 
     return sum_reduction
-
-
-@lru_cache
-def make_argpartition_from_partition_kernel(size, work_group_size):
-    global_size = math.ceil(size / work_group_size) * work_group_size
-    l_zero = np.int64(0)
-    l_one = np.int64(1)
-    l_two = np.int64(2)
-    i_one = np.int32(1)
-
-    @dpex.kernel
-    # fmt: off
-    def argpartition_from_partition(
-            data,                           # IN       (size,)
-            partition,                      # IN       (size,)
-            argpartition,                   # OUT      (size,)
-            tmp_buffer,                     # INOUT    (4, )
-        ):
-    # fmt: on
-        item_idx = dpex.get_global_id(0)
-        if item_idx >= size:
-            return
-
-        k = tmp_buffer[-i_one]
-        max_idx = k - i_one
-
-        # if the k greatest items have been found already, just exit
-        current_position = tmp_buffer[l_one]
-        if current_position >= max_idx:
-            return
-
-        # exit if the value for the current work item is inferior to the cutoff value
-        cutoff = partition[size - k]
-        item_value = data[item_idx]
-        if item_value < cutoff:
-            return
-
-        # register the global, total number of values above or equal to the cutoff
-        # seen so far
-        current_nb_found = dpex.atomic.add(
-            tmp_buffer,
-            l_zero,
-            i_one
-            )
-
-        # if the value is strictly higher to the cutoff, add it to the output
-        if item_value > cutoff:
-            current_position = dpex.atomic.add(
-                tmp_buffer,
-                l_one,
-                i_one
-            )
-            argpartition[current_position] = item_idx
-
-        # if the value if equal to the cutoff, we only want to add it to the list if
-        # it does not override a value that is strictly higher.
-        # To this end, we write it at the end of the list, and only if the total number
-        # of written values so far does not exceed k.
-        # TODO: this does not work, need to write a second kernel for cutoff values.
-        elif current_nb_found < k:
-            current_position = dpex.atomic.add(
-                tmp_buffer,
-                l_two,
-                i_one
-                )
-            argpartition[max_idx - current_position] = item_idx
-
-    return argpartition_from_partition[global_size, work_group_size]
