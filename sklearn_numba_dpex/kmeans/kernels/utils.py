@@ -107,7 +107,8 @@ def make_select_samples_far_from_centroid_kernel(
     zero = np.int64(0)
     one = np.int32(1)
     max_n_selected_gt_threshold = np.int32(n_selected - 1)
-    min_selected_eq_threshold = np.int32(2)
+    min_n_selected_eq_threshold = np.int32(2)
+    max_n_selected_eq_threshold = np.int32(n_selected + 1)
 
     @dpex.kernel
     # fmt: off
@@ -139,7 +140,7 @@ def make_select_samples_far_from_centroid_kernel(
         n_selected_gt_threshold_ = n_selected_gt_threshold[zero]
         n_selected_eq_threshold_ = n_selected_eq_threshold[zero]
         if ((n_selected_gt_threshold_ == max_n_selected_gt_threshold)
-            and (n_selected_eq_threshold_ == min_selected_eq_threshold)):
+            and (n_selected_eq_threshold_ == min_n_selected_eq_threshold)):
             return
 
         distance_to_centroid_ = distance_to_centroid[sample_idx]
@@ -153,6 +154,9 @@ def make_select_samples_far_from_centroid_kernel(
                 one
                 )
             selected_samples_idx[selected_idx] = sample_idx
+            return
+
+        if n_selected_eq_threshold_ == max_n_selected_eq_threshold:
             return
 
         selected_idx = -dpex.atomic.add(

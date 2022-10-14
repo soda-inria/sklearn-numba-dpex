@@ -257,7 +257,7 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        fixed_window_assignment_kernel = make_compute_labels_inertia_fixed_window_kernel(
+        fixed_window_inertia_assignment_kernel = make_compute_labels_inertia_fixed_window_kernel(
             n_samples,
             n_features,
             n_clusters,
@@ -269,18 +269,7 @@ class KMeansDriver:
         )
 
         if verbose_and_use_uniform_weights:
-            label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
-                n_samples,
-                n_features,
-                n_clusters,
-                preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-                centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-                centroids_window_height=self.centroids_window_height,
-                work_group_size=work_group_size,
-                dtype=compute_dtype,
-            )
-        elif verbose:
-            compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
+            fixed_window_assignment_kernel = make_label_assignment_fixed_window_kernel(
                 n_samples,
                 n_features,
                 n_clusters,
@@ -412,6 +401,18 @@ class KMeansDriver:
                 cluster_sizes_private_copies,
             )
 
+            if verbose:
+                # ???: verbosity comes at the cost of performance since it triggers
+                # computing exact inertia at each iteration. Shouldn't this be
+                # documented ?
+                # sklearn even goes further and re-computes inertia on updated clusters
+                # rather than old clusters but surely it probably isn't worth the
+                # computational cost of an additional pass on the data ?
+                inertia, *_ = dpctl.tensor.asnumpy(
+                    reduce_inertia_kernel(per_sample_inertia)
+                )
+                print(f"Iteration {n_iteration}, inertia {inertia}")
+
             reduce_centroid_data_kernel(
                 cluster_sizes_private_copies,
                 new_centroids_t_private_copies,
@@ -432,7 +433,7 @@ class KMeansDriver:
                     # if verbose and if sample_weight is uniform, distances to closest
                     # centroids already have been computed in the main kernel we only
                     # need to compute assignments
-                    label_assignment_fixed_window_kernel(
+                    fixed_window_assignment_kernel(
                         X_t,
                         centroids_t,
                         centroids_half_l2_norm,
@@ -440,7 +441,7 @@ class KMeansDriver:
                     )
                 else:
                     # else, compute distances + assignments
-                    fixed_window_assignment_kernel(
+                    fixed_window_inertia_assignment_kernel(
                         X_t,
                         dpctl.tensor.ones_like(sample_weight),
                         centroids_t,
@@ -464,15 +465,6 @@ class KMeansDriver:
                     compute_dtype,
                 )
 
-                if verbose_and_use_uniform_weights:
-                    compute_inertia_fixed_window_kernel(
-                        X_t,
-                        sample_weight,
-                        centroids_t,
-                        centroids_half_l2_norm,
-                        per_sample_inertia,
-                    )
-
             broadcast_division_kernel(new_centroids_t, cluster_sizes)
 
             compute_centroid_shifts_kernel(
@@ -482,18 +474,6 @@ class KMeansDriver:
             centroid_shifts_sum, *_ = dpctl.tensor.asnumpy(
                 reduce_centroid_shifts_kernel(centroid_shifts)
             )
-
-            if verbose:
-                # ???: verbosity comes at the cost of performance since it triggers
-                # computing exact inertia at each iteration. Shouldn't this be
-                # documented ?
-                # sklearn even goes further and re-computes inertia on updated clusters
-                # rather than old clusters but surely it probably isn't worth the
-                # computational cost of an additional pass on the data ?
-                inertia, *_ = dpctl.tensor.asnumpy(
-                    reduce_inertia_kernel(per_sample_inertia)
-                )
-                print(f"Iteration {n_iteration}, inertia {inertia}")
 
             # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
             # and keep an additional copy of centroids that is updated only if the
@@ -537,7 +517,7 @@ class KMeansDriver:
         # centroids found, along with the exact inertia.
         half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
-        fixed_window_assignment_kernel(
+        fixed_window_inertia_assignment_kernel(
             X_t,
             sample_weight,
             centroids_t,
