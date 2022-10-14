@@ -158,6 +158,8 @@ def test_euclidean_distance__adapted(dtype):
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_inertia__adapted(dtype):
     """Test adapted from sklearn's test_inertia"""
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
     random_seed = 42
     rng = default_rng(random_seed)
     X = rng.random((100, 10), dtype=dtype)
