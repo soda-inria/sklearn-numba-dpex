@@ -151,9 +151,10 @@ def test_relocate_empty_clusters__adapted(dtype):
         kmeans_engine.fit(X)
 
     expected_n_iter = 1
+    expected_labels = [0, 0, 0, 0, 0, 0, 0, 2, 2, 1]
     assert kmeans_vanilla.n_iter_ == expected_n_iter
     assert kmeans_engine.n_iter_ == expected_n_iter
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
-    assert (kmeans_vanilla.labels_ == 0).all()
+    assert kmeans_vanilla.labels_ == expected_labels
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
