@@ -123,7 +123,7 @@ def make_select_samples_far_from_centroid_kernel(
         items in distance_to_centroid with highest values.
 
         threshold is expected to have been pre-computed (by partitioning) such that
-        there are at most (n_selected-1) values that are strictly greater than
+        there are at most `n_selected-1` values that are strictly greater than
         threshold, and at least n_selected values that are greater or equal than
         threshold.
 

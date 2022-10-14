@@ -94,8 +94,8 @@ def test_kmeans_same_results(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_kmeans_relocated_clusters(dtype):
-    """Copied and adapted from sklearn's unit tests"""
+def test_kmeans_relocated_clusters__adapted(dtype):
+    """Copied and adapted from sklearn's test_kmeans_relocated_clusters"""
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     # check that empty clusters are relocated as expected
@@ -129,8 +129,8 @@ def test_kmeans_relocated_clusters(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_kmeans_relocated_clusters_2(dtype):
-    """Copied and adapted from sklearn's unit tests"""
+def test_relocate_empty_clusters__adapted(dtype):
+    """Copied and adapted from sklearn's test_relocate_empty_clusters"""
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     # Synthetic dataset with 3 obvious clusters of different sizes
@@ -151,7 +151,9 @@ def test_kmeans_relocated_clusters_2(dtype):
         kmeans_engine.fit(X)
 
     expected_n_iter = 1
-    assert kmeans_vanilla.n_iter_ == kmeans_engine.n_iter_ == expected_n_iter
+    assert kmeans_vanilla.n_iter_ == expected_n_iter
+    assert kmeans_engine.n_iter_ == expected_n_iter
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
+    assert (kmeans_vanilla.labels_ == 0).all()
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)

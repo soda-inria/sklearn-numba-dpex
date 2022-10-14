@@ -411,7 +411,7 @@ class KMeansDriver:
                 inertia, *_ = dpctl.tensor.asnumpy(
                     reduce_inertia_kernel(per_sample_inertia)
                 )
-                print(f"Iteration {n_iteration}, inertia {inertia}")
+                print(f"Iteration {n_iteration}, inertia {inertia:5.3e}")
 
             reduce_centroid_data_kernel(
                 cluster_sizes_private_copies,
