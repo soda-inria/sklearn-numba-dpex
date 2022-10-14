@@ -6,7 +6,7 @@ import numba_dpex as dpex
 from ._base_kmeans_kernel_funcs import (
     _make_initialize_window_kernel_funcs,
     _make_update_closest_centroid_kernel_func,
-    _make_accumulate_dot_products_kernel_func,
+    _make_accumulate_sum_of_ops_kernel_func,
 )
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
@@ -35,6 +35,7 @@ def make_label_assignment_fixed_window_kernel(
     ) = _make_initialize_window_kernel_funcs(
         n_clusters,
         n_features,
+        True,
         work_group_size,
         window_n_centroids,
         centroids_window_height,
@@ -45,12 +46,12 @@ def make_label_assignment_fixed_window_kernel(
         window_n_centroids
     )
 
-    _accumulate_dot_products = _make_accumulate_dot_products_kernel_func(
+    _accumulate_dot_products = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
         n_features,
         centroids_window_height,
         window_n_centroids,
-        with_X_l2_norm=False,
+        ops="product",
         dtype=dtype,
     )
 
