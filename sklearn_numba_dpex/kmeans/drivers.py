@@ -10,10 +10,9 @@ from sklearn_numba_dpex.utils._device import _DeviceParams
 
 from sklearn_numba_dpex.kmeans.kernels import (
     make_lloyd_single_step_fixed_window_kernel,
-    make_compute_labels_inertia_fixed_window_kernel,
-    make_label_assignment_fixed_window_kernel,
-    make_compute_inertia_fixed_window_kernel,
     make_compute_euclidean_distances_fixed_window_kernel,
+    make_label_assignment_fixed_window_kernel,
+    make_compute_inertia_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
     make_initialize_to_zeros_2d_kernel,
@@ -28,6 +27,10 @@ def _check_power_of_2(e):
     if e != 2 ** (math.log2(e)):
         raise ValueError(f"Expected a power of 2, got {e}")
     return e
+
+
+class _IgnoreSampleWeight:
+    pass
 
 
 @lru_cache
@@ -240,7 +243,7 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
-            return_inertia=bool(verbose),
+            return_assignments=bool(verbose),
             preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
             global_mem_cache_size=self.global_mem_cache_size,
             centroids_window_width_multiplier=self.centroids_window_width_multiplier,
@@ -250,7 +253,7 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        fixed_window_assignment_kernel = make_compute_labels_inertia_fixed_window_kernel(
+        assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
             n_samples,
             n_features,
             n_clusters,
@@ -259,6 +262,13 @@ class KMeansDriver:
             centroids_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=compute_dtype,
+        )
+
+        compute_inertia_kernel = make_compute_inertia_kernel(
+            n_samples,
+            n_features,
+            work_group_size,
+            compute_dtype,
         )
 
         reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
@@ -378,7 +388,7 @@ class KMeansDriver:
                 sample_weight,
                 centroids_t,
                 centroids_half_l2_norm,
-                per_sample_inertia,
+                assignments_idx,
                 new_centroids_t_private_copies,
                 cluster_sizes_private_copies,
             )
@@ -413,6 +423,13 @@ class KMeansDriver:
                 # ???: verbosity comes at the cost of performance since it triggers
                 # computing exact inertia at each iteration. Shouldn't this be
                 # documented ?
+                compute_inertia_kernel(
+                    X_t,
+                    sample_weight,
+                    new_centroids_t,
+                    assignments_idx,
+                    per_sample_inertia,
+                )
                 inertia, *_ = dpctl.tensor.asnumpy(
                     reduce_inertia_kernel(per_sample_inertia)
                 )
@@ -460,13 +477,26 @@ class KMeansDriver:
         # centroids found, along with the exact inertia.
         half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
-        fixed_window_assignment_kernel(
+        # NB: inertia and labels could be computed in a single fused kernel, however,
+        # re-using the quantity Q = ((1/2)c^2 - <x.c>) that is computed in the
+        # assignment kernel to compute distances to closest centroids to evaluate
+        # |x|^2 - 2 * Q leads to numerical instability, we prefer evaluating the
+        # expression |x-c|^2 which is stable but requires an additional pass on the
+        # data.
+        # See https://github.com/soda-inria/sklearn-numba-dpex/issues/28
+        assignment_fixed_window_kernel(
+            X_t,
+            centroids_t,
+            centroids_half_l2_norm,
+            assignments_idx,
+        )
+
+        compute_inertia_kernel(
             X_t,
             sample_weight,
             centroids_t,
-            centroids_half_l2_norm,
-            per_sample_inertia,
             assignments_idx,
+            per_sample_inertia,
         )
 
         # inertia = per_sample_inertia.sum()
@@ -485,38 +515,42 @@ class KMeansDriver:
     def get_labels(
         self,
         X,
+        centers,
+    ):
+        labels, _ = self._get_labels_inertia(X, centers, with_inertia=False)
+        return dpctl.tensor.asnumpy(labels).astype(np.int32)
+
+    def get_inertia(
+        self,
+        X,
         sample_weight,
         centers,
     ):
-        labels = self._get_labels(X, centers)
-        return dpctl.tensor.asnumpy(labels).astype(np.int32)
+        _, inertia = self._get_labels_inertia(
+            X, centers, sample_weight, with_inertia=True
+        )
+        return inertia
 
-    def _get_labels(
-        self,
-        X,
-        centers,
+    def _get_labels_inertia(
+        self, X, centers, sample_weight=_IgnoreSampleWeight, with_inertia=True
     ):
-        """This call is expected to accept the same inputs than
-        `sklearn.cluster._kmeans._labels_inertia` while solely computing
-        the samples' labels, hence returning (labels, None).
-        """
+
         (
             X,
-            _,
+            sample_weight,
             centers,
             compute_dtype,
-            _,
+            output_dtype,
             work_group_size,
             n_features,
             n_samples,
             n_clusters,
         ) = self._check_inputs(
             X,
-            sample_weight=_IgnoreSampleWeight,
+            sample_weight=sample_weight,
             cluster_centers=centers,
         )
 
-        # Create a set of kernels
         label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
             n_samples,
             n_features,
@@ -535,7 +569,14 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, _, centroids_t = self._load_transposed_data_to_device(X, None, centers)
+        if (sample_weight is _IgnoreSampleWeight) and not with_inertia:
+            sample_weight = None
+
+        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
+            X,
+            sample_weight,
+            centers,
+        )
 
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
@@ -553,47 +594,14 @@ class KMeansDriver:
             assignments_idx,
         )
 
-        return assignments_idx
+        if not with_inertia:
+            return assignments_idx, None
 
-    def get_inertia(
-        self,
-        X,
-        sample_weight,
-        centers,
-    ):
-        """This call is expected to accept the same inputs than
-        `sklearn.cluster._kmeans._labels_inertia` while solely computing
-        the samples' inertia, hence returning (None, inertia).
-        """
-        (
-            X,
-            sample_weight,
-            centers,
-            compute_dtype,
-            output_dtype,
+        compute_inertia_kernel = make_compute_inertia_kernel(
+            n_samples,
+            n_features,
             work_group_size,
-            n_features,
-            n_samples,
-            n_clusters,
-        ) = self._check_inputs(X, sample_weight, centers)
-
-        # Create a set of kernels
-        compute_inertia_fixed_window_kernel = make_compute_inertia_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
-            work_group_size=work_group_size,
-            dtype=compute_dtype,
-        )
-
-        half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-            size0=n_features,
-            size1=n_clusters,
-            work_group_size=work_group_size,
-            dtype=compute_dtype,
+            compute_dtype,
         )
 
         reduce_inertia_kernel = make_sum_reduction_1d_kernel(
@@ -603,24 +611,15 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
-            X, sample_weight, centers
-        )
-
-        centroids_half_l2_norm = dpctl.tensor.empty(
-            n_clusters, dtype=compute_dtype, device=self.device
-        )
         per_sample_inertia = dpctl.tensor.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
 
-        half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
-
-        compute_inertia_fixed_window_kernel(
+        compute_inertia_kernel(
             X_t,
             sample_weight,
             centroids_t,
-            centroids_half_l2_norm,
+            assignments_idx,
             per_sample_inertia,
         )
 
@@ -629,7 +628,7 @@ class KMeansDriver:
         # inertia is now a 1-sized numpy array, we transform it into a scalar:
         inertia = inertia.astype(output_dtype)[0]
 
-        return inertia
+        return assignments_idx, inertia
 
     def get_euclidean_distances(self, X, Y):
 
@@ -657,7 +656,7 @@ class KMeansDriver:
             cluster_centers=Y,
         )
 
-        label_assignment_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
+        euclidean_distances_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
             n_samples,
             n_features,
             n_clusters,
@@ -668,28 +667,15 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-            size0=n_features,
-            size1=n_clusters,
-            work_group_size=work_group_size,
-            dtype=compute_dtype,
-        )
-
         X_t, _, Y_t = self._load_transposed_data_to_device(X, None, Y)
 
-        Y_half_l2_norm = dpctl.tensor.empty(
-            n_clusters, dtype=compute_dtype, device=self.device
-        )
         euclidean_distances_t = dpctl.tensor.empty(
             (n_clusters, n_samples), dtype=compute_dtype, device=self.device
         )
 
-        half_l2_norm_kernel(Y_t, Y_half_l2_norm)
-
-        label_assignment_fixed_window_kernel(
+        euclidean_distances_fixed_window_kernel(
             X_t,
             Y_t,
-            Y_half_l2_norm,
             euclidean_distances_t,
         )
         return euclidean_distances_t.T, output_dtype()
@@ -821,7 +807,3 @@ class KMeansDriver:
             sample_weight,
             cluster_centers,
         )
-
-
-class _IgnoreSampleWeight:
-    pass

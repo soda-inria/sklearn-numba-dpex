@@ -6,7 +6,7 @@ import numba_dpex as dpex
 from ._base_kmeans_kernel_funcs import (
     _make_initialize_window_kernel_funcs,
     _make_update_closest_centroid_kernel_func,
-    _make_accumulate_dot_products_kernel_func,
+    _make_accumulate_sum_of_ops_kernel_func,
 )
 
 # General note on kernel implementation
@@ -34,7 +34,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
-    return_inertia,
+    return_assignments,
     preferred_work_group_size_multiple,
     global_mem_cache_size,
     centroids_window_width_multiplier,
@@ -57,33 +57,21 @@ def make_lloyd_single_step_fixed_window_kernel(
         window_n_centroids,
         centroids_window_height,
         dtype,
+        initialize_window_of_centroids_half_l2_norms=True,
     )
 
     _update_closest_centroid = _make_update_closest_centroid_kernel_func(
         window_n_centroids
     )
 
-    _accumulate_dot_products = _make_accumulate_dot_products_kernel_func(
+    _accumulate_dot_products = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
         n_features,
         centroids_window_height,
         window_n_centroids,
-        with_X_l2_norm=False,
+        ops="product",
         dtype=dtype,
     )
-
-    if return_inertia:
-        _accumulate_dot_products_and_X_l2_norm = (
-            _make_accumulate_dot_products_kernel_func(
-                n_samples,
-                n_features,
-                centroids_window_height,
-                window_n_centroids,
-                with_X_l2_norm=True,
-                dtype=dtype,
-            )
-        )
-        two = dtype(2)
 
     n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
     n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
@@ -120,7 +108,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
-        per_sample_inertia,                # OUT            (n_samples,)
+        assignments_idx,                   # OUT            (n_samples,)
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
@@ -145,7 +133,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         compute the exact value to find the closest centroid. Indeed, minimizing
             |x-c|^2 = |x|^2 - 2<x.c> + |c|^2
         over c for a given x amounts to minimizing
-            (1/2)c^2 - xc .
+            (1/2)c^2 - <x.c> .
         Moreover the value (1/2)c^2 has been pre-computed in the array
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
@@ -163,7 +151,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # This array in shared memory is used as a sliding array over the centroids.
         # It contains values of centroids_half_l2_norm for each centroid in the sliding
         # centroids_window array. It is updated once per iteration in the outer loop.
-        centroids_window_half_l2_norm = dpex.local.array(
+        window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
 
@@ -196,13 +184,13 @@ def make_lloyd_single_step_fixed_window_kernel(
         # `numba_dpex`. To leverage loop unrolling, the following nested loop will
         # require to be un-nested.
         for _0 in range(n_windows_per_feature):
-            # centroids_window_half_l2_norm and dot_products
+            # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
             _initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 
@@ -227,22 +215,13 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # before going forward
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                if return_inertia and _0 == 0:
-                    X_l2_norm = _accumulate_dot_products_and_X_l2_norm(
-                        sample_idx,
-                        first_feature_idx,
-                        X_t,
-                        centroids_window,
-                        dot_products,
-                    )
-                else:
-                    _accumulate_dot_products(
-                        sample_idx,
-                        first_feature_idx,
-                        X_t,
-                        centroids_window,
-                        dot_products,
-                    )
+                _accumulate_dot_products(
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    dot_products,
+                )
 
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
@@ -258,7 +237,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 first_centroid_idx,
                 min_idx,
                 min_sample_pseudo_inertia,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 
@@ -279,12 +258,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         if sample_idx >= n_samples:
             return
 
-        weight = sample_weight[sample_idx]
-
-        if return_inertia:
-            inertia = min_sample_pseudo_inertia
-            inertia = (X_l2_norm + (two * min_sample_pseudo_inertia)) * weight
-            per_sample_inertia[sample_idx] = inertia
+        if return_assignments:
+            assignments_idx[sample_idx] = min_idx
 
         # STEP 2: update centroids.
 
@@ -316,6 +291,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
+        weight = sample_weight[sample_idx]
+
         privatization_idx = (
             sample_idx // preferred_work_group_size_multiple
         ) % n_centroids_private_copies
