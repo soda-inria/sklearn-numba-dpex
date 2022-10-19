@@ -137,7 +137,7 @@ def test_kmeans_fit_empty_clusters(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_euclidean_distance__adapted(dtype):
+def test_euclidean_distance(dtype):
     """Test adapted from sklearn's test_euclidean_distance"""
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 
@@ -156,7 +156,7 @@ def test_euclidean_distance__adapted(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_inertia__adapted(dtype):
+def test_inertia(dtype):
     """Test adapted from sklearn's test_inertia"""
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 

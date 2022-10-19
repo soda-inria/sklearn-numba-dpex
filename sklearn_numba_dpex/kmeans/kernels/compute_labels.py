@@ -35,11 +35,11 @@ def make_label_assignment_fixed_window_kernel(
     ) = _make_initialize_window_kernel_funcs(
         n_clusters,
         n_features,
-        True,
         work_group_size,
         window_n_centroids,
         centroids_window_height,
         dtype,
+        initialize_window_of_centroids_half_l2_norms=True,
     )
 
     _update_closest_centroid = _make_update_closest_centroid_kernel_func(
@@ -76,7 +76,7 @@ def make_label_assignment_fixed_window_kernel(
         local_work_id = dpex.get_local_id(0)
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
-        centroids_window_half_l2_norm = dpex.local.array(
+        window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
         dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
@@ -94,7 +94,7 @@ def make_label_assignment_fixed_window_kernel(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 
@@ -130,7 +130,7 @@ def make_label_assignment_fixed_window_kernel(
                 first_centroid_idx,
                 min_idx,
                 min_sample_pseudo_inertia,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 

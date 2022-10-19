@@ -569,11 +569,12 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
+        if (sample_weight is _IgnoreSampleWeight) and not with_inertia:
+            sample_weight = None
+
         X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
             X,
-            None
-            if (sample_weight is _IgnoreSampleWeight) and not with_inertia
-            else sample_weight,
+            sample_weight,
             centers,
         )
 

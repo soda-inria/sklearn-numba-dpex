@@ -34,14 +34,13 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     ) = _make_initialize_window_kernel_funcs(
         n_clusters,
         n_features,
-        False,
         work_group_size,
         window_n_centroids,
         centroids_window_height,
         dtype,
     )
 
-    _accumulate_distances = _make_accumulate_sum_of_ops_kernel_func(
+    _accumulate_sq_distances = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
         n_features,
         centroids_window_height,
@@ -69,7 +68,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
 
-        distances = dpex.private.array(shape=window_n_centroids, dtype=dtype)
+        sq_distances = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
         first_centroid_idx = 0
 
@@ -77,7 +76,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_loading_feature_offset = local_work_id // window_n_centroids
 
         for _0 in range(n_windows_per_feature):
-            _initialize_window_of_centroids(distances)
+            _initialize_window_of_centroids(sq_distances)
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
@@ -94,7 +93,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-                _accumulate_distances(sample_idx, first_feature_idx, X_t, centroids_window, distances)
+                _accumulate_sq_distances(sample_idx, first_feature_idx, X_t, centroids_window, sq_distances)
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -104,7 +103,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 for i in range(window_n_centroids):
                     centroid_idx = first_centroid_idx + i
                     if centroid_idx < n_clusters:
-                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = math.sqrt(distances[i])
+                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = math.sqrt(sq_distances[i])
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 

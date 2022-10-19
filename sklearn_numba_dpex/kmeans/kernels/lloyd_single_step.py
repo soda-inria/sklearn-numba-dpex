@@ -53,11 +53,11 @@ def make_lloyd_single_step_fixed_window_kernel(
     ) = _make_initialize_window_kernel_funcs(
         n_clusters,
         n_features,
-        True,
         work_group_size,
         window_n_centroids,
         centroids_window_height,
         dtype,
+        initialize_window_of_centroids_half_l2_norms=True,
     )
 
     _update_closest_centroid = _make_update_closest_centroid_kernel_func(
@@ -151,7 +151,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # This array in shared memory is used as a sliding array over the centroids.
         # It contains values of centroids_half_l2_norm for each centroid in the sliding
         # centroids_window array. It is updated once per iteration in the outer loop.
-        centroids_window_half_l2_norm = dpex.local.array(
+        window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
 
@@ -184,13 +184,13 @@ def make_lloyd_single_step_fixed_window_kernel(
         # `numba_dpex`. To leverage loop unrolling, the following nested loop will
         # require to be un-nested.
         for _0 in range(n_windows_per_feature):
-            # centroids_window_half_l2_norm and dot_products
+            # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
             _initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 
@@ -237,7 +237,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 first_centroid_idx,
                 min_idx,
                 min_sample_pseudo_inertia,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 

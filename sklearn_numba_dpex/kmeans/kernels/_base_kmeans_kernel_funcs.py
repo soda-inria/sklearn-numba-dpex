@@ -6,11 +6,11 @@ import numba_dpex as dpex
 def _make_initialize_window_kernel_funcs(
     n_clusters,
     n_features,
-    load_centroid_window_half_l2_norm,
     work_group_size,
     window_n_centroids,
     window_n_features,
     dtype,
+    initialize_window_of_centroids_half_l2_norms=False,
 ):
     zero = dtype(0.0)
     inf = dtype(math.inf)
@@ -66,33 +66,31 @@ def _make_initialize_window_kernel_funcs(
         for i in range(window_n_centroids):
             results[i] = zero
 
-    if not load_centroid_window_half_l2_norm:
+    if not initialize_window_of_centroids_half_l2_norms:
         return _initialize_results, _load_window_of_centroids_and_features
 
-    if load_centroid_window_half_l2_norm:
+    @dpex.func
+    # fmt: off
+    def _initialize_window_of_centroids(
+        local_work_id,                  # PARAM
+        first_centroid_idx,             # PARAM
+        centroids_half_l2_norm,         # IN
+        window_of_centroids_half_l2_norms,  # OUT
+        results,                        # OUT
+    ):
+    # fmt: on
+        _initialize_results(results)
 
-        @dpex.func
-        # fmt: off
-        def _initialize_window_of_centroids(
-            local_work_id,                  # PARAM
-            first_centroid_idx,             # PARAM
-            centroids_half_l2_norm,         # IN
-            centroids_window_half_l2_norm,  # OUT
-            results,                        # OUT
-        ):
-        # fmt: on
-            _initialize_results(results)
-
-            # The first `window_n_centroids` work items cooperate on loading the
-            # values of centroids_half_l2_norm relevant to current window. Each work
-            # item loads one single value.
-            half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-            if local_work_id < window_n_centroids:
-                if half_l2_norm_loading_idx < n_clusters:
-                    l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
-                else:
-                    l2norm = inf
-                centroids_window_half_l2_norm[local_work_id] = l2norm
+        # The first `window_n_centroids` work items cooperate on loading the
+        # values of centroids_half_l2_norm relevant to current window. Each work
+        # item loads one single value.
+        half_l2_norm_loading_idx = first_centroid_idx + local_work_id
+        if local_work_id < window_n_centroids:
+            if half_l2_norm_loading_idx < n_clusters:
+                l2norm = centroids_half_l2_norm[half_l2_norm_loading_idx]
+            else:
+                l2norm = inf
+            window_of_centroids_half_l2_norms[local_work_id] = l2norm
 
     return _initialize_window_of_centroids, _load_window_of_centroids_and_features
 
@@ -151,13 +149,13 @@ def _make_update_closest_centroid_kernel_func(window_n_centroids):
         first_centroid_idx,             # PARAM
         min_idx,                        # PARAM
         min_sample_pseudo_inertia,      # PARAM
-        centroids_window_half_l2_norm,  # IN
+        window_of_centroids_half_l2_norms,  # IN
         dot_products,                   # IN
     ):
     # fmt: on
         for i in range(window_n_centroids):
             current_sample_pseudo_inertia = (
-                centroids_window_half_l2_norm[i] - dot_products[i]
+                window_of_centroids_half_l2_norms[i] - dot_products[i]
             )
             if current_sample_pseudo_inertia < min_sample_pseudo_inertia:
                 min_sample_pseudo_inertia = current_sample_pseudo_inertia
