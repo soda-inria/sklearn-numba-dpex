@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import numba_dpex as dpex
 
 
@@ -12,6 +13,7 @@ def _make_initialize_window_kernel_funcs(
     dtype,
 ):
     zero = dtype(0.0)
+    zero_idx = np.int64(0)
     inf = dtype(math.inf)
 
     @dpex.func
@@ -57,7 +59,7 @@ def _make_initialize_window_kernel_funcs(
         centroids_window,               # OUT
     ):
     # fmt: on
-        centroid_window_first_loading_feature_idx = 0
+        centroid_window_first_loading_feature_idx = zero_idx
 
         # The work items in the work group cooperatively load the values in
         # shared memory. At each iteration, the work item loads one value and

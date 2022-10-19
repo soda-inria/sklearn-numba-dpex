@@ -25,6 +25,9 @@ import dpctl
 import numba_dpex as dpex
 
 
+zero_idx = np.int64(0)
+
+
 @lru_cache
 def make_relocate_empty_clusters_kernel(
     n_relocated_clusters,
@@ -51,14 +54,14 @@ def make_relocate_empty_clusters_kernel(
         per_sample_inertia,         # INOUT          (n_samples,)
         centroids_t,                # INOUT          (n_features, n_clusters)
         cluster_sizes               # INOUT          (n_clusters,)
-            ):
+        ):
     # fmt: on
         """NB: because of how the array was created, samples_far_from_center values
         are located between (n_selected_gt_threshold - relocated_idx) and
         (relocated_idx) indices.
         """
-        group_idx = dpex.get_group_id(0)
-        item_idx = dpex.get_local_id(0)
+        group_idx = dpex.get_group_id(zero_idx)
+        item_idx = dpex.get_local_id(zero_idx)
         relocated_idx = group_idx // n_work_groups_for_cluster
         feature_idx = ((group_idx % n_work_groups_for_cluster) * work_group_size) + item_idx
 
@@ -73,21 +76,23 @@ def make_relocate_empty_clusters_kernel(
         new_location_weight = sample_weight[new_location_X_idx]
         X_centroid_addend = new_centroid_value * new_location_weight
 
-        # Cancel the contribution to the updated centroids of the sample that was once
-        # assigned to new_location_previous_assignment but is now assigned to the
-        # cluster of the centroids that relocates to this sample
+
+        # Cancel the contribution to new_location_previous_assignment, the previously 
+        # updated centroids of the sample. This contribution will be assigned to the 
+        # centroid of the clusters that relocates to this sample.
         dpex.atomic.sub(
             centroids_t,
             (feature_idx, new_location_previous_assignment),
             X_centroid_addend
             )
 
-        # The relocated centroid has only one contribution now, which is the sample
-        # to which it has been relocated to
+        # The relocated centroid has only one contribution now, which is the one of the
+        # sample the cluster has been relocated to.
         centroids_t[feature_idx, relocated_cluster_idx] = X_centroid_addend
 
-        # Likewise, we update the weights in the clusters
-        if feature_idx == zero:
+        # Likewise, we update the weights in the clusters. This is done once using 
+        # `feature_idx`'s value.
+        if feature_idx == zero_idx:
             per_sample_inertia[new_location_X_idx] = zero
             dpex.atomic.sub(
                 cluster_sizes,
@@ -101,11 +106,10 @@ def make_relocate_empty_clusters_kernel(
 
 @lru_cache
 def make_select_samples_far_from_centroid_kernel(
-    threshold, n_selected, n_samples, work_group_size
+    n_selected, n_samples, work_group_size
 ):
-    global_size = math.ceil(n_selected / work_group_size) * work_group_size
-    zero = np.int64(0)
-    one = np.int32(1)
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
+    one_incr = np.int32(1)
     max_n_selected_gt_threshold = np.int32(n_selected - 1)
     min_n_selected_eq_threshold = np.int32(2)
     max_n_selected_eq_threshold = np.int32(n_selected + 1)
@@ -114,6 +118,7 @@ def make_select_samples_far_from_centroid_kernel(
     # fmt: off
     def select_samples_far_from_centroid(
             distance_to_centroid,           # IN       (n_samples,)
+            threshold,                      # IN       (n_samples,)
             selected_samples_idx,           # OUT      (n_samples,)
             n_selected_gt_threshold,        # OUT      (1, )
             n_selected_eq_threshold,        # OUT      (1, )
@@ -132,38 +137,39 @@ def make_select_samples_far_from_centroid_kernel(
         we write indices of values strictly greater than threshold at the beginning of
         the array, and indices of values equal to threshold at the end of the array.
         """
+        threshold_ = threshold[0]
 
-        sample_idx = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
 
-        n_selected_gt_threshold_ = n_selected_gt_threshold[zero]
-        n_selected_eq_threshold_ = n_selected_eq_threshold[zero]
+        n_selected_gt_threshold_ = n_selected_gt_threshold[zero_idx]
+        n_selected_eq_threshold_ = n_selected_eq_threshold[zero_idx]
         if ((n_selected_gt_threshold_ == max_n_selected_gt_threshold)
-            and (n_selected_eq_threshold_ == min_n_selected_eq_threshold)):
+            and (n_selected_eq_threshold_ >= min_n_selected_eq_threshold)):
             return
 
         distance_to_centroid_ = distance_to_centroid[sample_idx]
-        if distance_to_centroid_ < threshold:
+        if distance_to_centroid_ < threshold_:
             return
 
-        if distance_to_centroid_ > threshold:
+        if distance_to_centroid_ > threshold_:
             selected_idx = dpex.atomic.add(
                 n_selected_gt_threshold,
-                zero,
-                one
-                )
+                zero_idx,
+                one_incr,
+            )
             selected_samples_idx[selected_idx] = sample_idx
             return
 
-        if n_selected_eq_threshold_ == max_n_selected_eq_threshold:
+        if n_selected_eq_threshold_ >= max_n_selected_eq_threshold:
             return
 
         selected_idx = -dpex.atomic.add(
             n_selected_eq_threshold,
-            zero,
-            one
-            )
+            zero_idx,
+            one_incr,
+        )
         selected_samples_idx[selected_idx] = sample_idx
 
     return select_samples_far_from_centroid[global_size, work_group_size]
@@ -184,7 +190,7 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
         centroid_shifts,    # OUT   (n_clusters,)
     ):
     # fmt: on
-        sample_idx = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
 
         if sample_idx >= n_clusters:
             return
@@ -216,8 +222,7 @@ def make_reduce_centroid_data_kernel(
     n_work_items_for_clusters = n_work_groups_for_clusters * work_group_size
     global_size = n_work_items_for_clusters * n_features
     zero = dtype(0.0)
-    i_one = np.int32(1)
-    l_zero = np.int64(0)
+    one_incr = np.int32(1)
 
     # Optimized for C-contiguous array and assuming
     # n_features * n_clusters >> preferred_work_group_size_multiple
@@ -233,8 +238,8 @@ def make_reduce_centroid_data_kernel(
     ):
     # fmt: on
 
-        group_idx = dpex.get_group_id(0)
-        item_idx = dpex.get_local_id(0)
+        group_idx = dpex.get_group_id(zero_idx)
+        item_idx = dpex.get_local_id(zero_idx)
         feature_idx = group_idx // n_work_groups_for_clusters
         cluster_idx = (
             (group_idx % n_work_groups_for_clusters) * work_group_size
@@ -249,7 +254,7 @@ def make_reduce_centroid_data_kernel(
         centroids_t[feature_idx, cluster_idx] = sum_
 
         # reduce the cluster sizes
-        if feature_idx == 0:
+        if feature_idx == zero_idx:
             sum_ = zero
             for copy_idx in range(n_centroids_private_copies):
                 sum_ += cluster_sizes_private_copies[copy_idx, cluster_idx]
@@ -258,7 +263,7 @@ def make_reduce_centroid_data_kernel(
             # register empty clusters
             if sum_ == zero:
                 current_n_empty_clusters = dpex.atomic.add(
-                    n_empty_clusters, l_zero, i_one
+                    n_empty_clusters, zero_idx, one_incr
                 )
                 empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
@@ -275,7 +280,7 @@ def make_initialize_to_zeros_2d_kernel(size0, size1, work_group_size, dtype):
     # Optimized for C-contiguous arrays
     @dpex.kernel
     def initialize_to_zeros(data):
-        item_idx = dpex.get_global_id(0)
+        item_idx = dpex.get_global_id(zero_idx)
 
         if item_idx >= n_items:
             return
@@ -298,7 +303,7 @@ def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dty
     # Optimized for C-contiguous arrays
     @dpex.kernel
     def initialize_to_zeros(data):
-        item_idx = dpex.get_global_id(0)
+        item_idx = dpex.get_global_id(zero_idx)
 
         if item_idx >= n_items:
             return
@@ -320,7 +325,7 @@ def make_broadcast_division_1d_2d_kernel(size0, size1, work_group_size):
     # size1 >> preferred_work_group_size_multiple
     @dpex.kernel
     def broadcast_division(dividend_array, divisor_vector):
-        col_idx = dpex.get_global_id(0)
+        col_idx = dpex.get_global_id(zero_idx)
 
         if col_idx >= size1:
             return
@@ -350,7 +355,7 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         result,  # OUT       (size1,)
     ):
     # fmt: on
-        col_idx = dpex.get_global_id(0)
+        col_idx = dpex.get_global_id(zero_idx)
 
         if col_idx >= size1:
             return
@@ -381,15 +386,17 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
 
     Once the reduction is done in a work group the result is written in global memory,
     thus creating an intermediary result whose size is divided by
-    (2 * work_group_size). This is repeated as many time as needed until only one value
+    `2 * work_group_size`. This is repeated as many time as needed until only one value
     remains in global memory.
 
     NB: work_group_size is assumed to be a power of 2.
     """
     # Number of iteration in each execution of the kernel:
-    local_n_iterations = math.floor(math.log2(work_group_size))
+    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     zero = dtype(0.0)
+    two_long = np.int64(2)
+    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -399,15 +406,15 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
     ):
     # fmt: on
         # NB: This kernel only perform a partial reduction
-        group_id = dpex.get_group_id(0)
-        local_work_id = dpex.get_local_id(0)
-        first_work_id = local_work_id == 0
+        group_id = dpex.get_group_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
+        first_work_id = local_work_id == zero_idx
 
-        size = summands.shape[0]
+        size = summands.shape[zero_idx]
 
         local_data = dpex.local.array(work_group_size, dtype=dtype)
 
-        first_value_idx = group_id * work_group_size * 2
+        first_value_idx = group_id * work_group_size * two_long
         augend_idx = first_value_idx + local_work_id
         addend_idx = first_value_idx + work_group_size + local_work_id
 
@@ -422,9 +429,9 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         current_n_work_items = work_group_size
-        for i in range(local_n_iterations - 1):
+        for i in range(local_n_iterations):
             # We discard half of the remaining active work items at each iteration
-            current_n_work_items = current_n_work_items // 2
+            current_n_work_items = current_n_work_items // two_long
             if local_work_id < current_n_work_items:
                 local_data[local_work_id] += local_data[
                     local_work_id + current_n_work_items
@@ -436,7 +443,7 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         # elements in summands that have been covered by the work group, we write it
         # into global memory
         if first_work_id:
-            result[group_id] = local_data[0] + local_data[1]
+            result[group_id] = local_data[zero_idx] + local_data[one_idx]
 
     # As many partial reductions as necessary are chained until only one element
     # remains.

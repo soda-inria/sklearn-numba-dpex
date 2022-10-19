@@ -1,6 +1,7 @@
 import math
 from functools import lru_cache
 
+import numpy as np
 import numba_dpex as dpex
 
 from ._base_kmeans_kernel_funcs import (
@@ -64,6 +65,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
     two = dtype(2)
+    zero_idx = np.int64(0)
 
     @dpex.kernel
     # fmt: off
@@ -75,8 +77,8 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     ):
     # fmt: on
 
-        sample_idx = dpex.get_global_id(0)
-        local_work_id = dpex.get_local_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
         centroids_window_half_l2_norm = dpex.local.array(
@@ -84,7 +86,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         )
         dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
-        first_centroid_idx = 0
+        first_centroid_idx = zero_idx
 
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
@@ -100,7 +102,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
-            first_feature_idx = 0
+            first_feature_idx = zero_idx
 
             for _1 in range(n_windows_per_centroid):
                 _load_window_of_centroids_and_features(
@@ -114,7 +116,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                if _0 == 0:
+                if _0 == zero_idx:
                     X_l2_norm = _accumulate_dot_products_and_X_l2_norm(
                         sample_idx,
                         first_feature_idx,

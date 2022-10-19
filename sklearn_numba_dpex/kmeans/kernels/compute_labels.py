@@ -1,6 +1,7 @@
 import math
 from functools import lru_cache
 
+import numpy as np
 import numba_dpex as dpex
 
 from ._base_kmeans_kernel_funcs import (
@@ -60,6 +61,7 @@ def make_label_assignment_fixed_window_kernel(
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
     inf = dtype(math.inf)
+    zero_idx = np.int64(0)
 
     @dpex.kernel
     # fmt: off
@@ -71,8 +73,8 @@ def make_label_assignment_fixed_window_kernel(
     ):
     # fmt: on
 
-        sample_idx = dpex.get_global_id(0)
-        local_work_id = dpex.get_local_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
         centroids_window_half_l2_norm = dpex.local.array(
@@ -80,9 +82,9 @@ def make_label_assignment_fixed_window_kernel(
         )
         dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
-        first_centroid_idx = 0
+        first_centroid_idx = zero_idx
 
-        min_idx = 0
+        min_idx = zero_idx
         min_sample_pseudo_inertia = inf
 
         window_loading_centroid_idx = local_work_id % window_n_centroids
@@ -99,7 +101,7 @@ def make_label_assignment_fixed_window_kernel(
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
-            first_feature_idx = 0
+            first_feature_idx = zero_idx
 
             for _1 in range(n_windows_per_centroid):
                 _load_window_of_centroids_and_features(
