@@ -97,7 +97,7 @@ class KMeansLloydTimeit:
         print(
             f"Running {name} with parameters sample_weight={self.sample_weight} "
             f"n_clusters={n_clusters} data_shape={X.shape} max_iter={max_iter} "
-            "tol={tol} ..."
+            f"tol={tol} ..."
         )
 
         with sklearn.config_context(engine_provider=engine_provider):

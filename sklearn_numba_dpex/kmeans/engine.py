@@ -59,7 +59,7 @@ class KMeansEngine(KMeansCythonEngine):
 
     def get_labels(self, X, sample_weight):
         return KMeansDriver(**self._DRIVER_CONFIG).get_labels(
-            X, sample_weight, self.estimator.cluster_centers_
+            X, self.estimator.cluster_centers_
         )
 
     def get_euclidean_distances(self, X):

@@ -1,6 +1,7 @@
 import pytest
 
 import numpy as np
+from numpy.random import default_rng
 import dpnp
 import dpctl
 from numpy.testing import assert_array_equal
@@ -15,6 +16,7 @@ from sklearn.utils._testing import assert_allclose
 from sklearn_numba_dpex.kmeans.kernels.utils import (
     make_select_samples_far_from_centroid_kernel,
 )
+from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
 
 _DEVICE = dpctl.SyclDevice()
@@ -133,6 +135,48 @@ def test_kmeans_relocated_clusters(dtype):
         expected_centers = [[0.75, 1.0], [0.25, 0.0]]
         assert_array_equal(kmeans.labels_, expected_labels)
         assert_allclose(kmeans.cluster_centers_, expected_centers)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_euclidean_distance(dtype):
+    """Test adapted from sklearn's test_euclidean_distance"""
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
+    random_seed = 42
+    rng = default_rng(random_seed)
+    a = rng.random(size=(1, 100), dtype=dtype)
+    b = rng.standard_normal((1, 100), dtype=dtype)
+
+    expected = np.sqrt(((a - b) ** 2).sum())
+
+    driver = KMeansDriver()
+    result = driver.get_euclidean_distances(a, b)
+
+    rtol = 1e-4 if dtype == np.float32 else 1e-7
+    assert_allclose(result, expected, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_inertia(dtype):
+    """Test adapted from sklearn's test_inertia"""
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
+    random_seed = 42
+    rng = default_rng(random_seed)
+    X = rng.random((100, 10), dtype=dtype)
+    sample_weight = rng.standard_normal(100, dtype=dtype)
+    centers = rng.standard_normal((5, 10), dtype=dtype)
+
+    driver = KMeansDriver()
+    labels = driver.get_labels(X, centers)
+
+    distances = ((X - centers[labels]) ** 2).sum(axis=1)
+    expected = np.sum(distances * sample_weight)
+
+    inertia = driver.get_inertia(X, sample_weight, centers)
+
+    rtol = 1e-4 if dtype == np.float32 else 1e-6
+    assert_allclose(inertia, expected, rtol=rtol)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])

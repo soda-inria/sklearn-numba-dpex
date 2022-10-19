@@ -7,7 +7,7 @@ import numba_dpex as dpex
 from ._base_kmeans_kernel_funcs import (
     _make_initialize_window_kernel_funcs,
     _make_update_closest_centroid_kernel_func,
-    _make_accumulate_dot_products_kernel_func,
+    _make_accumulate_sum_of_ops_kernel_func,
 )
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
@@ -40,18 +40,19 @@ def make_label_assignment_fixed_window_kernel(
         window_n_centroids,
         centroids_window_height,
         dtype,
+        initialize_window_of_centroids_half_l2_norms=True,
     )
 
     _update_closest_centroid = _make_update_closest_centroid_kernel_func(
         window_n_centroids
     )
 
-    _accumulate_dot_products = _make_accumulate_dot_products_kernel_func(
+    _accumulate_dot_products = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
         n_features,
         centroids_window_height,
         window_n_centroids,
-        with_X_l2_norm=False,
+        ops="product",
         dtype=dtype,
     )
 
@@ -77,7 +78,7 @@ def make_label_assignment_fixed_window_kernel(
         local_work_id = dpex.get_local_id(zero_idx)
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
-        centroids_window_half_l2_norm = dpex.local.array(
+        window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
         dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
@@ -95,7 +96,7 @@ def make_label_assignment_fixed_window_kernel(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 
@@ -131,7 +132,7 @@ def make_label_assignment_fixed_window_kernel(
                 first_centroid_idx,
                 min_idx,
                 min_sample_pseudo_inertia,
-                centroids_window_half_l2_norm,
+                window_of_centroids_half_l2_norms,
                 dot_products,
             )
 

@@ -88,7 +88,7 @@ ARG CMAKE_VERSION_BUILD=2
 ARG DPCTL_GIT_BRANCH=0.13.0
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.10.1
+ARG DPNP_GIT_BRANCH=0.10.2
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
@@ -298,7 +298,6 @@ ARG ONEAPI_INSTALL_DIR
 ARG DPNP_BUILD_DIR=$TMPDIR/dpnp
 ARG DPNP_GIT_BRANCH
 ARG DPNP_GIT_URL
-ARG DPNP_DEBUG=1
 RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
     --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
     pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL $TMPDIR/dpctl/dpctl*.whl \
