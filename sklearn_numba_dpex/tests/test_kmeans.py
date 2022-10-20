@@ -218,8 +218,8 @@ def test_select_samples_far_from_centroid_kernel(dtype):
 
     # The following array, when sorted, reads:
     # [-1.0, 9.0, 9.0, 20.22, 20.22, 20.22, 20.22, 23.0, 23.0, 30.0]
-    # So we expect 3 values above threshold: 23.0, 23.0, 30.0
-    # and 2 values equal to threshold.
+    # Assuming n_selected == 5, the threshold is 20.22 and we expect 3 values
+    # above threshold (23.0, 23.0, 30.0) and 2 values equal to threshold.
     distance_to_centroid = dpctl.tensor.from_numpy(
         np.array(
             [
@@ -255,7 +255,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
         )
     )
 
-    # NB: the values used to initialize the output array does not matter, 100 is chosen
+    # NB: the values used to initialize the output array do not matter, 100 is chosen
     # here for readability, but `dpctl.empty` is also possible.
     selected_samples_idx = (dpctl.tensor.ones(sh=10, dtype=np.int32) * 100).get_array()
 
@@ -271,19 +271,30 @@ def test_select_samples_far_from_centroid_kernel(dtype):
 
     # NB: the variable n_selected_eq_threshold is always one unit above the true value
     # It is only used as an intermediary variable in the kernel and is not used
-    # otherwise
+    # otherwise.
     n_selected_eq_threshold = int(n_selected_eq_threshold[0] - 1)
     n_selected_gt_threshold = int(n_selected_gt_threshold[0])
     selected_samples_idx = dpctl.tensor.asnumpy(selected_samples_idx)
 
     # NB: the exact number of selected values equal to the threshold and the
     # corresponding selected indexes in the input array can change depending on
-    # concurrency. We only check conditions for success, those does not depend on the
-    # variability.
+    # concurrency. We only check conditions for success that do not depend on the
+    # concurrency induced non-determinism.
     assert n_selected_gt_threshold == 3
     assert n_selected_eq_threshold >= 2
-    assert set(selected_samples_idx[:3]) == {3, 7, 9}
-    assert set(selected_samples_idx[-n_selected_gt_threshold:]).issubset({0, 1, 4, 6})
+
+    expected_gt_threshold_indices = {3, 7, 9}
+    actual_gt_threshold_indices = set(
+        selected_samples_idx[:n_selected_gt_threshold]
+    )  # stored at the beginning
+    assert actual_gt_threshold_indices == expected_gt_threshold_indices
+
+    expected_eq_threshold_indices = {0, 1, 4, 6}
+    actual_eq_threshold_indices = set(
+        selected_samples_idx[-n_selected_eq_threshold:]
+    )  # stored at the end
+    assert actual_eq_threshold_indices.issubset(expected_eq_threshold_indices)
+
     assert (
         selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
     ).all()

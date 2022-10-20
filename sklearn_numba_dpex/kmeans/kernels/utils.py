@@ -120,8 +120,8 @@ def make_select_samples_far_from_centroid_kernel(
             distance_to_centroid,           # IN       (n_samples,)
             threshold,                      # IN       (n_samples,)
             selected_samples_idx,           # OUT      (n_samples,)
-            n_selected_gt_threshold,        # OUT      (1, )
-            n_selected_eq_threshold,        # OUT      (1, )
+            n_selected_gt_threshold,        # OUT      (1,)
+            n_selected_eq_threshold,        # OUT      (1,)
         ):
     # fmt: on
         """This kernel writes in selected_samples_idx the idx of the top n_selected
@@ -135,7 +135,8 @@ def make_select_samples_far_from_centroid_kernel(
         Because the exact number of values strictly equal to the threshold is not known
         and that the goal is to select the top n_selected greater items above threshold,
         we write indices of values strictly greater than threshold at the beginning of
-        the array, and indices of values equal to threshold at the end of the array.
+        the selected_samples_idx, and indices of values equal to threshold at the end
+        of the selected_samples_idx array.
         """
         threshold_ = threshold[0]
 
