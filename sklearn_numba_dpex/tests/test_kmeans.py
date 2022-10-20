@@ -1,11 +1,11 @@
-import inspect
-
-import dpctl
-import numpy as np
 import pytest
-import warnings
+
+import numpy as np
 from numpy.random import default_rng
+import dpnp
+import dpctl
 from numpy.testing import assert_array_equal
+
 from sklearn import config_context
 from sklearn.base import clone
 from sklearn.cluster import KMeans
@@ -13,6 +13,9 @@ from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
 
+from sklearn_numba_dpex.kmeans.kernels.utils import (
+    make_select_samples_far_from_centroid_kernel,
+)
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 
 
@@ -32,10 +35,18 @@ def _fail_if_no_dtype_support(xfail_fn, dtype):
         )
 
 
+def test_dpnp_implements_argpartition():
+    # Detect if dpnp exposes an argpartition kernel and alert that sklearn-numba-dpex
+    # can be adapted accordingly.
+    assert not hasattr(dpnp, "argpartition"), (
+        "An argpartition function is now available in dpnp, it should now be used in "
+        "place of dpnp.partition in sklearn_numba_dpex.kmeans.drivers ."
+    )
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_kmeans_same_results(dtype):
     _fail_if_no_dtype_support(pytest.xfail, dtype)
-
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
@@ -92,48 +103,38 @@ def test_kmeans_same_results(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_kmeans_fit_empty_clusters(dtype):
+def test_kmeans_relocated_clusters(dtype):
+    """Copied and adapted from sklearn's test_kmeans_relocated_clusters"""
     _fail_if_no_dtype_support(pytest.xfail, dtype)
 
-    random_seed = 42
-    X, _ = make_blobs(random_state=random_seed)
-    X = X.astype(dtype)
+    # check that empty clusters are relocated as expected
+    X = np.array([[0, 0], [0.5, 0], [0.5, 1], [1, 1]], dtype=dtype)
 
-    n_clusters = inspect.signature(KMeans).parameters["n_clusters"].default
-    rng = default_rng(random_seed)
-    init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
-    # Create an outlier centroid in initial centroids to have an empty cluster.
-    init[0] = np.finfo(np.float32).max
+    # second center too far from others points will be empty at first iter
+    init_centers = np.array([[0.5, 0.5], [3, 3]], dtype=dtype)
 
-    kmeans_with_empty_cluster = KMeans(
-        random_state=random_seed,
-        algorithm="lloyd",
-        n_clusters=n_clusters,
-        init=init,
-        n_init=1,
-        max_iter=1,
-    )
+    kmeans = KMeans(n_clusters=2, n_init=1, init=init_centers)
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        kmeans.fit(X)
 
-    # TODO: once the behavior of scikit learn for empty clusters has been implemented
-    # identically in sklearn_numba_dpex, the warning will be removed, and we will want
-    # to check instead that the results are equals (similarly to the test
-    # test_kmeans_fit_same_results)
-    with pytest.warns(RuntimeWarning, match="Found an empty cluster"):
-        with config_context(engine_provider="sklearn_numba_dpex"):
-            kmeans_with_empty_cluster.fit(X)
+    expected_n_iter = 3
+    expected_inertia = 0.25
+    assert_allclose(kmeans.inertia_, expected_inertia)
+    assert kmeans.n_iter_ == expected_n_iter
 
-    kmeans_without_empty_cluster = KMeans(
-        random_state=random_seed,
-        algorithm="lloyd",
-        n_clusters=n_clusters,
-        n_init=1,
-        max_iter=1,
-    )
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        with config_context(engine_provider="sklearn_numba_dpex"):
-            kmeans_without_empty_cluster.fit(X)
+    # There are two acceptable ways of relocating clusters in this example, the output
+    # depends on how the argpartition strategy break ties. It might not be deterministic
+    # (might depend on thread concurrency) so we accept both outputs.
+    try:
+        expected_labels = [0, 0, 1, 1]
+        expected_centers = [[0.25, 0], [0.75, 1]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)
+    except AssertionError:
+        expected_labels = [1, 1, 0, 0]
+        expected_centers = [[0.75, 1.0], [0.25, 0.0]]
+        assert_array_equal(kmeans.labels_, expected_labels)
+        assert_allclose(kmeans.cluster_centers_, expected_centers)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -176,3 +177,124 @@ def test_inertia(dtype):
 
     rtol = 1e-4 if dtype == np.float32 else 1e-6
     assert_allclose(inertia, expected, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_relocate_empty_clusters(dtype):
+    """Copied and adapted from sklearn's test_relocate_empty_clusters"""
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
+    # Synthetic dataset with 3 obvious clusters of different sizes
+    X = np.array(
+        [-10.0, -9.5, -9.0, -8.5, -8.0, -1.0, 1.0, 9.0, 9.5, 10.0],
+        dtype=dtype,
+    ).reshape(-1, 1)
+    # centers all initialized to the first point of X
+    # With this initialization, all points will be assigned to the first center
+    init_centers = np.array([-10.0, -10.0, -10.0]).reshape(-1, 1)
+
+    kmeans_vanilla = KMeans(
+        n_clusters=3, n_init=1, max_iter=1, init=init_centers, algorithm="lloyd"
+    )
+    kmeans_engine = clone(kmeans_vanilla)
+
+    kmeans_vanilla.fit(X)
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        kmeans_engine.fit(X)
+
+    expected_n_iter = 1
+    expected_labels = [0, 0, 0, 0, 0, 0, 0, 2, 2, 1]
+    assert kmeans_vanilla.n_iter_ == expected_n_iter
+    assert kmeans_engine.n_iter_ == expected_n_iter
+    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
+    assert_array_equal(kmeans_vanilla.labels_, expected_labels)
+    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_select_samples_far_from_centroid_kernel(dtype):
+    _fail_if_no_dtype_support(pytest.xfail, dtype)
+
+    # The following array, when sorted, reads:
+    # [-1.0, 9.0, 9.0, 20.22, 20.22, 20.22, 20.22, 23.0, 23.0, 30.0]
+    # Assuming n_selected == 5, the threshold is 20.22 and we expect 3 values
+    # above threshold (23.0, 23.0, 30.0) and 2 values equal to threshold.
+    distance_to_centroid = dpctl.tensor.from_numpy(
+        np.array(
+            [
+                20.22,  # == threshold
+                20.22,
+                -1.0,
+                23.0,  # idx = 3
+                20.22,
+                9.0,
+                20.22,
+                30.0,  # idx = 7
+                9.0,
+                23.0,  # idx = 9
+            ],
+            dtype=dtype,
+        )
+    )
+
+    # NB: we wrap everything in dpctl tensors and select the threshold with __getitem__
+    # on a dpctl.tensor because loading of numpy arrays to and from dpctl.tensor arrays
+    # seems to create numerical errors that break the kernel
+    # (the condition ==threshold stops being evaluated properly) when using float64
+    # precision ?
+    # TODO: write a minimal reproducer and open an issue if confirmed
+    threshold = distance_to_centroid[0:1]  # == 20.22
+
+    n_selected = 5
+    n_samples = len(distance_to_centroid)
+    work_group_size = 4
+    select_samples_far_from_centroid_kernel = (
+        make_select_samples_far_from_centroid_kernel(
+            n_selected, n_samples, work_group_size
+        )
+    )
+
+    # NB: the values used to initialize the output array do not matter, 100 is chosen
+    # here for readability, but `dpctl.empty` is also possible.
+    selected_samples_idx = (dpctl.tensor.ones(sh=10, dtype=np.int32) * 100).get_array()
+
+    n_selected_gt_threshold = dpctl.tensor.zeros(sh=1, dtype=np.int32)
+    n_selected_eq_threshold = dpctl.tensor.ones(sh=1, dtype=np.int32)
+    select_samples_far_from_centroid_kernel(
+        distance_to_centroid,
+        threshold,
+        selected_samples_idx,
+        n_selected_gt_threshold,
+        n_selected_eq_threshold,
+    )
+
+    # NB: the variable n_selected_eq_threshold is always one unit above the true value
+    # It is only used as an intermediary variable in the kernel and is not used
+    # otherwise.
+    n_selected_eq_threshold = int(n_selected_eq_threshold[0] - 1)
+    n_selected_gt_threshold = int(n_selected_gt_threshold[0])
+    selected_samples_idx = dpctl.tensor.asnumpy(selected_samples_idx)
+
+    # NB: the exact number of selected values equal to the threshold and the
+    # corresponding selected indexes in the input array can change depending on
+    # concurrency. We only check conditions for success that do not depend on the
+    # concurrency induced non-determinism.
+    assert n_selected_gt_threshold == 3
+    assert n_selected_eq_threshold >= 2
+
+    expected_gt_threshold_indices = {3, 7, 9}
+    actual_gt_threshold_indices = set(
+        selected_samples_idx[:n_selected_gt_threshold]
+    )  # stored at the beginning
+    assert actual_gt_threshold_indices == expected_gt_threshold_indices
+
+    expected_eq_threshold_indices = {0, 1, 4, 6}
+    actual_eq_threshold_indices = set(
+        selected_samples_idx[-n_selected_eq_threshold:]
+    )  # stored at the end
+    assert actual_eq_threshold_indices.issubset(expected_eq_threshold_indices)
+
+    assert (
+        selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
+    ).all()

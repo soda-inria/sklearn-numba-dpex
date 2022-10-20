@@ -4,6 +4,7 @@ from functools import lru_cache
 
 import numpy as np
 import dpctl
+import dpnp
 from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
 
 from sklearn_numba_dpex.utils._device import _DeviceParams
@@ -13,6 +14,8 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
     make_compute_inertia_kernel,
+    make_relocate_empty_clusters_kernel,
+    make_select_samples_far_from_centroid_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
     make_initialize_to_zeros_2d_kernel,
@@ -235,6 +238,9 @@ class KMeansDriver:
             n_clusters,
         ) = self._check_inputs(X, sample_weight, centers_init)
 
+        verbose = bool(verbose)
+        use_uniform_weights = (sample_weight == sample_weight[0]).all()
+
         # Create a set of kernels
         (
             n_centroids_private_copies,
@@ -336,7 +342,6 @@ class KMeansDriver:
 
         # Allocate the necessary memory in the device global memory
         new_centroids_t = dpctl.tensor.empty_like(centroids_t, device=self.device)
-
         centroids_half_l2_norm = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
@@ -346,7 +351,9 @@ class KMeansDriver:
         centroid_shifts = dpctl.tensor.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
-        per_sample_inertia = dpctl.tensor.empty(
+        # NB: the same buffer is used for those two arrays because it is never needed
+        # to store those simultaneously in memory.
+        sq_dist_to_nearest_centroid = per_sample_inertia = dpctl.tensor.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
         assignments_idx = dpctl.tensor.empty(
@@ -366,8 +373,8 @@ class KMeansDriver:
             n_clusters, dtype=np.uint32, device=self.device
         )
 
-        # nb_empty_clusters_ is a scalar handled in kernels via a one-element array.
-        nb_empty_clusters = dpctl.tensor.empty(1, dtype=np.int32, device=self.device)
+        # n_empty_clusters_ is a scalar handled in kernels via a one-element array.
+        n_empty_clusters = dpctl.tensor.empty(1, dtype=np.int32, device=self.device)
 
         # The loop
         n_iteration = 0
@@ -380,7 +387,7 @@ class KMeansDriver:
 
             reset_cluster_sizes_private_copies_kernel(cluster_sizes_private_copies)
             reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
-            nb_empty_clusters[0] = np.int32(0)
+            n_empty_clusters[0] = np.int32(0)
 
             # TODO: implement special case where only one copy is needed
             fused_lloyd_fixed_window_single_step_kernel(
@@ -391,32 +398,6 @@ class KMeansDriver:
                 assignments_idx,
                 new_centroids_t_private_copies,
                 cluster_sizes_private_copies,
-            )
-
-            reduce_centroid_data_kernel(
-                cluster_sizes_private_copies,
-                new_centroids_t_private_copies,
-                cluster_sizes,
-                new_centroids_t,
-                empty_clusters_list,
-                nb_empty_clusters,
-            )
-
-            nb_empty_clusters_ = dpctl.tensor.asnumpy(nb_empty_clusters)[0]
-            if nb_empty_clusters_ > 0:
-                # TODO: instead of this warning, set the centroid for empty clusters
-                # to new points carefully chosen in the dataset. (mimic scikit-learn
-                # behavior where the points with the highest inertia are chosen)
-                warnings.warn("Found an empty cluster", RuntimeWarning)
-
-            broadcast_division_kernel(new_centroids_t, cluster_sizes)
-
-            compute_centroid_shifts_kernel(
-                centroids_t, new_centroids_t, centroid_shifts
-            )
-
-            centroid_shifts_sum, *_ = dpctl.tensor.asnumpy(
-                reduce_centroid_shifts_kernel(centroid_shifts)
             )
 
             if verbose:
@@ -433,7 +414,70 @@ class KMeansDriver:
                 inertia, *_ = dpctl.tensor.asnumpy(
                     reduce_inertia_kernel(per_sample_inertia)
                 )
-                print(f"Iteration {n_iteration}, inertia {inertia}")
+                print(f"Iteration {n_iteration}, inertia {inertia:5.3e}")
+
+            reduce_centroid_data_kernel(
+                cluster_sizes_private_copies,
+                new_centroids_t_private_copies,
+                cluster_sizes,
+                new_centroids_t,
+                empty_clusters_list,
+                n_empty_clusters,
+            )
+
+            n_empty_clusters_ = int(n_empty_clusters[0])
+            if n_empty_clusters_ > 0:
+                # NB: empty cluster very rarely occurs, and it's more efficient to
+                # compute inertia and labels only after occurrences have been detected
+                # at the cost of an additional pass on data, rather than computing
+                # inertia by default during the first pass on data in case there's an
+                # empty cluster.
+
+                # if verbose is True, then assignments to closest centroids already have
+                # been computed in the main kernel
+                if not verbose:
+                    assignment_fixed_window_kernel(
+                        X_t,
+                        centroids_t,
+                        centroids_half_l2_norm,
+                        assignments_idx,
+                    )
+
+                # if verbose is True and if sample_weight is uniform, distances to
+                # closest centroids already have been computed in the main kernel
+                if not verbose or not use_uniform_weights:
+                    # Note that we intentionally we pass unit weights instead of
+                    # sample_weight so that per_sample_inertia will be updated to the
+                    # (unweighted) squared distance to the nearest centroid.
+                    compute_inertia_kernel(
+                        X_t,
+                        dpctl.tensor.ones_like(sample_weight),
+                        centroids_t,
+                        assignments_idx,
+                        sq_dist_to_nearest_centroid,
+                    )
+
+                self._relocate_empty_clusters(
+                    n_empty_clusters_,
+                    X_t,
+                    sample_weight,
+                    new_centroids_t,
+                    cluster_sizes,
+                    assignments_idx,
+                    empty_clusters_list,
+                    sq_dist_to_nearest_centroid,
+                    per_sample_inertia,
+                    work_group_size,
+                    compute_dtype,
+                )
+
+            broadcast_division_kernel(new_centroids_t, cluster_sizes)
+
+            compute_centroid_shifts_kernel(
+                centroids_t, new_centroids_t, centroid_shifts
+            )
+
+            centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
 
             # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
             # and keep an additional copy of centroids that is updated only if the
@@ -453,7 +497,7 @@ class KMeansDriver:
             # update, to which the pseudo inertia that is computed at this iteration
             # refers. For this reason, this strategy is not compatible with sklearn
             # unit tests, that consider new_centroids_t (the array after the update)
-            # to be the best centroids at  each iteration.
+            # to be the best centroids at each iteration.
 
             centroids_t, new_centroids_t = (
                 new_centroids_t,
@@ -510,6 +554,85 @@ class KMeansDriver:
             centroids_t.T,
             n_iteration,
             output_dtype,
+        )
+
+    def _relocate_empty_clusters(
+        self,
+        n_empty_clusters,
+        X_t,
+        sample_weight,
+        centroids_t,
+        cluster_sizes,
+        assignments_idx,
+        empty_clusters_list,
+        sq_dist_to_nearest_centroid,
+        per_sample_inertia,
+        work_group_size,
+        compute_dtype,
+    ):
+        n_features, n_samples = X_t.shape
+
+        select_samples_far_from_centroid_kernel = (
+            make_select_samples_far_from_centroid_kernel(
+                n_empty_clusters, n_samples, work_group_size
+            )
+        )
+
+        # NB: partition/argpartition kernels are hard to implement right, we use dpnp
+        # implementation of `partition` and process to an additional pass on the data
+        # to finish the argpartition.
+        # ???: how does the dpnp GPU implementation of partition compare with
+        # np.partition ?
+        # TODO: if the performance compares well, we could also remove some of the
+        # kernels in .kernels.utils and replace it with dpnp functions.
+        kth = n_samples - n_empty_clusters
+        threshold = dpnp.partition(
+            dpnp.ndarray(
+                shape=sq_dist_to_nearest_centroid.shape,
+                buffer=sq_dist_to_nearest_centroid,
+            ),
+            kth=kth,
+        ).get_array()[kth : (kth + 1)]
+
+        samples_far_from_center = dpctl.tensor.empty(
+            n_samples, dtype=np.uint32, device=self.device
+        )
+        n_selected_gt_threshold = dpctl.tensor.zeros(
+            1, dtype=np.int32, device=self.device
+        )
+        n_selected_eq_threshold = dpctl.tensor.ones(
+            1, dtype=np.int32, device=self.device
+        )
+        select_samples_far_from_centroid_kernel(
+            sq_dist_to_nearest_centroid,
+            threshold,
+            samples_far_from_center,
+            n_selected_gt_threshold,
+            n_selected_eq_threshold,
+        )
+
+        n_selected_gt_threshold_ = int(n_selected_gt_threshold[0])
+
+        # Centroids of empty clusters are relocated to samples in X that are the
+        # farthest from their respective centroids. new_centroids_t is updated
+        # accordingly.
+        relocate_empty_clusters_kernel = make_relocate_empty_clusters_kernel(
+            n_empty_clusters,
+            n_features,
+            n_selected_gt_threshold_,
+            work_group_size,
+            compute_dtype,
+        )
+
+        relocate_empty_clusters_kernel(
+            X_t,
+            sample_weight,
+            assignments_idx,
+            samples_far_from_center,
+            empty_clusters_list,
+            per_sample_inertia,
+            centroids_t,
+            cluster_sizes,
         )
 
     def get_labels(

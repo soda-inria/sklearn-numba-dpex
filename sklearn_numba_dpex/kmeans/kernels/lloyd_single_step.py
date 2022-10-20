@@ -1,6 +1,7 @@
 import math
 from functools import lru_cache
 
+import numpy as np
 import numba_dpex as dpex
 
 from ._base_kmeans_kernel_funcs import (
@@ -88,6 +89,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         // n_cluster_bytes
     )
 
+    zero_idx = np.int64(0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -138,8 +140,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
         """
-        sample_idx = dpex.get_global_id(0)
-        local_work_id = dpex.get_local_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
@@ -160,12 +162,12 @@ def make_lloyd_single_step_fixed_window_kernel(
         # in the window.
         dot_products = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
-        first_centroid_idx = 0
+        first_centroid_idx = zero_idx
 
         # The two variables that are initialized here will contain the result we seek,
         # i.e, at the end of the outer loop, it will be equal to the closest centroid
         # to the current sample and the corresponding pseudo inertia.
-        min_idx = 0
+        min_idx = zero_idx
         min_sample_pseudo_inertia = inf
 
         # Those variables are used in the inner loop during loading of the window of
@@ -196,7 +198,7 @@ def make_lloyd_single_step_fixed_window_kernel(
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
-            first_feature_idx = 0
+            first_feature_idx = zero_idx
 
             # Inner loop: interate on successive windows of size window_n_features
             # that cover all features for current given centroids
@@ -281,7 +283,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # single array of centroids in a complementary kernel.
 
         # The privatization is more effective when there is a low number of centroid
-        # values (equal to (n_clusters * n_features)) comparatively to the global
+        # values (equal to `n_clusters * n_features`) comparatively to the global
         # number of work items, i.e. when the probability of collision is high. At the
         # opposite end where the probability of collision is low, privatization might
         # be detrimental to performance and we might prefer simpler, faster code

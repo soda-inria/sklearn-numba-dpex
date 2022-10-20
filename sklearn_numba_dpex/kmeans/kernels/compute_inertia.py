@@ -1,11 +1,8 @@
 import math
 from functools import lru_cache
 
+import numpy as np
 import numba_dpex as dpex
-
-
-# NB: refer to the definition of the main lloyd function for a more comprehensive
-# inline commenting of the kernel.
 
 
 @lru_cache
@@ -16,7 +13,8 @@ def make_compute_inertia_kernel(
     dtype,
 ):
 
-    zero = dtype(0.0)
+    zero_idx = np.int64(0)
+    zero_init = dtype(0.0)
 
     @dpex.kernel
     # fmt: off
@@ -29,12 +27,12 @@ def make_compute_inertia_kernel(
     ):
     # fmt: on
 
-        sample_idx = dpex.get_global_id(0)
+        sample_idx = dpex.get_global_id(zero_idx)
 
         if sample_idx >= n_samples:
             return
 
-        inertia = zero
+        inertia = zero_init
 
         centroid_idx = assignments_idx[sample_idx]
 

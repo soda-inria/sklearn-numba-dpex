@@ -28,8 +28,13 @@ jobs:
 
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      # TODO: enable the test for cluster relocalization when it's properly supported
-      # by the KMeans engine in sklearn_numba_dpex. More information about the
-      # progress toward support is available on the issue tracker at:
-      # https://github.com/soda-inria/sklearn-numba-dpex/issues/24
+      # TODO: test_kmeans_relocated_clusters on the sklearn side relies on the
+      # arbitrary tie-breaking behavior of the np.argpartition function. The
+      # within-partition order should be considered an implementation detail and
+      # sklearn_numba_dpex own kernels for argpartition do not attempt to replicate the
+      # arbitrary tie breaking behavior of numpy and this causes this test to fail.
+      # Maybe the test should be changed upstream so it doesn't have to rely on the
+      # within partition order in case of ties.
+      # Until then this test is disabled but similar tests are internalized in
+      # sklearn_numba_dpex.
       run: pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means -k "not test_kmeans_relocated_clusters"
