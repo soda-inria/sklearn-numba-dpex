@@ -433,9 +433,9 @@ class KMeansDriver:
                 # inertia by default during the first pass on data in case there's an
                 # empty cluster.
 
+                # if verbose is True, then assignments to closest centroids already have
+                # been computed in the main kernel
                 if not verbose:
-                    # if verbose assignments to closest centroids already have been
-                    # computed in the main kernel
                     assignment_fixed_window_kernel(
                         X_t,
                         centroids_t,
@@ -443,14 +443,9 @@ class KMeansDriver:
                         assignments_idx,
                     )
 
-                # if verbose and if sample_weight is uniform, distances to closest
-                # centroids already have been computed in the main kernel we only
-                # need to compute assignments
-
+                # if verbose is True and if sample_weight is uniform, distances to
+                # closest centroids already have been computed in the main kernel
                 if not verbose or not use_uniform_weights:
-                    # if verbose and if sample_weight is uniform, distances to closest
-                    # centroids also already have been computed in the main kernel
-
                     # Note that we intentionally we pass unit weights instead of
                     # sample_weight so that per_sample_inertia will be updated to the
                     # (unweighted) squared distance to the nearest centroid.

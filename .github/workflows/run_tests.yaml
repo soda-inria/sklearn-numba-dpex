@@ -28,15 +28,6 @@ jobs:
 
       # TODO: run those tests in a separate pipeline
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      # TODO: the test test_kmeans_relocated_clusters on the sklearn side assumes a
-      # deterministic behavior of the np.argpartition function regarding how identical
-      # results are ordered. This test is too strict, because each partition order does
-      # not count and for the moment it fails because the kernels for argpartition
-      # outputs partitions with a different order. Maybe the test should be changed
-      # upstream so it doesn't have to rely on order in case of equality.
-      # Until then this test is disabled but similar tests are internalized in
-      # sklearn_numba_dpex.
-      
       # TODO: test_kmeans_relocated_clusters on the sklearn side relies on the 
       # arbitrary tie-breaking behavior of the np.argpartition function. The 
       # within-partition order should be considered an implementation detail and 
