@@ -1,7 +1,4 @@
-try:
-    from sklearn.cluster._kmeans import KMeansCythonEngine
-except ImportError:
-    KMeansCythonEngine = object
+from sklearn.cluster._kmeans import KMeansCythonEngine
 
 from sklearn.exceptions import NotSupportedByEngineError
 
@@ -45,7 +42,22 @@ class KMeansEngine(KMeansCythonEngine):
                 f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
             )
 
+        self.sample_weight = sample_weight
+
         return super().prepare_fit(X, y, sample_weight)
+
+    def init_centroids(self, X):
+        if hasattr(self.init, "startswith") and self.init == "k-means++":
+            return KMeansDriver(**self._DRIVER_CONFIG).kmeans_plusplus(
+                X, self.sample_weight, self.estimator.n_clusters, self.random_state
+            )
+
+        return self.estimator._init_centroids(
+            X,
+            x_squared_norms=self.x_squared_norms,
+            init=self.init,
+            random_state=self.random_state,
+        )
 
     def kmeans_single(self, X, sample_weight, centers_init):
         return KMeansDriver(**self._DRIVER_CONFIG).lloyd(

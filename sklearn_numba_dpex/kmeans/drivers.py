@@ -10,12 +10,18 @@ from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
 
 from sklearn_numba_dpex.device import DeviceParams
 
+from sklearn_numba_dpex.common.random import (
+    get_random_raw,
+    create_xoroshiro128pp_states,
+)
+
 from sklearn_numba_dpex.common.kernels import (
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
     make_broadcast_division_1d_2d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_sum_reduction_2d_axis1_kernel,
+    make_argmin_reduction_1d_kernel,
 )
 
 from sklearn_numba_dpex.kmeans.kernels import (
@@ -23,6 +29,9 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
     make_compute_inertia_kernel,
+    make_init_kmeansplusplus_kernel,
+    make_sample_center_candidates_kernel,
+    make_kmeansplusplus_single_step_fixed_window_kernel,
     make_relocate_empty_clusters_kernel,
     make_select_samples_far_from_centroid_kernel,
     make_centroid_shifts_kernel,
@@ -784,6 +793,200 @@ class KMeansDriver:
         )
         return euclidean_distances_t.T, output_dtype
 
+    def kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
+        centers_t, output_dtype = self._kmeans_plusplus(
+            X, sample_weight, n_clusters, random_state
+        )
+        return dpt.asnumpy(centers_t).astype(output_dtype, copy=False)
+
+    def _kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
+        if X.shape[0] < n_clusters:
+            raise ValueError(
+                f"n_samples={X.shape[0]} should be >= n_clusters={n_clusters}."
+            )
+
+        # NB: the implementation differs from sklearn implementation with regards to
+        # sample_weight, which is ignored in sklearn, but used here.
+        # Check that this is correct ?
+        (
+            X,
+            sample_weight,
+            _,
+            compute_dtype,
+            output_dtype,
+            work_group_size,
+        ) = self._check_inputs(X, sample_weight, cluster_centers=None)
+
+        n_samples, n_features = X.shape
+
+        # heuristic taken from sklearn implementation v<1.2
+        n_local_trials = 2 + int(np.log(n_clusters))
+
+        # TODO: this block is also written in common.kernel.random, factorize ?
+        from_cpu_to_device = False
+        if not self.device.has_aspect_cpu:
+            try:
+                cpu_device = dpctl.SyclDevice("cpu")
+                from_cpu_to_device = True
+            except dpctl.SyclDeviceCreationError:
+                warnings.warn(
+                    "No CPU found, fallbacking random initiatlization to default "
+                    "device."
+                )
+
+        init_kmeansplusplus_kernel = make_init_kmeansplusplus_kernel(
+            n_samples,
+            n_features,
+            self.preferred_work_group_size_multiple,
+            work_group_size,
+            compute_dtype,
+        )
+
+        sample_center_candidates_kernel = make_sample_center_candidates_kernel(
+            n_samples,
+            n_local_trials,
+            self.preferred_work_group_size_multiple,
+            work_group_size,
+            compute_dtype,
+        )
+
+        (
+            kmeansplusplus_single_step_fixed_window_kernel
+        ) = make_kmeansplusplus_single_step_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_local_trials,
+            self.preferred_work_group_size_multiple,
+            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
+            centroids_window_height=self.centroids_window_height,
+            work_group_size=work_group_size,
+            dtype=compute_dtype,
+        )
+
+        select_best_candidate_kernel = make_argmin_reduction_1d_kernel(
+            n_local_trials, work_group_size, device=self.device, dtype=compute_dtype
+        )
+
+        reduce_potential_1d_kernel = make_sum_reduction_2d_axis1_kernel(
+            size0=n_samples,
+            size1=None,
+            work_group_size=work_group_size,
+            device=self.device,
+            dtype=compute_dtype,
+        )
+
+        reduce_potential_2d_kernel = make_sum_reduction_2d_axis1_kernel(
+            size0=n_local_trials,
+            size1=n_samples,
+            work_group_size=work_group_size,
+            device=self.device,
+            dtype=compute_dtype,
+        )
+
+        random_state = create_xoroshiro128pp_states(
+            n_local_trials,
+            random_state,
+            device=cpu_device if from_cpu_to_device else self.device,
+        )
+        if from_cpu_to_device:
+            sample_center_candidates_kernel = sample_center_candidates_kernel.configure(
+                sycl_queue=random_state.sycl_queue,
+                global_size=sample_center_candidates_kernel.global_size,
+                local_size=[
+                    DeviceParams(cpu_device).preferred_work_group_size_multiple
+                ],
+            )
+
+        X_t, sample_weight, _ = self._load_transposed_data_to_device(
+            X, sample_weight, cluster_centers=None
+        )
+
+        centers_t = dpt.empty(
+            sh=(n_features, n_clusters), dtype=compute_dtype, device=self.device
+        )
+
+        center_indices = dpt.full((n_clusters,), -1, dtype=np.int32)
+
+        distance_to_candidates_t = dpt.empty(
+            sh=(n_local_trials, n_samples), dtype=compute_dtype, device=self.device
+        )
+
+        closest_dist_sq = dpt.empty(
+            sh=(n_samples,), dtype=compute_dtype, device=self.device
+        )
+
+        candidate_ids = dpt.empty(
+            sh=(n_local_trials,), dtype=np.int32, device=self.device
+        )
+
+        # Pick first center randomly
+        starting_center_id = np.int32(get_random_raw(random_state) % n_samples)
+        center_indices[0] = starting_center_id[0]
+
+        # track index of point, initialize list of closest distances and calculate
+        # current potential
+        init_kmeansplusplus_kernel(
+            X_t,
+            sample_weight,
+            centers_t,
+            center_indices,
+            closest_dist_sq,
+        )
+        total_potential = reduce_potential_1d_kernel(closest_dist_sq)
+
+        # Pick the remaining n_clusters-1 points
+        for c in range(1, n_clusters):
+            # NB: this step consists in highly sequential instructions that can only
+            # be parallelized in n_local_trials threads, it's up to 50x faster to run it
+            # on CPU, and becomes the bottleneck if ran on GPU. Depending on hardware
+            # and weight of data transfers, are there cases where it would be more
+            # efficient to keep it on GPU ?
+            # ???: would it be bad to sample the sample weight once outside the loop and
+            # reuse it at each iteration ?
+            if from_cpu_to_device:
+                candidate_ids = candidate_ids.to_device(cpu_device)
+                sample_center_candidates_kernel(
+                    closest_dist_sq.to_device(cpu_device),
+                    total_potential.to_device(cpu_device),
+                    random_state,
+                    candidate_ids,
+                )
+                candidate_ids = candidate_ids.to_device(self.device)
+            else:
+                sample_center_candidates_kernel(
+                    closest_dist_sq,
+                    total_potential,
+                    random_state,
+                    candidate_ids,
+                )
+
+            # XXX: at the cost of one additional pass on data, we could avoid storing
+            # entirely distance_to_candidates_t in memory, and save
+            # `dtype.nbytes * n_local_trials * n_sample` bytes in memory.
+            # Which is better ?
+            kmeansplusplus_single_step_fixed_window_kernel(
+                X_t,
+                sample_weight,
+                candidate_ids,
+                closest_dist_sq,
+                distance_to_candidates_t,
+            )
+
+            candidate_potentials = reduce_potential_2d_kernel(distance_to_candidates_t)[
+                :, 0
+            ]
+            best_candidate = select_best_candidate_kernel(candidate_potentials)[0]
+
+            total_potential = candidate_potentials[
+                best_candidate : (best_candidate + 1)
+            ]
+            closest_dist_sq = distance_to_candidates_t[best_candidate]
+            best_candidate = candidate_ids[best_candidate]
+            centers_t[:, c] = X_t[:, best_candidate]
+            center_indices[c] = best_candidate
+
+        return centers_t.T, output_dtype
+
     def _set_dtype(self, X, sample_weight, centers_init):
         input_dtype = output_dtype = np.dtype(X.dtype).type
         compute_dtype = np.dtype(self.dtype or input_dtype).type
@@ -825,8 +1028,9 @@ class KMeansDriver:
             # The other cases would not trigger any additional memory copies.
             X = X.astype(compute_dtype)
 
-        centers_init_dtype = centers_init.dtype
-        if centers_init.dtype != compute_dtype:
+        if centers_init is not None and (
+            (centers_init_dtype := centers_init.dtype) != compute_dtype
+        ):
             warnings.warn(
                 f"The centers have been passed with type {centers_init_dtype} but "
                 f"type {compute_dtype} is expected. A copy will be created with the "
@@ -851,6 +1055,16 @@ class KMeansDriver:
         return X, sample_weight, centers_init, compute_dtype, output_dtype
 
     def _check_inputs(self, X, sample_weight, cluster_centers):
+
+        # TODO: sample_weight shouldn't ever be a float, but this is to be consistent
+        # with sklearn behavior, which is bugged, but is currently enforced by the
+        # unit test `test_scaled_weights`, which is also bugged, `uniform(n_samples)`
+        # should be replaced by `uniform(size=n_samples)`.
+        # PR opened at https://github.com/scikit-learn/scikit-learn/pull/24778
+        if isinstance(sample_weight, float):
+            sample_weight = np.full(
+                shape=len(X), fill_value=sample_weight, dtype=(self.dtype or X.dtype)
+            )
 
         if sample_weight is None:
             sample_weight = np.ones(len(X), dtype=(self.dtype or X.dtype))
@@ -896,9 +1110,12 @@ class KMeansDriver:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
+
         if sample_weight is not None:
             sample_weight = dpt.from_numpy(sample_weight, device=self.device)
-        cluster_centers = dpt.from_numpy(cluster_centers.T, device=self.device)
+
+        if cluster_centers is not None:
+            cluster_centers = dpt.from_numpy(cluster_centers.T, device=self.device)
 
         return (
             X_t,

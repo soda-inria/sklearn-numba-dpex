@@ -35,7 +35,9 @@ def test_kmeans_same_results(dtype):
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
 
-    kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd", max_iter=1)
+    kmeans_vanilla = KMeans(
+        random_state=random_seed, algorithm="lloyd", max_iter=1, init="random"
+    )
     kmeans_engine = clone(kmeans_vanilla)
 
     # Fit a reference model with the default scikit-learn engine:
