@@ -3,6 +3,7 @@ import warnings
 from functools import lru_cache
 
 import numpy as np
+import dpctl.tensor as dpt
 import dpctl
 import dpnp
 from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
@@ -206,13 +207,11 @@ class KMeansDriver:
         # centroids back and forth between device and host memory in case
         # a subsequent `.predict` call is requested on the same GPU later.
         return (
-            dpctl.tensor.asnumpy(assignments_idx).astype(np.int32),
+            dpt.asnumpy(assignments_idx).astype(np.int32),
             inertia,
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
-            np.ascontiguousarray(
-                dpctl.tensor.asnumpy(best_centroids).astype(output_dtype)
-            ),
+            np.ascontiguousarray(dpt.asnumpy(best_centroids).astype(output_dtype)),
             n_iteration,
         )
 
@@ -341,40 +340,32 @@ class KMeansDriver:
         )
 
         # Allocate the necessary memory in the device global memory
-        new_centroids_t = dpctl.tensor.empty_like(centroids_t, device=self.device)
-        centroids_half_l2_norm = dpctl.tensor.empty(
+        new_centroids_t = dpt.empty_like(centroids_t, device=self.device)
+        centroids_half_l2_norm = dpt.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
-        cluster_sizes = dpctl.tensor.empty(
-            n_clusters, dtype=compute_dtype, device=self.device
-        )
-        centroid_shifts = dpctl.tensor.empty(
-            n_clusters, dtype=compute_dtype, device=self.device
-        )
+        cluster_sizes = dpt.empty(n_clusters, dtype=compute_dtype, device=self.device)
+        centroid_shifts = dpt.empty(n_clusters, dtype=compute_dtype, device=self.device)
         # NB: the same buffer is used for those two arrays because it is never needed
         # to store those simultaneously in memory.
-        sq_dist_to_nearest_centroid = per_sample_inertia = dpctl.tensor.empty(
+        sq_dist_to_nearest_centroid = per_sample_inertia = dpt.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
-        assignments_idx = dpctl.tensor.empty(
-            n_samples, dtype=np.uint32, device=self.device
-        )
-        new_centroids_t_private_copies = dpctl.tensor.empty(
+        assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=self.device)
+        new_centroids_t_private_copies = dpt.empty(
             (n_centroids_private_copies, n_features, n_clusters),
             dtype=compute_dtype,
             device=self.device,
         )
-        cluster_sizes_private_copies = dpctl.tensor.empty(
+        cluster_sizes_private_copies = dpt.empty(
             (n_centroids_private_copies, n_clusters),
             dtype=compute_dtype,
             device=self.device,
         )
-        empty_clusters_list = dpctl.tensor.empty(
-            n_clusters, dtype=np.uint32, device=self.device
-        )
+        empty_clusters_list = dpt.empty(n_clusters, dtype=np.uint32, device=self.device)
 
         # n_empty_clusters_ is a scalar handled in kernels via a one-element array.
-        n_empty_clusters = dpctl.tensor.empty(1, dtype=np.int32, device=self.device)
+        n_empty_clusters = dpt.empty(1, dtype=np.int32, device=self.device)
 
         # The loop
         n_iteration = 0
@@ -411,9 +402,7 @@ class KMeansDriver:
                     assignments_idx,
                     per_sample_inertia,
                 )
-                inertia, *_ = dpctl.tensor.asnumpy(
-                    reduce_inertia_kernel(per_sample_inertia)
-                )
+                inertia, *_ = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
                 print(f"Iteration {n_iteration}, inertia {inertia:5.3e}")
 
             reduce_centroid_data_kernel(
@@ -451,7 +440,7 @@ class KMeansDriver:
                     # (unweighted) squared distance to the nearest centroid.
                     compute_inertia_kernel(
                         X_t,
-                        dpctl.tensor.ones_like(sample_weight),
+                        dpt.ones_like(sample_weight),
                         centroids_t,
                         assignments_idx,
                         sq_dist_to_nearest_centroid,
@@ -544,7 +533,7 @@ class KMeansDriver:
         )
 
         # inertia = per_sample_inertia.sum()
-        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))
+        inertia = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
         # inertia is now a 1-sized numpy array, we transform it into a scalar:
         inertia = inertia[0]
 
@@ -594,15 +583,11 @@ class KMeansDriver:
             kth=kth,
         ).get_array()[kth : (kth + 1)]
 
-        samples_far_from_center = dpctl.tensor.empty(
+        samples_far_from_center = dpt.empty(
             n_samples, dtype=np.uint32, device=self.device
         )
-        n_selected_gt_threshold = dpctl.tensor.zeros(
-            1, dtype=np.int32, device=self.device
-        )
-        n_selected_eq_threshold = dpctl.tensor.ones(
-            1, dtype=np.int32, device=self.device
-        )
+        n_selected_gt_threshold = dpt.zeros(1, dtype=np.int32, device=self.device)
+        n_selected_eq_threshold = dpt.ones(1, dtype=np.int32, device=self.device)
         select_samples_far_from_centroid_kernel(
             sq_dist_to_nearest_centroid,
             threshold,
@@ -641,7 +626,7 @@ class KMeansDriver:
         centers,
     ):
         labels, _ = self._get_labels_inertia(X, centers, with_inertia=False)
-        return dpctl.tensor.asnumpy(labels).astype(np.int32)
+        return dpt.asnumpy(labels).astype(np.int32)
 
     def get_inertia(
         self,
@@ -701,12 +686,10 @@ class KMeansDriver:
             centers,
         )
 
-        centroids_half_l2_norm = dpctl.tensor.empty(
+        centroids_half_l2_norm = dpt.empty(
             n_clusters, dtype=compute_dtype, device=self.device
         )
-        assignments_idx = dpctl.tensor.empty(
-            n_samples, dtype=np.uint32, device=self.device
-        )
+        assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=self.device)
 
         half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
 
@@ -734,7 +717,7 @@ class KMeansDriver:
             dtype=compute_dtype,
         )
 
-        per_sample_inertia = dpctl.tensor.empty(
+        per_sample_inertia = dpt.empty(
             n_samples, dtype=compute_dtype, device=self.device
         )
 
@@ -747,7 +730,7 @@ class KMeansDriver:
         )
 
         # inertia = per_sample_inertia.sum()
-        inertia = dpctl.tensor.asnumpy(reduce_inertia_kernel(per_sample_inertia))
+        inertia = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
         # inertia is now a 1-sized numpy array, we transform it into a scalar:
         inertia = inertia.astype(output_dtype)[0]
 
@@ -760,7 +743,7 @@ class KMeansDriver:
             Y,
         )
 
-        return dpctl.tensor.asnumpy(euclidean_distances).astype(output_dtype)
+        return dpt.asnumpy(euclidean_distances).astype(output_dtype)
 
     def _get_euclidean_distances(self, X, Y):
         (
@@ -792,7 +775,7 @@ class KMeansDriver:
 
         X_t, _, Y_t = self._load_transposed_data_to_device(X, None, Y)
 
-        euclidean_distances_t = dpctl.tensor.empty(
+        euclidean_distances_t = dpt.empty(
             (n_clusters, n_samples), dtype=compute_dtype, device=self.device
         )
 
@@ -903,17 +886,17 @@ class KMeansDriver:
 
     def _load_transposed_data_to_device(self, X, sample_weight, cluster_centers):
         # Transfer the input data to device memory,
-        # TODO: let the user pass directly dpctl.tensor or dpnp arrays to avoid copies.
+        # TODO: let the user pass directly dpt or dpnp arrays to avoid copies.
         if self.X_layout == "C":
             # TODO: support the C layout and benchmark it and default to it if
             # performances are better
             raise ValueError("C layout is currently not supported.")
-            X_t = dpctl.tensor.from_numpy(X, device=self.device).T
+            X_t = dpt.from_numpy(X, device=self.device).T
             assert (
                 X_t.strides[0] == 1
             )  # Fortran memory layout, equivalent to C layout on transposed
         elif self.X_layout == "F":
-            X_t = dpctl.tensor.from_numpy(X.T, device=self.device)
+            X_t = dpt.from_numpy(X.T, device=self.device)
             assert (
                 X_t.strides[1] == 1
             )  # C memory layout, equivalent to Fortran layout on transposed
@@ -922,8 +905,8 @@ class KMeansDriver:
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
             )
         if sample_weight is not None:
-            sample_weight = dpctl.tensor.from_numpy(sample_weight, device=self.device)
-        cluster_centers = dpctl.tensor.from_numpy(cluster_centers.T, device=self.device)
+            sample_weight = dpt.from_numpy(sample_weight, device=self.device)
+        cluster_centers = dpt.from_numpy(cluster_centers.T, device=self.device)
 
         return (
             X_t,
