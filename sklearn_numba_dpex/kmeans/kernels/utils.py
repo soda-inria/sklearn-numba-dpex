@@ -21,7 +21,7 @@ import math
 from functools import lru_cache
 
 import numpy as np
-import dpctl
+import dpctl.tensor as dpt
 import numba_dpex as dpex
 
 
@@ -458,7 +458,7 @@ def make_sum_reduction_1d_kernel(size, work_group_size, device, dtype):
         n_groups = math.ceil(n_groups / (2 * work_group_size))
         global_size = n_groups * work_group_size
         kernel = partial_sum_reduction[global_size, work_group_size]
-        result = dpctl.tensor.empty(n_groups, dtype=dtype, device=device)
+        result = dpt.empty(n_groups, dtype=dtype, device=device)
         kernels_and_empty_tensors_pairs.append((kernel, result))
 
     def sum_reduction(summands):

@@ -2,6 +2,7 @@ import pytest
 
 import numpy as np
 from numpy.random import default_rng
+import dpctl.tensor as dpt
 import dpnp
 import dpctl
 from numpy.testing import assert_array_equal
@@ -220,7 +221,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     # [-1.0, 9.0, 9.0, 20.22, 20.22, 20.22, 20.22, 23.0, 23.0, 30.0]
     # Assuming n_selected == 5, the threshold is 20.22 and we expect 3 values
     # above threshold (23.0, 23.0, 30.0) and 2 values equal to threshold.
-    distance_to_centroid = dpctl.tensor.from_numpy(
+    distance_to_centroid = dpt.from_numpy(
         np.array(
             [
                 20.22,  # == threshold
@@ -239,7 +240,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     )
 
     # NB: we wrap everything in dpctl tensors and select the threshold with __getitem__
-    # on a dpctl.tensor because loading of numpy arrays to and from dpctl.tensor arrays
+    # on a dpt because loading of numpy arrays to and from dpt arrays
     # seems to create numerical errors that break the kernel
     # (the condition ==threshold stops being evaluated properly) when using float64
     # precision ?
@@ -257,10 +258,10 @@ def test_select_samples_far_from_centroid_kernel(dtype):
 
     # NB: the values used to initialize the output array do not matter, 100 is chosen
     # here for readability, but `dpctl.empty` is also possible.
-    selected_samples_idx = (dpctl.tensor.ones(sh=10, dtype=np.int32) * 100).get_array()
+    selected_samples_idx = (dpt.ones(sh=10, dtype=np.int32) * 100).get_array()
 
-    n_selected_gt_threshold = dpctl.tensor.zeros(sh=1, dtype=np.int32)
-    n_selected_eq_threshold = dpctl.tensor.ones(sh=1, dtype=np.int32)
+    n_selected_gt_threshold = dpt.zeros(sh=1, dtype=np.int32)
+    n_selected_eq_threshold = dpt.ones(sh=1, dtype=np.int32)
     select_samples_far_from_centroid_kernel(
         distance_to_centroid,
         threshold,
@@ -274,7 +275,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     # otherwise.
     n_selected_eq_threshold = int(n_selected_eq_threshold[0] - 1)
     n_selected_gt_threshold = int(n_selected_gt_threshold[0])
-    selected_samples_idx = dpctl.tensor.asnumpy(selected_samples_idx)
+    selected_samples_idx = dpt.asnumpy(selected_samples_idx)
 
     # NB: the exact number of selected values equal to the threshold and the
     # corresponding selected indexes in the input array can change depending on
