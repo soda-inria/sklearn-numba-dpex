@@ -210,11 +210,13 @@ class KMeansDriver:
         # centroids back and forth between device and host memory in case
         # a subsequent `.predict` call is requested on the same GPU later.
         return (
-            dpt.asnumpy(assignments_idx).astype(np.int32),
+            dpt.asnumpy(assignments_idx).astype(np.int32, copy=False),
             inertia,
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
-            np.ascontiguousarray(dpt.asnumpy(best_centroids).astype(output_dtype)),
+            np.ascontiguousarray(
+                dpt.asnumpy(best_centroids).astype(output_dtype, copy=False)
+            ),
             n_iteration,
         )
 
@@ -235,10 +237,9 @@ class KMeansDriver:
             compute_dtype,
             output_dtype,
             work_group_size,
-            n_features,
-            n_samples,
-            n_clusters,
         ) = self._check_inputs(X, sample_weight, centers_init)
+        n_samples, n_features = X.shape
+        n_clusters = cluster_centers.shape[0]
 
         verbose = bool(verbose)
         use_uniform_weights = (sample_weight == sample_weight[0]).all()
@@ -629,7 +630,7 @@ class KMeansDriver:
         centers,
     ):
         labels, _ = self._get_labels_inertia(X, centers, with_inertia=False)
-        return dpt.asnumpy(labels).astype(np.int32)
+        return dpt.asnumpy(labels).astype(np.int32, copy=False)
 
     def get_inertia(
         self,
@@ -653,14 +654,13 @@ class KMeansDriver:
             compute_dtype,
             output_dtype,
             work_group_size,
-            n_features,
-            n_samples,
-            n_clusters,
         ) = self._check_inputs(
             X,
             sample_weight=sample_weight,
             cluster_centers=centers,
         )
+        n_samples, n_features = X.shape
+        n_clusters = centers.shape[0]
 
         label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
             n_samples,
@@ -746,24 +746,16 @@ class KMeansDriver:
             Y,
         )
 
-        return dpt.asnumpy(euclidean_distances).astype(output_dtype)
+        return dpt.asnumpy(euclidean_distances).astype(output_dtype, copy=False)
 
     def _get_euclidean_distances(self, X, Y):
-        (
-            X,
-            _,
-            Y,
-            compute_dtype,
-            output_dtype,
-            work_group_size,
-            n_features,
-            n_samples,
-            n_clusters,
-        ) = self._check_inputs(
+        (X, _, Y, compute_dtype, output_dtype, work_group_size,) = self._check_inputs(
             X,
             sample_weight=_IgnoreSampleWeight,
             cluster_centers=Y,
         )
+        n_samples, n_features = X.shape
+        n_clusters = Y.shape[0]
 
         euclidean_distances_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
             n_samples,
@@ -787,7 +779,7 @@ class KMeansDriver:
             Y_t,
             euclidean_distances_t,
         )
-        return euclidean_distances_t.T, output_dtype()
+        return euclidean_distances_t.T, output_dtype
 
     def _set_dtype(self, X, sample_weight, centers_init):
         input_dtype = output_dtype = np.dtype(X.dtype).type
@@ -872,9 +864,6 @@ class KMeansDriver:
             self.work_group_size_multiplier * self.preferred_work_group_size_multiple
         )
 
-        n_features = X.shape[1]
-        n_samples = X.shape[0]
-        n_clusters = cluster_centers.shape[0]
         return (
             X,
             sample_weight,
@@ -882,9 +871,6 @@ class KMeansDriver:
             compute_dtype,
             output_dtype,
             work_group_size,
-            n_features,
-            n_samples,
-            n_clusters,
         )
 
     def _load_transposed_data_to_device(self, X, sample_weight, cluster_centers):

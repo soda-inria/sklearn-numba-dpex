@@ -79,15 +79,18 @@ def make_lloyd_single_step_fixed_window_kernel(
 
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
+    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
+    n_subgroups = global_size // preferred_work_group_size_multiple
+
     n_cluster_items = n_clusters * (n_features + 1)
-    n_cluster_bytes = 4 * n_cluster_items
+    n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
     # TODO: control that this value is not higher than the number of sub-groups of size
     # preferred_work_group_size_multiple that can effectively run concurrently. We
     # should fetch this information and apply it here.
-    n_centroids_private_copies = int(
-        (global_mem_cache_size * centroids_private_copies_max_cache_occupancy)
-        // n_cluster_bytes
-    )
+    n_centroids_private_copies = (
+        global_mem_cache_size * centroids_private_copies_max_cache_occupancy
+    ) // n_cluster_bytes
+    n_centroids_private_copies = int(min(n_subgroups, n_centroids_private_copies))
 
     zero_idx = np.int64(0)
     inf = dtype(math.inf)
@@ -311,7 +314,6 @@ def make_lloyd_single_step_fixed_window_kernel(
                 (privatization_idx, feature_idx, min_idx),
                 X_t[feature_idx, sample_idx] * weight,
             )
-    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return (
         n_centroids_private_copies,
         fused_lloyd_single_step[global_size, work_group_size],
