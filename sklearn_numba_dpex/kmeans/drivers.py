@@ -8,7 +8,15 @@ import dpctl
 import dpnp
 from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
 
-from sklearn_numba_dpex.utils._device import _DeviceParams
+from sklearn_numba_dpex.device import DeviceParams
+
+from sklearn_numba_dpex.common.kernels import (
+    make_initialize_to_zeros_2d_kernel,
+    make_initialize_to_zeros_3d_kernel,
+    make_broadcast_division_1d_2d_kernel,
+    make_half_l2_norm_2d_axis0_kernel,
+    make_sum_reduction_1d_kernel,
+)
 
 from sklearn_numba_dpex.kmeans.kernels import (
     make_lloyd_single_step_fixed_window_kernel,
@@ -19,11 +27,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_select_samples_far_from_centroid_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
-    make_initialize_to_zeros_2d_kernel,
-    make_initialize_to_zeros_3d_kernel,
-    make_broadcast_division_1d_2d_kernel,
-    make_half_l2_norm_2d_axis0_kernel,
-    make_sum_reduction_1d_kernel,
 )
 
 
@@ -124,7 +127,7 @@ class KMeansDriver:
         dtype=None,
     ):
         dpctl_device = dpctl.SyclDevice(device)
-        device_params = _DeviceParams(dpctl_device)
+        device_params = DeviceParams(dpctl_device)
 
         # TODO: set the best possible defaults for all the parameters based on an
         # exhaustive grid search.

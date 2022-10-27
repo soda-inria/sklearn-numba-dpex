@@ -15,7 +15,7 @@ class _DEFAULT_VALUES:
     preferred_work_group_size_multiple = 64
 
 
-class _DeviceParams:
+class DeviceParams:
     """This class aggregates information about a SyclDevice with informations from
     pyopencl.
 
