@@ -163,9 +163,10 @@ if __name__ == "__main__":
     from sklearn.preprocessing import MinMaxScaler
 
     from sklearn_numba_dpex.testing.config import override_attr_context
+    import sklearn_numba_dpex.kmeans.engine as skdpex_kmeans_engine_module
     from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 
-    from ext_helpers.daal4py import daal4py_kmeans_single
+    from ext_helpers.daal4py import DAAL4PYEngine
     from sklearnex import config_context as sklearnex_config_context
 
     # TODO: expose CLI args.
@@ -226,16 +227,14 @@ if __name__ == "__main__":
     )
 
     with override_attr_context(
-        KMeansEngine,
-        kmeans_single=daal4py_kmeans_single,
+        skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine
     ), sklearnex_config_context(target_offload="cpu"):
         kmeans_timer.timeit(
             name="daal4py lloyd CPU", engine_provider="sklearn_numba_dpex"
         )
 
     with override_attr_context(
-        KMeansEngine,
-        kmeans_single=daal4py_kmeans_single,
+        skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine
     ), sklearnex_config_context(target_offload="gpu"):
         kmeans_timer.timeit(
             name="daal4py lloyd GPU",
