@@ -36,9 +36,9 @@ def _make_initialize_window_kernel_funcs(
     # fmt: on
         centroid_window_first_loading_feature_idx = zero_idx
 
-        # The work items in the work group cooperatively load the values in
-        # shared memory. At each iteration, the work item loads one value and
-        # adjacent work items load adjacent values.
+        # The work items in the work group cooperatively load the values in shared 
+        # memory. At each iteration, the work item loads one value and adjacent work 
+        # items load adjacent values.
         for _2 in range(centroids_window_height_ratio_multiplier):
             window_loading_feature_idx = (
                 centroid_window_first_loading_feature_idx
@@ -148,11 +148,11 @@ def _make_update_closest_centroid_kernel_func(window_n_centroids):
     @dpex.func
     # fmt: off
     def _update_closest_centroid(
-        first_centroid_idx,             # PARAM
-        min_idx,                        # PARAM
-        min_sample_pseudo_inertia,      # PARAM
-        window_of_centroids_half_l2_norms,  # IN
-        dot_products,                   # IN
+        first_centroid_idx,                  # PARAM
+        min_idx,                             # PARAM
+        min_sample_pseudo_inertia,           # PARAM
+        window_of_centroids_half_l2_norms,   # IN
+        dot_products,                        # IN
     ):
     # fmt: on
         for i in range(window_n_centroids):
