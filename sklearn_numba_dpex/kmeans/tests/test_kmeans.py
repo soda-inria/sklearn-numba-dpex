@@ -4,7 +4,6 @@ import numpy as np
 from numpy.random import default_rng
 import dpctl.tensor as dpt
 import dpnp
-import dpctl
 from numpy.testing import assert_array_equal
 
 from sklearn import config_context
@@ -18,22 +17,7 @@ from sklearn_numba_dpex.kmeans.kernels.utils import (
     make_select_samples_far_from_centroid_kernel,
 )
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
-
-
-_DEVICE = dpctl.SyclDevice()
-_DEVICE_NAME = _DEVICE.name
-_SUPPORTED_DTYPE = [np.float32]
-
-if _DEVICE.has_aspect_fp64:
-    _SUPPORTED_DTYPE.append(np.float64)
-
-
-def _fail_if_no_dtype_support(xfail_fn, dtype):
-    if dtype not in _SUPPORTED_DTYPE:
-        xfail_fn(
-            f"The default device {_DEVICE_NAME} does not have support for "
-            "float64 operations."
-        )
+from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 def test_dpnp_implements_argpartition():
@@ -45,9 +29,8 @@ def test_dpnp_implements_argpartition():
     )
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_kmeans_same_results(dtype):
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
@@ -103,10 +86,9 @@ def test_kmeans_same_results(dtype):
     assert_allclose(y_transform, y_transform_engine)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_kmeans_relocated_clusters(dtype):
     """Copied and adapted from sklearn's test_kmeans_relocated_clusters"""
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     # check that empty clusters are relocated as expected
     X = np.array([[0, 0], [0.5, 0], [0.5, 1], [1, 1]], dtype=dtype)
@@ -138,10 +120,9 @@ def test_kmeans_relocated_clusters(dtype):
         assert_allclose(kmeans.cluster_centers_, expected_centers)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_euclidean_distance(dtype):
     """Test adapted from sklearn's test_euclidean_distance"""
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     random_seed = 42
     rng = default_rng(random_seed)
@@ -157,10 +138,9 @@ def test_euclidean_distance(dtype):
     assert_allclose(result, expected, rtol=rtol)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_inertia(dtype):
     """Test adapted from sklearn's test_inertia"""
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     random_seed = 42
     rng = default_rng(random_seed)
@@ -180,10 +160,9 @@ def test_inertia(dtype):
     assert_allclose(inertia, expected, rtol=rtol)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_relocate_empty_clusters(dtype):
     """Copied and adapted from sklearn's test_relocate_empty_clusters"""
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     # Synthetic dataset with 3 obvious clusters of different sizes
     X = np.array(
@@ -213,9 +192,8 @@ def test_relocate_empty_clusters(dtype):
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_select_samples_far_from_centroid_kernel(dtype):
-    _fail_if_no_dtype_support(pytest.xfail, dtype)
 
     # The following array, when sorted, reads:
     # [-1.0, 9.0, 9.0, 20.22, 20.22, 20.22, 20.22, 23.0, 23.0, 30.0]
