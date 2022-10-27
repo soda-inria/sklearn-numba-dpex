@@ -1,6 +1,5 @@
-import sklearn
 import warnings
-
+import sklearn
 
 # HACK: daal4py will fail to import with too recent versions of sklearn because
 # of this missing attribute. Let's pretend it still exists.
@@ -21,45 +20,58 @@ if not hasattr(sklearn.neighbors._base, "_check_weights"):
 else:
     from daal4py.sklearn.cluster._k_means_0_23 import KMeans
 
-
 from sklearn.exceptions import NotSupportedByEngineError
+from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 
 
-# TODO: instead of relying on monkey patching, find a way to register a distinct entry
-# point that can load a distinct engine outside of setup.py (impossible ?)
+# TODO: instead of relying on monkey patching the default engine, find a way to
+# register a distinct entry point that can load a distinct engine outside of setup.py
+# (impossible ?)
+class DAAL4PYEngine(KMeansEngine):
+    def prepare_fit(self, X, y=None, sample_weight=None):
+        estimator = self.estimator
+        init = estimator.init
+        if hasattr(init, "startswith") and init == "k-means++":
+            raise NotSupportedByEngineError(
+                "The daal4py engine for KMeans does not support k-means++ init."
+            )
 
+        if sample_weight is not None and any(sample_weight != sample_weight[0]):
+            raise NotSupportedByEngineError(
+                "Non unary sample_weight is not supported by daal4py."
+            )
 
-def daal4py_kmeans_single(self, X, sample_weight, centers_init):
-    """This function is intended to monkey-path sklearn.kmeans.engine.KMeansEngine.kmeans_single
+        return super().prepare_fit(X, y, sample_weight)
 
-    It replaces the sklearn_numba_dpex engine with a daal4py engine when fitting a KMeans estimator."""
+    def init_centroids(self, X):
+        return super(KMeansEngine, self).init_centroids(X)
 
-    if self.estimator._algorithm != "lloyd":
-        raise RuntimeError(
-            "Expected to monkey patch an Engine that provides the `lloyd algorithm, "
-            f"but got `estimator._algorithm = {self.estimator._algorithm}` instead "
+    def kmeans_single(self, X, sample_weight, centers_init):
+
+        est = KMeans(
+            n_clusters=centers_init.shape[0],
+            init=centers_init,
+            n_init=self.estimator.n_init,
+            max_iter=self.estimator.max_iter,
+            tol=self.estimator.tol,
+            verbose=self.estimator.verbose,
+            random_state=self.estimator.random_state,
+            copy_x=self.estimator.copy_x,
+            algorithm="full",
         )
 
-    if sample_weight is not None and any(sample_weight != sample_weight[0]):
-        raise NotSupportedByEngineError(
-            "Non unary sample_weight is not supported by daal4py."
-        )
+        est.fit(X, sample_weight=sample_weight)
 
-    est = KMeans(
-        n_clusters=centers_init.shape[0],
-        init=centers_init,
-        n_init=self.estimator.n_init,
-        max_iter=self.estimator.max_iter,
-        tol=self.estimator.tol,
-        verbose=self.estimator.verbose,
-        random_state=self.estimator.random_state,
-        copy_x=self.estimator.copy_x,
-        algorithm="full",
-    )
+        return est.labels_, est.inertia_, est.cluster_centers_, est.n_iter_
 
-    est.fit(X, sample_weight=sample_weight)
+    def get_labels(self, X, sample_weight):
+        raise NotSupportedByEngineError
 
-    return est.labels_, est.inertia_, est.cluster_centers_, est.n_iter_
+    def get_euclidean_distances(self, X):
+        raise NotSupportedByEngineError
+
+    def get_score(self, X, sample_weight):
+        raise NotSupportedByEngineError
 
 
 # NB: this implementation skips input and environment validation steps that, when used
