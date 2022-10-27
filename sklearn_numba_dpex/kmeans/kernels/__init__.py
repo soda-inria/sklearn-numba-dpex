@@ -9,11 +9,6 @@ from .utils import (
     make_select_samples_far_from_centroid_kernel,
     make_centroid_shifts_kernel,
     make_reduce_centroid_data_kernel,
-    make_initialize_to_zeros_2d_kernel,
-    make_initialize_to_zeros_3d_kernel,
-    make_broadcast_division_1d_2d_kernel,
-    make_half_l2_norm_2d_axis0_kernel,
-    make_sum_reduction_1d_kernel,
 )
 
 
@@ -26,9 +21,4 @@ __all__ = (
     "make_select_samples_far_from_centroid_kernel",
     "make_centroid_shifts_kernel",
     "make_reduce_centroid_data_kernel",
-    "make_initialize_to_zeros_2d_kernel",
-    "make_initialize_to_zeros_3d_kernel",
-    "make_broadcast_division_1d_2d_kernel",
-    "make_half_l2_norm_2d_axis0_kernel",
-    "make_sum_reduction_1d_kernel",
 )
