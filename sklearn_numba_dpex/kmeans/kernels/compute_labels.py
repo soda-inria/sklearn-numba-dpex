@@ -56,8 +56,8 @@ def make_label_assignment_fixed_window_kernel(
         dtype=dtype,
     )
 
-    n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
-    n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
+    n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
+    n_windows_for_features = math.ceil(n_features / centroids_window_height)
 
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
@@ -91,7 +91,7 @@ def make_label_assignment_fixed_window_kernel(
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(n_windows_per_feature):
+        for _0 in range(n_windows_for_centroids):
             _initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
@@ -104,7 +104,7 @@ def make_label_assignment_fixed_window_kernel(
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_per_centroid):
+            for _1 in range(n_windows_for_features):
                 _load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,

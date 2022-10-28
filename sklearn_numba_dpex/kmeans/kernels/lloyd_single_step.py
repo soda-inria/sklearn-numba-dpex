@@ -74,8 +74,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         dtype=dtype,
     )
 
-    n_windows_per_feature = math.ceil(n_clusters / window_n_centroids)
-    n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
+    n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
+    n_windows_for_features = math.ceil(n_features / centroids_window_height)
 
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
@@ -188,7 +188,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # `numba`. Note though, that `numba` cannot unroll nested loops, so won't
         # `numba_dpex`. To leverage loop unrolling, the following nested loop will
         # require to be un-nested.
-        for _0 in range(n_windows_per_feature):
+        for _0 in range(n_windows_for_centroids):
             # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
             _initialize_window_of_centroids(
@@ -205,7 +205,7 @@ def make_lloyd_single_step_fixed_window_kernel(
 
             # Inner loop: interate on successive windows of size window_n_features
             # that cover all features for current given centroids
-            for _1 in range(n_windows_per_centroid):
+            for _1 in range(n_windows_for_features):
                 # centroids_window is modified inplace
                 _load_window_of_centroids_and_features(
                     first_feature_idx,
