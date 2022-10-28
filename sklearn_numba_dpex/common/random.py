@@ -60,7 +60,7 @@ def make_rand_uniform_kernel_func(dtype):
             return (x >> convert_rshift) * (convert_const_one / convert_const)
 
     elif dtype.name == "float32":
-        convert_rshift = uint32(8)
+        convert_rshift = uint32(40)
         convert_const = float32(uint32(1) << uint32(24))
         convert_const_one = float32(1)
 
@@ -71,8 +71,9 @@ def make_rand_uniform_kernel_func(dtype):
             generating a float64 random number before casting it to float32, a float32
             number is generated from uint64 without intermediate float64. This enables
             compatibility with devices that do not support float64 numbers.
+            However is seems to be exactly equivalent e.g it passes the float precision
+            test in sklearn.
             """
-            x = uint32(x)
             return float32(x >> convert_rshift) * (convert_const_one / convert_const)
 
     else:
