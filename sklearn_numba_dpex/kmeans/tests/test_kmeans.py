@@ -11,13 +11,19 @@ from sklearn.base import clone
 from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
-
+from sklearn.cluster.tests.test_k_means import (
+    X as sklearn_test_data,
+    n_clusters as sklearn_test_n_clusters,
+)
 
 from sklearn_numba_dpex.kmeans.kernels.utils import (
     make_select_samples_far_from_centroid_kernel,
 )
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 from sklearn_numba_dpex.testing.config import float_dtype_params
+
+
+driver = KMeansDriver()
 
 
 def test_dpnp_implements_argpartition():
@@ -133,7 +139,6 @@ def test_euclidean_distance(dtype):
 
     expected = np.sqrt(((a - b) ** 2).sum())
 
-    driver = KMeansDriver()
     result = driver.get_euclidean_distances(a, b)
 
     rtol = 1e-4 if dtype == np.float32 else 1e-7
@@ -150,7 +155,6 @@ def test_inertia(dtype):
     sample_weight = rng.standard_normal(100, dtype=dtype)
     centers = rng.standard_normal((5, 10), dtype=dtype)
 
-    driver = KMeansDriver()
     labels = driver.get_labels(X, centers)
 
     distances = ((X - centers[labels]) ** 2).sum(axis=1)
@@ -279,3 +283,52 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     assert (
         selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
     ).all()
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_plusplus_output(dtype):
+    """Test adapted from sklearn's test_kmeans_plusplus_output"""
+    # Check for the correct number of seeds and all positive values
+    data = sklearn_test_data.astype(dtype)
+
+    centers, indices = driver.kmeans_plusplus(
+        X=data, sample_weight=None, n_clusters=sklearn_test_n_clusters, random_state=42
+    )
+
+    # Check there are the correct number of indices and that all indices are
+    # positive and within the number of samples
+    assert indices.shape[0] == sklearn_test_n_clusters
+    assert (indices >= 0).all()
+    assert (indices <= data.shape[0]).all()
+
+    # Check for the correct number of seeds and that they are bound by the data
+    assert centers.shape[0] == sklearn_test_n_clusters
+    assert (centers.max(axis=0) <= data.max(axis=0)).all()
+    assert (centers.min(axis=0) >= data.min(axis=0)).all()
+
+    # Check that indices correspond to reported centers
+    # Use X for comparison rather than data, test still works against centers
+    # calculated with sparse data.
+    assert_allclose(data[indices].astype(dtype), centers)
+
+
+def test_kmeans_plusplus_dataorder():
+    """Test adapted from sklearn's test_kmeans_plusplus_dataorder"""
+    # Check that memory layout does not effect result
+    centers_c, _ = driver.kmeans_plusplus(
+        X=sklearn_test_data,
+        sample_weight=None,
+        n_clusters=sklearn_test_n_clusters,
+        random_state=42,
+    )
+
+    X_fortran = np.asfortranarray(sklearn_test_data)
+
+    centers_fortran, _ = driver.kmeans_plusplus(
+        X=X_fortran,
+        sample_weight=None,
+        n_clusters=sklearn_test_n_clusters,
+        random_state=42,
+    )
+
+    assert_allclose(centers_c, centers_fortran)

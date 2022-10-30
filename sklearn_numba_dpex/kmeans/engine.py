@@ -50,7 +50,7 @@ class KMeansEngine(KMeansCythonEngine):
         if hasattr(self.init, "startswith") and self.init == "k-means++":
             return KMeansDriver(**self._DRIVER_CONFIG).kmeans_plusplus(
                 X, self.sample_weight, self.estimator.n_clusters, self.random_state
-            )
+            )[0]
 
         return self.estimator._init_centroids(
             X,

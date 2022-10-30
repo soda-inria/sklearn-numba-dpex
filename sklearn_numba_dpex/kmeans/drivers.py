@@ -794,10 +794,12 @@ class KMeansDriver:
         return euclidean_distances_t.T, output_dtype
 
     def kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
-        centers_t, output_dtype = self._kmeans_plusplus(
+        centers_t, center_indices, output_dtype = self._kmeans_plusplus(
             X, sample_weight, n_clusters, random_state
         )
-        return dpt.asnumpy(centers_t).astype(output_dtype, copy=False)
+        return dpt.asnumpy(centers_t).astype(output_dtype, copy=False), dpt.asnumpy(
+            center_indices
+        )
 
     def _kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
         if X.shape[0] < n_clusters:
@@ -985,7 +987,7 @@ class KMeansDriver:
             centers_t[:, c] = X_t[:, best_candidate]
             center_indices[c] = best_candidate
 
-        return centers_t.T, output_dtype
+        return centers_t.T, center_indices, output_dtype
 
     def _set_dtype(self, X, sample_weight, centers_init):
         input_dtype = output_dtype = np.dtype(X.dtype).type
