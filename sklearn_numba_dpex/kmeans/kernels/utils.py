@@ -10,11 +10,7 @@ zero_idx = np.int64(0)
 
 @lru_cache
 def make_relocate_empty_clusters_kernel(
-    n_relocated_clusters,
-    n_features,
-    n_selected_gt_threshold,
-    work_group_size,
-    dtype,
+    n_relocated_clusters, n_features, n_selected_gt_threshold, work_group_size, dtype
 ):
     n_work_groups_for_cluster = math.ceil(n_features / work_group_size)
     n_work_items_for_cluster = n_work_groups_for_cluster * work_group_size
