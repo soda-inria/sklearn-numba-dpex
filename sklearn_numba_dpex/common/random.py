@@ -95,9 +95,9 @@ def make_rand_uniform_kernel_func(dtype):
 def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, device=None):
     """Returns a new device array initialized for n random number generators.
 
-    This initializes the RNG states so that states in the array correspond to 
+    This initializes the RNG states so that states in the array correspond to
     subsequences separated by 2**64 steps from each other in the main sequence.
-    Therefore, as long as no thread requests more than 2**64 random numbers, all the 
+    Therefore, as long as no thread requests more than 2**64 random numbers, all the
     RNG states produced by this function are guaranteed to be independent.
 
     Parameters
@@ -299,10 +299,10 @@ def _xoroshiro128pp_next(states, index):
     return result
 
 
-64_as_uint32 = uint32(64)
+_64_as_uint32 = uint32(64)
 
 
 @dpex.func
 def _rotl(x, k):
     """Left rotate x by k bits."""
-    return (x << k) | (x >> (64_as_uint32 - k))
+    return (x << k) | (x >> (_64_as_uint32 - k))
