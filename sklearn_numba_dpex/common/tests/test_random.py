@@ -18,6 +18,7 @@ def test_xoroshiro128pp():
     # > print([randomgen_rng.random_raw() for i in range(10)])
 
     # > randomgen_rng = Xoroshiro128(seed=42, mode="legacy", plusplus=True)
+    # > # Move a subsequence forward.
     # > randomgen_rng.jump()
     # > print([randomgen_rng.random_raw() for i in range(10)])
 
@@ -35,7 +36,7 @@ def test_xoroshiro128pp():
     ]
 
     actual_res_1 = [
-        int(dpt.asnumpy(get_random_raw(random_state))[0]) for i in range(10)
+        int(dpt.asnumpy(get_random_raw(random_state))[0]) for _ in expected_res_1
     ]
 
     assert expected_res_1 == actual_res_1
@@ -74,7 +75,7 @@ def test_xoroshiro128pp():
         n_states=1, seed=42, subsequence_start=1
     )
     actual_res_2 = [
-        int(dpt.asnumpy(get_random_raw(random_state))[0]) for i in range(10)
+        int(dpt.asnumpy(get_random_raw(random_state))[0]) for _ in expected_res_2
     ]
 
     assert expected_res_2 == actual_res_2
