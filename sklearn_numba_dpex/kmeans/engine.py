@@ -48,16 +48,20 @@ class KMeansEngine(KMeansCythonEngine):
 
     def init_centroids(self, X):
         if hasattr(self.init, "startswith") and self.init == "k-means++":
-            return KMeansDriver(**self._DRIVER_CONFIG).kmeans_plusplus(
+            centers, center_indices = KMeansDriver(
+                **self._DRIVER_CONFIG
+            ).kmeans_plusplus(
                 X, self.sample_weight, self.estimator.n_clusters, self.random_state
-            )[0]
+            )
 
-        return self.estimator._init_centroids(
-            X,
-            x_squared_norms=self.x_squared_norms,
-            init=self.init,
-            random_state=self.random_state,
-        )
+        else:
+            centers = self.estimator._init_centroids(
+                X,
+                x_squared_norms=self.x_squared_norms,
+                init=self.init,
+                random_state=self.random_state,
+            )
+        return centers
 
     def kmeans_single(self, X, sample_weight, centers_init):
         return KMeansDriver(**self._DRIVER_CONFIG).lloyd(

@@ -15,7 +15,7 @@ from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
 
 
 @lru_cache
-def make_init_kmeansplusplus_kernel(
+def make_kmeansplusplus_init_kernel(
     n_samples,
     n_features,
     preferred_work_group_size_multiple,
@@ -28,7 +28,7 @@ def make_init_kmeansplusplus_kernel(
 
     @dpex.kernel
     # fmt: off
-    def init_kmeansplusplus(
+    def kmeansplusplus_init(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         sample_weight,            # IN READ-ONLY   (n_samples,)
         centers_t,                # OUT            (n_features, n_clusters)
@@ -57,7 +57,7 @@ def make_init_kmeansplusplus_kernel(
             centers_t[feature_idx, zero_idx] = X_t[feature_idx, starting_center_id_]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return init_kmeansplusplus[global_size, work_group_size]
+    return kmeansplusplus_init[global_size, work_group_size]
 
 
 @lru_cache

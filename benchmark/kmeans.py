@@ -184,11 +184,7 @@ if __name__ == "__main__":
     # close results but with significant differences for a few elements.
     run_consistency_checks = False
 
-    def benchmark_data_initialization(
-        random_state,
-        n_clusters,
-        sample_weight,
-    ):
+    def benchmark_data_initialization(random_state, n_clusters, sample_weight, init):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True, parser="auto")
         X = X.astype(dtype)
         scaler_x = MinMaxScaler()
@@ -198,7 +194,6 @@ if __name__ == "__main__":
         # X = np.hstack([X for _ in range(5)])
         # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
-        global init
         if init == "random":
             init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
 
@@ -234,8 +229,7 @@ if __name__ == "__main__":
         skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine
     ), sklearnex_config_context(target_offload="cpu"):
         kmeans_timer.timeit(
-            name="daal4py lloyd CPU",
-            engine_provider="sklearn_numba_dpex",
+            name="daal4py lloyd CPU", engine_provider="sklearn_numba_dpex"
         )
 
     with override_attr_context(

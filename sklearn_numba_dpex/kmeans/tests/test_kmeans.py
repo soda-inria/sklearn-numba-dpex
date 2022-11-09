@@ -12,8 +12,8 @@ from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 from sklearn.cluster.tests.test_k_means import (
-    X as sklearn_test_data,
-    n_clusters as sklearn_test_n_clusters,
+    X as X_sklearn_test,
+    n_clusters as n_clusters_sklearn_test,
 )
 
 from sklearn_numba_dpex.kmeans.kernels.utils import (
@@ -289,45 +289,50 @@ def test_select_samples_far_from_centroid_kernel(dtype):
 def test_kmeans_plusplus_output(dtype):
     """Test adapted from sklearn's test_kmeans_plusplus_output"""
     # Check for the correct number of seeds and all positive values
-    data = sklearn_test_data.astype(dtype)
+    X = X_sklearn_test.astype(dtype)
 
     centers, indices = driver.kmeans_plusplus(
-        X=data, sample_weight=None, n_clusters=sklearn_test_n_clusters, random_state=42
+        X=X_sklearn_test,
+        sample_weight=None,
+        n_clusters=n_clusters_sklearn_test,
+        random_state=42,
     )
 
     # Check there are the correct number of indices and that all indices are
     # positive and within the number of samples
-    assert indices.shape[0] == sklearn_test_n_clusters
+    assert indices.shape[0] == n_clusters_sklearn_test
     assert (indices >= 0).all()
-    assert (indices <= data.shape[0]).all()
+    assert (indices <= X.shape[0]).all()
 
     # Check for the correct number of seeds and that they are bound by the data
-    assert centers.shape[0] == sklearn_test_n_clusters
-    assert (centers.max(axis=0) <= data.max(axis=0)).all()
-    assert (centers.min(axis=0) >= data.min(axis=0)).all()
+    assert centers.shape[0] == n_clusters_sklearn_test
+    assert (centers.max(axis=0) <= X.max(axis=0)).all()
+    assert (centers.min(axis=0) >= X.min(axis=0)).all()
+    # NB: dtype can change depending on the device, so we accept all valid dtypes.
+    assert centers.dtype in {np.float32, np.float64}
 
     # Check that indices correspond to reported centers
     # Use X for comparison rather than data, test still works against centers
     # calculated with sparse data.
-    assert_allclose(data[indices].astype(dtype), centers)
+    assert_allclose(X[indices].astype(dtype), centers)
 
 
 def test_kmeans_plusplus_dataorder():
     """Test adapted from sklearn's test_kmeans_plusplus_dataorder"""
     # Check that memory layout does not effect result
     centers_c, _ = driver.kmeans_plusplus(
-        X=sklearn_test_data,
+        X=X_sklearn_test,
         sample_weight=None,
-        n_clusters=sklearn_test_n_clusters,
+        n_clusters=n_clusters_sklearn_test,
         random_state=42,
     )
 
-    X_fortran = np.asfortranarray(sklearn_test_data)
+    X_fortran = np.asfortranarray(X_sklearn_test)
 
     centers_fortran, _ = driver.kmeans_plusplus(
         X=X_fortran,
         sample_weight=None,
-        n_clusters=sklearn_test_n_clusters,
+        n_clusters=n_clusters_sklearn_test,
         random_state=42,
     )
 

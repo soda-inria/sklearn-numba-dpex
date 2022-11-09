@@ -29,7 +29,7 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
     make_compute_inertia_kernel,
-    make_init_kmeansplusplus_kernel,
+    make_kmeansplusplus_init_kernel,
     make_sample_center_candidates_kernel,
     make_kmeansplusplus_single_step_fixed_window_kernel,
     make_relocate_empty_clusters_kernel,
@@ -794,22 +794,11 @@ class KMeansDriver:
         return euclidean_distances_t.T, output_dtype
 
     def kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
-        centers_t, center_indices, output_dtype = self._kmeans_plusplus(
-            X, sample_weight, n_clusters, random_state
-        )
-        return dpt.asnumpy(centers_t).astype(output_dtype, copy=False), dpt.asnumpy(
-            center_indices
-        )
-
-    def _kmeans_plusplus(self, X, sample_weight, n_clusters, random_state):
         if X.shape[0] < n_clusters:
             raise ValueError(
                 f"n_samples={X.shape[0]} should be >= n_clusters={n_clusters}."
             )
 
-        # NB: the implementation differs from sklearn implementation with regards to
-        # sample_weight, which is ignored in sklearn, but used here.
-        # Check that this is correct ?
         (
             X,
             sample_weight,
@@ -819,9 +808,36 @@ class KMeansDriver:
             work_group_size,
         ) = self._check_inputs(X, sample_weight, cluster_centers=None)
 
-        n_samples, n_features = X.shape
+        X_t, sample_weight, _ = self._load_transposed_data_to_device(
+            X, sample_weight, cluster_centers=None
+        )
 
-        # heuristic taken from sklearn implementation v<1.2
+        centers, center_indices = self._kmeans_plusplus(
+            X_t, sample_weight, n_clusters, random_state, work_group_size, compute_dtype
+        )
+
+        centers = dpt.asnumpy(centers).astype(output_dtype, copy=False)
+        center_indices = dpt.asnumpy(center_indices)
+        return centers, center_indices
+
+    def _kmeans_plusplus(
+        self,
+        X_t,
+        sample_weight,
+        n_clusters,
+        random_state,
+        work_group_size,
+        compute_dtype,
+    ):
+
+        n_features, n_samples = X_t.shape
+
+        # NB: the implementation differs from sklearn implementation with regards to
+        # sample_weight, which is ignored in sklearn, but used here.
+        # TODO: check that this implementation is correct when samples weights aren't
+        # uniform.
+
+        # Same retrial heuristic as scikit-learn (at least until <1.2)
         n_local_trials = 2 + int(np.log(n_clusters))
 
         # TODO: this block is also written in common.kernel.random, factorize ?
@@ -832,11 +848,11 @@ class KMeansDriver:
                 from_cpu_to_device = True
             except dpctl.SyclDeviceCreationError:
                 warnings.warn(
-                    "No CPU found, fallbacking random initiatlization to default "
-                    "device."
+                    "No CPU found, fallbacking to the initialization of the k-means "
+                    "RNG on the default device."
                 )
 
-        init_kmeansplusplus_kernel = make_init_kmeansplusplus_kernel(
+        kmeansplusplus_init_kernel = make_kmeansplusplus_init_kernel(
             n_samples,
             n_features,
             self.preferred_work_group_size_multiple,
@@ -899,10 +915,6 @@ class KMeansDriver:
                 ],
             )
 
-        X_t, sample_weight, _ = self._load_transposed_data_to_device(
-            X, sample_weight, cluster_centers=None
-        )
-
         centers_t = dpt.empty(
             sh=(n_features, n_clusters), dtype=compute_dtype, device=self.device
         )
@@ -927,7 +939,7 @@ class KMeansDriver:
 
         # track index of point, initialize list of closest distances and calculate
         # current potential
-        init_kmeansplusplus_kernel(
+        kmeansplusplus_init_kernel(
             X_t,
             sample_weight,
             centers_t,
@@ -956,10 +968,7 @@ class KMeansDriver:
                 candidate_ids = candidate_ids.to_device(self.device)
             else:
                 sample_center_candidates_kernel(
-                    closest_dist_sq,
-                    total_potential,
-                    random_state,
-                    candidate_ids,
+                    closest_dist_sq, total_potential, random_state, candidate_ids
                 )
 
             # XXX: at the cost of one additional pass on data, we could avoid storing
@@ -987,7 +996,7 @@ class KMeansDriver:
             centers_t[:, c] = X_t[:, best_candidate]
             center_indices[c] = best_candidate
 
-        return centers_t.T, center_indices, output_dtype
+        return centers_t.T, center_indices
 
     def _set_dtype(self, X, sample_weight, centers_init):
         input_dtype = output_dtype = np.dtype(X.dtype).type
@@ -1057,17 +1066,6 @@ class KMeansDriver:
         return X, sample_weight, centers_init, compute_dtype, output_dtype
 
     def _check_inputs(self, X, sample_weight, cluster_centers):
-
-        # TODO: sample_weight shouldn't ever be a float, but this is to be consistent
-        # with sklearn behavior, which is bugged, but is currently enforced by the
-        # unit test `test_scaled_weights`, which is also bugged, `uniform(n_samples)`
-        # should be replaced by `uniform(size=n_samples)`.
-        # PR opened at https://github.com/scikit-learn/scikit-learn/pull/24778
-        if isinstance(sample_weight, float):
-            sample_weight = np.full(
-                shape=len(X), fill_value=sample_weight, dtype=(self.dtype or X.dtype)
-            )
-
         if sample_weight is None:
             sample_weight = np.ones(len(X), dtype=(self.dtype or X.dtype))
 
