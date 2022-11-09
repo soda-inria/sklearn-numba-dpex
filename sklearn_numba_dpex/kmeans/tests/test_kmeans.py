@@ -309,7 +309,7 @@ def test_kmeans_plusplus_output(dtype):
     assert (centers.max(axis=0) <= X.max(axis=0)).all()
     assert (centers.min(axis=0) >= X.min(axis=0)).all()
     # NB: dtype can change depending on the device, so we accept all valid dtypes.
-    assert centers.dtype in {np.float32, np.float64}
+    assert centers.dtype.type in {np.float32, np.float64}
 
     # Check that indices correspond to reported centers
     # Use X for comparison rather than data, test still works against centers
