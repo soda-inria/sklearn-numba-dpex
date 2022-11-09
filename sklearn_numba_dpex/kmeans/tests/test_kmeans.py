@@ -292,7 +292,7 @@ def test_kmeans_plusplus_output(dtype):
     X = X_sklearn_test.astype(dtype)
 
     centers, indices = driver.kmeans_plusplus(
-        X=X_sklearn_test,
+        X=X,
         sample_weight=None,
         n_clusters=n_clusters_sklearn_test,
         random_state=42,
