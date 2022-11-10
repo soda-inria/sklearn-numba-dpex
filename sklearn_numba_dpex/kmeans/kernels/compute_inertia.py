@@ -6,12 +6,7 @@ import numba_dpex as dpex
 
 
 @lru_cache
-def make_compute_inertia_kernel(
-    n_samples,
-    n_features,
-    work_group_size,
-    dtype,
-):
+def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
 
     zero_idx = np.int64(0)
     zero_init = dtype(0.0)
