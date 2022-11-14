@@ -27,7 +27,9 @@ one_idx = int64(1)
 
 
 def get_random_raw(states):
-    """Returns one `uint64` random integer"""
+    """Returns one `uint64` random integer.
+
+    NB: uses and updates the state states[0]"""
     result = dpt.empty(sh=(1,), dtype=np.uint64, device=states.device)
     make_random_raw_kernel()(states, result)
     return result
@@ -69,6 +71,7 @@ def make_rand_uniform_kernel_func(dtype):
         @dpex.func
         def uint64_to_unit_float(x):
             """Convert uint64 to float32 value in the range [0.0, 1.0)
+
             NB: this is different than original numba.cuda.random code. Instead of
             generating a float64 random number before casting it to float32, a float32
             number is generated from uint64 without intermediate float64. This enables
@@ -128,7 +131,7 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     @dpex.kernel
     def init_xoroshiro128pp_states(states):
         """
-        Use SplitMix64 to generate an xoroshiro128p state from 64-bit seed.
+        Use SplitMix64 to generate an xoroshiro128p state from a uint64 seed.
 
         This ensures that manually set small seeds don't result in a predictable
         initial sequence from the random number generator.

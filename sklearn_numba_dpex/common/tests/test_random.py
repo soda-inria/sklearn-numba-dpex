@@ -2,14 +2,13 @@ import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 
+from sklearn.utils._testing import assert_allclose
+
 from sklearn_numba_dpex.common.random import (
     create_xoroshiro128pp_states,
     get_random_raw,
     make_rand_uniform_kernel_func,
 )
-
-
-from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
 
 
 def test_xoroshiro128pp_raw():
@@ -62,8 +61,8 @@ def test_xoroshiro128pp_raw():
     #     12040925107571057860,
     # ]
     # but it seems to be wrong. Refer to the sklearn_numba_dpex/common/random.py file
-    # for more details on the issue, and adapt the test or remove this block once it is
-    # resolved.
+    # and https://github.com/bashtage/randomgen/issues/321 for more details on the
+    # issue, and adapt the test or remove this block once it is resolved.
 
     expected_res_2 = [
         16052925335932940643,
@@ -109,38 +108,47 @@ def _make_get_single_rand_value_kernel(dtype):
     return get_single_rand_value
 
 
-def test_xoroshiro128pp_rand():
+def test_xoroshiro128pp_rand_consistency_accross_dtypes():
+    # Let's generate some random float32 numbers...
     random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
-    get_single_rand_value_kernel_32 = _make_get_single_rand_value_kernel(np.float32)
+    get_single_rand_value_kernel_float32 = _make_get_single_rand_value_kernel(
+        np.float32
+    )
 
-    expected_res_32 = [
-        0.9083704,
-        0.33061236,
-        0.9509354,
-        0.20447117,
-        0.34282982,
-        0.09195548,
-        0.49001336,
-        0.09946841,
-        0.23281485,
-        0.3062514,
+    expected_res_float32 = np.array(
+        [
+            0.9083704,
+            0.33061236,
+            0.9509354,
+            0.20447117,
+            0.34282982,
+            0.09195548,
+            0.49001336,
+            0.09946841,
+            0.23281485,
+            0.3062514,
+        ],
+        dtype=np.float32,
+    )
+
+    actual_res_float32 = [
+        get_single_rand_value_kernel_float32(random_state) for _ in expected_res_float32
     ]
-    expected_res_32 = [np.float32(f) for f in expected_res_32]
 
-    actual_res_32 = [
-        get_single_rand_value_kernel_32(random_state) for _ in expected_res_32
-    ]
+    assert_allclose(expected_res_float32, actual_res_float32)
 
-    assert expected_res_32 == actual_res_32
-
+    # ...and if the device supports it, also some random float64 numbers, with the same
+    # seed...
     if not random_state.device.sycl_device.has_aspect_fp64:
         return
 
     random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
-    get_single_rand_value_kernel_64 = _make_get_single_rand_value_kernel(np.float64)
-    actual_res_64_to_32 = [
-        np.float32(get_single_rand_value_kernel_64(random_state))
-        for _ in expected_res_32
+    get_single_rand_value_kernel_float64 = _make_get_single_rand_value_kernel(
+        np.float64
+    )
+    actual_res_float64 = [
+        get_single_rand_value_kernel_float64(random_state) for _ in expected_res_float32
     ]
 
-    np.testing.assert_allclose(actual_res_64_to_32, expected_res_32, rtol=1e-4)
+    # ...and ensure that the float32 rng and float64 rng produce close numbers.
+    assert_allclose(actual_res_float64, expected_res_float32)
