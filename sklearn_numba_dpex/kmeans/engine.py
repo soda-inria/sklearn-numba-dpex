@@ -47,7 +47,9 @@ class KMeansEngine(KMeansCythonEngine):
         return super().prepare_fit(X, y, sample_weight)
 
     def init_centroids(self, X):
-        if hasattr(self.init, "startswith") and self.init == "k-means++":
+        init = self.init
+
+        if isinstance(init, str) and init == "k-means++":
             centers, center_indices = KMeansDriver(
                 **self._DRIVER_CONFIG
             ).kmeans_plusplus(
@@ -58,7 +60,7 @@ class KMeansEngine(KMeansCythonEngine):
             centers = self.estimator._init_centroids(
                 X,
                 x_squared_norms=self.x_squared_norms,
-                init=self.init,
+                init=init,
                 random_state=self.random_state,
             )
         return centers

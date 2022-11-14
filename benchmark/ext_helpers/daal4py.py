@@ -31,7 +31,7 @@ class DAAL4PYEngine(KMeansEngine):
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
         init = estimator.init
-        if hasattr(init, "startswith") and init == "k-means++":
+        if isinstance(init, str) and init == "k-means++":
             raise NotSupportedByEngineError(
                 "The daal4py engine for KMeans does not support k-means++ init."
             )

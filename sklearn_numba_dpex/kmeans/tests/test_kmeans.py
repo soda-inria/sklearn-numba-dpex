@@ -22,7 +22,8 @@ from sklearn_numba_dpex.kmeans.kernels.utils import (
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
-
+# This is safely reusable between tests because
+# this instance has no internal tests.
 driver = KMeansDriver()
 
 
@@ -291,9 +292,11 @@ def test_kmeans_plusplus_output(dtype):
     # Check for the correct number of seeds and all positive values
     X = X_sklearn_test.astype(dtype)
 
+    sample_weight = default_rng(42).random(X.shape[0], dtype=dtype)
+
     centers, indices = driver.kmeans_plusplus(
         X=X,
-        sample_weight=None,
+        sample_weight=sample_weight,
         n_clusters=n_clusters_sklearn_test,
         random_state=42,
     )
@@ -312,8 +315,6 @@ def test_kmeans_plusplus_output(dtype):
     assert centers.dtype.type in {np.float32, np.float64}
 
     # Check that indices correspond to reported centers
-    # Use X for comparison rather than data, test still works against centers
-    # calculated with sparse data.
     assert_allclose(X[indices].astype(dtype), centers)
 
 

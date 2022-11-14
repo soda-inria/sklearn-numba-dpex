@@ -950,6 +950,10 @@ class KMeansDriver:
 
         # Pick the remaining n_clusters-1 points
         for c in range(1, n_clusters):
+            # First, let's sample indices of candidates using a empirical cumulative
+            # density function built using the potential of the samples and squared
+            # distances to each sample's closest centroids.
+
             # NB: this step consists in highly sequential instructions that can only
             # be parallelized in n_local_trials threads, it's up to 50x faster to run it
             # on CPU, and becomes the bottleneck if ran on GPU. Depending on hardware
@@ -971,6 +975,9 @@ class KMeansDriver:
                     closest_dist_sq, total_potential, random_state, candidate_ids
                 )
 
+            # Now, for each (sample, candidate)-pair, compute the minimum between
+            # their distance and the previous minimum.
+
             # XXX: at the cost of one additional pass on data, we could avoid storing
             # entirely distance_to_candidates_t in memory, and save
             # `dtype.nbytes * n_local_trials * n_sample` bytes in memory.
@@ -991,10 +998,10 @@ class KMeansDriver:
             total_potential = candidate_potentials[
                 best_candidate : (best_candidate + 1)
             ]
-            closest_dist_sq = distance_to_candidates_t[best_candidate]
-            best_candidate = candidate_ids[best_candidate]
-            centers_t[:, c] = X_t[:, best_candidate]
-            center_indices[c] = best_candidate
+            closest_dist_sq = distance_to_candidates_t[best_candidate, :]
+            center_index = candidate_ids[best_candidate]
+            centers_t[:, c] = X_t[:, center_index]
+            center_indices[c] = center_index
 
         return centers_t.T, center_indices
 
