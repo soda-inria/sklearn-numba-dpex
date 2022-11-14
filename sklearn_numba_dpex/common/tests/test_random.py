@@ -1,11 +1,18 @@
+import numpy as np
+import dpctl.tensor as dpt
+import numba_dpex as dpex
+
 from sklearn_numba_dpex.common.random import (
     create_xoroshiro128pp_states,
     get_random_raw,
+    make_rand_uniform_kernel_func,
 )
-import dpctl.tensor as dpt
 
 
-def test_xoroshiro128pp():
+from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
+
+
+def test_xoroshiro128pp_raw():
     random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
 
     # To avoid a dependency on the reference implementation randomgen,
@@ -79,3 +86,61 @@ def test_xoroshiro128pp():
     ]
 
     assert expected_res_2 == actual_res_2
+
+
+def _make_get_single_rand_value_kernel(dtype):
+
+    rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
+    zero_idx = np.int64(0)
+
+    @dpex.kernel
+    # fmt: off
+    def _get_single_rand_value(
+        random_state,                     # IN             (1, 2)
+        single_rand_value,                # OUT            (1,)
+        ):
+        single_rand_value[0] = rand_uniform_kernel_func(random_state, zero_idx)
+
+    def get_single_rand_value(random_state):
+        single_rand_value = dpt.empty(sh=1, dtype=dtype)
+        _get_single_rand_value[1, 1](random_state, single_rand_value)
+        return dpt.asnumpy(single_rand_value)[0]
+
+    return get_single_rand_value
+
+
+def test_xoroshiro128pp_rand():
+    random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
+    get_single_rand_value_kernel_32 = _make_get_single_rand_value_kernel(np.float32)
+
+    expected_res_32 = [
+        0.9083704,
+        0.33061236,
+        0.9509354,
+        0.20447117,
+        0.34282982,
+        0.09195548,
+        0.49001336,
+        0.09946841,
+        0.23281485,
+        0.3062514,
+    ]
+    expected_res_32 = [np.float32(f) for f in expected_res_32]
+
+    actual_res_32 = [
+        get_single_rand_value_kernel_32(random_state) for _ in expected_res_32
+    ]
+
+    assert expected_res_32 == actual_res_32
+
+    if not random_state.device.sycl_device.has_aspect_fp64:
+        return
+
+    random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
+    get_single_rand_value_kernel_64 = _make_get_single_rand_value_kernel(np.float64)
+    actual_res_64_to_32 = [
+        np.float32(get_single_rand_value_kernel_64(random_state))
+        for _ in expected_res_32
+    ]
+
+    np.testing.assert_allclose(actual_res_64_to_32, expected_res_32, rtol=1e-4)

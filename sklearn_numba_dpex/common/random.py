@@ -53,13 +53,13 @@ def make_rand_uniform_kernel_func(dtype):
 
     if dtype.name == "float64":
         convert_rshift = uint32(11)
-        convert_const = uint64(1) << uint32(53)
+        convert_const = float64(uint64(1) << uint32(53))
         convert_const_one = float64(1)
 
         @dpex.func
         def uint64_to_unit_float(x):
             """Convert uint64 to float64 value in the range [0.0, 1.0)"""
-            return (x >> convert_rshift) * (convert_const_one / convert_const)
+            return float64(x >> convert_rshift) * (convert_const_one / convert_const)
 
     elif dtype.name == "float32":
         convert_rshift = uint32(40)
@@ -229,6 +229,7 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     #             if jump_const & jump_const_3 << uint32(b):
     #                 s0 ^= states[index, zero_idx]
     #                 s1 ^= states[index, one_idx]
+    #             # NB: this is _xoroshiro128p_next, not _xoroshiro128pp_next
     #             _xoroshiro128p_next(states, index)
 
     #     states[index, zero_idx] = s0
@@ -304,5 +305,5 @@ _64_as_uint32 = uint32(64)
 
 @dpex.func
 def _rotl(x, k):
-    """Left rotate x by k bits."""
+    """Left rotate x by k bits. x is expected to be a uint64 integer."""
     return (x << k) | (x >> (_64_as_uint32 - k))
