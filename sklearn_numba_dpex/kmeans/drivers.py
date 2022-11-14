@@ -1,4 +1,3 @@
-import math
 import warnings
 from functools import lru_cache
 
@@ -30,10 +29,7 @@ from sklearn_numba_dpex.kmeans.kernels import (
 )
 
 
-def _check_power_of_2(e):
-    if e != 2 ** (math.log2(e)):
-        raise ValueError(f"Expected a power of 2, got {e}")
-    return e
+from sklearn_numba_dpex.common._utils import check_power_of_2
 
 
 class _IgnoreSampleWeight:
@@ -136,7 +132,7 @@ class KMeansDriver:
             global_mem_cache_size or device_params.global_mem_cache_size
         )
 
-        self.preferred_work_group_size_multiple = _check_power_of_2(
+        self.preferred_work_group_size_multiple = check_power_of_2(
             preferred_work_group_size_multiple
             or device_params.preferred_work_group_size_multiple
         )
@@ -145,15 +141,15 @@ class KMeansDriver:
         # this default.
         # TODO: when it's available in dpctl, use the `max_group_size` attribute
         # exposed by the kernel instead ?
-        self.work_group_size_multiplier = _check_power_of_2(
+        self.work_group_size_multiplier = check_power_of_2(
             work_group_size_multiplier or 2
         )
 
-        self.centroids_window_width_multiplier = _check_power_of_2(
+        self.centroids_window_width_multiplier = check_power_of_2(
             centroids_window_width_multiplier or 1
         )
 
-        self.centroids_window_height = _check_power_of_2(centroids_window_height or 16)
+        self.centroids_window_height = check_power_of_2(centroids_window_height or 16)
 
         self.centroids_private_copies_max_cache_occupancy = (
             centroids_private_copies_max_cache_occupancy or 0.7

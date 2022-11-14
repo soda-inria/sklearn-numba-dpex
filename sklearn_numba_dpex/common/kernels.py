@@ -24,6 +24,8 @@ import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 
+from sklearn_numba_dpex.common._utils import check_power_of_2
+
 
 zero_idx = np.int64(0)
 
@@ -160,6 +162,8 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
     the same order of magnitude than `preferred_work_group_size_multiple`. If not,
     other reduction implementations might give better performances.
     """
+    check_power_of_2(work_group_size)
+
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
@@ -313,6 +317,11 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
         global_size = n_groups * work_group_size
         kernel = partial_sum_reduction[global_size, work_group_size]
         result_shape = n_groups if is_1d else (n_rows, n_groups)
+        # NB: here memory for partial results is allocated ahead of time and will only
+        # be garbage collected when the instance of `sum_reduction` is garbage
+        # collected. Thus it can be more efficient to re-use a same instance of
+        # `sum_reduction` (e.g within iterations of a loop) since it avoid deallocation
+        # and reallocation every time.
         result = dpt.empty(result_shape, dtype=dtype, device=device)
         kernels_and_empty_tensors_pairs.append((kernel, result))
 
@@ -329,6 +338,8 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
 @lru_cache
 def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
     """Implement 1d argmin with the same strategy than for make_sum_reduction_2d_axis1_kernel."""
+    check_power_of_2(work_group_size)
+
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
