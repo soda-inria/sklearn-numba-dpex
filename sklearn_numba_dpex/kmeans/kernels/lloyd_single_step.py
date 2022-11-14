@@ -5,9 +5,8 @@ import numpy as np
 import numba_dpex as dpex
 
 from ._base_kmeans_kernel_funcs import (
-    _make_initialize_window_kernel_funcs,
-    _make_update_closest_centroid_kernel_func,
-    _make_accumulate_sum_of_ops_kernel_func,
+    make_pairwise_ops_base_kernel_funcs,
+    make_update_closest_centroid_kernel_func,
 )
 
 # General note on kernel implementation
@@ -49,33 +48,29 @@ def make_lloyd_single_step_fixed_window_kernel(
     )
 
     (
-        _initialize_window_of_centroids,
-        _load_window_of_centroids_and_features,
-    ) = _make_initialize_window_kernel_funcs(
-        n_clusters,
+        initialize_window_of_centroids,
+        load_window_of_centroids_and_features,
+        accumulate_dot_products,
+    ) = make_pairwise_ops_base_kernel_funcs(
+        n_samples,
         n_features,
-        work_group_size,
-        window_n_centroids,
+        n_clusters,
         centroids_window_height,
+        window_n_centroids,
+        "product",
         dtype,
+        work_group_size,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
-    _update_closest_centroid = _make_update_closest_centroid_kernel_func(
-        window_n_centroids
-    )
-
-    _accumulate_dot_products = _make_accumulate_sum_of_ops_kernel_func(
-        n_samples,
-        n_features,
-        centroids_window_height,
-        window_n_centroids,
-        ops="product",
-        dtype=dtype,
+    update_closest_centroid = make_update_closest_centroid_kernel_func(
+        n_clusters, window_n_centroids
     )
 
     n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
     n_windows_for_features = math.ceil(n_features / centroids_window_height)
+    last_centroid_window_idx = n_windows_for_centroids - 1
+    last_feature_window_idx = n_windows_for_features - 1
 
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
@@ -191,12 +186,14 @@ def make_lloyd_single_step_fixed_window_kernel(
         for _0 in range(n_windows_for_centroids):
             # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
-            _initialize_window_of_centroids(
+            is_last_centroid_window = _0 == last_centroid_window_idx
+            initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 window_of_centroids_half_l2_norms,
                 dot_products,
+                is_last_centroid_window
             )
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
@@ -207,25 +204,29 @@ def make_lloyd_single_step_fixed_window_kernel(
             # that cover all features for current given centroids
             for _1 in range(n_windows_for_features):
                 # centroids_window is modified inplace
-                _load_window_of_centroids_and_features(
+                is_last_feature_window = _1 == last_feature_window_idx
+                load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
                     window_loading_centroid_idx,
                     window_loading_feature_offset,
                     current_centroids_t,
                     centroids_window,
+                    is_last_feature_window
                 )
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                _accumulate_dot_products(
+                accumulate_dot_products(
                     sample_idx,
                     first_feature_idx,
                     X_t,
                     centroids_window,
-                    dot_products
+                    dot_products,
+                    is_last_feature_window,
+                    is_last_centroid_window
                 )
 
                 # When the next iteration starts work items will overwrite shared memory
@@ -238,12 +239,13 @@ def make_lloyd_single_step_fixed_window_kernel(
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
             # inertia for the current sample.
-            min_idx, min_sample_pseudo_inertia = _update_closest_centroid(
+            min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
                 min_idx,
                 min_sample_pseudo_inertia,
                 window_of_centroids_half_l2_norms,
                 dot_products,
+                is_last_centroid_window
             )
 
             # When the next iteration starts work items will overwrite shared memory
