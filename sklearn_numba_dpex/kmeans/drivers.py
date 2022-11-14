@@ -317,7 +317,7 @@ class KMeansDriver:
 
         reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_samples,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,
@@ -325,7 +325,7 @@ class KMeansDriver:
 
         reduce_centroid_shifts_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_clusters,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,
@@ -717,7 +717,7 @@ class KMeansDriver:
 
         reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_samples,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,

@@ -131,9 +131,11 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 
 @lru_cache
 def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dtype):
-    """numba_dpex does not provide tools such as `cuda.reduce` so we implement from
-    scratch a reduction strategy. The strategy relies on the commutativity of the
-    operation used for the reduction, thus allowing to reduce the input in any order.
+    """Implement data_2d.sum(axis=1) or data_1d.sum()
+
+    numba_dpex does not provide tools such as `cuda.reduce` so we implement from scratch
+    a reduction strategy. The strategy relies on the commutativity of the operation used
+    for the reduction, thus allowing to reduce the input in any order.
 
     The strategy consists in performing local reductions in each work group using local
     memory where each work item combine two values, thus halving the number of values,
