@@ -9,6 +9,7 @@ from ._base_kmeans_kernel_funcs import (
     make_update_closest_centroid_kernel_func,
 )
 
+
 # NB: refer to the definition of the main lloyd function for a more comprehensive
 # inline commenting of the kernel.
 
@@ -18,16 +19,18 @@ def make_label_assignment_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
-    preferred_work_group_size_multiple,
-    centroids_window_width_multiplier,
-    centroids_window_height,
+    sub_group_size,
     work_group_size,
     dtype,
 ):
+    centroids_window_height = work_group_size // sub_group_size
+    if centroids_window_height * sub_group_size != work_group_size:
+        raise ValueError(
+            "Expected work_group_size to be a multiple of sub_group_size but got "
+            f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+        )
 
-    window_n_centroids = (
-        preferred_work_group_size_multiple * centroids_window_width_multiplier
-    )
+    window_n_centroids = sub_group_size
 
     (
         initialize_window_of_centroids,
@@ -41,7 +44,6 @@ def make_label_assignment_fixed_window_kernel(
         window_n_centroids,
         "product",
         dtype,
-        work_group_size,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
@@ -88,7 +90,6 @@ def make_label_assignment_fixed_window_kernel(
 
         for _0 in range(n_windows_for_centroids):
             is_last_centroid_window = _0 == last_centroid_window_idx
-
             initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
@@ -104,6 +105,7 @@ def make_label_assignment_fixed_window_kernel(
 
             for _1 in range(n_windows_for_features):
                 is_last_feature_window = _1 == last_feature_window_idx
+
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
@@ -111,22 +113,17 @@ def make_label_assignment_fixed_window_kernel(
                     window_loading_feature_offset,
                     centroids_t,
                     centroids_window,
-                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
-                    sample_idx,
-                    first_feature_idx,
-                    X_t,
-                    centroids_window,
-                    dot_products, is_last_feature_window, is_last_centroid_window
+                    sample_idx, first_feature_idx, X_t, centroids_window, dot_products, is_last_feature_window, is_last_centroid_window
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
                 first_feature_idx += centroids_window_height
+
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
             min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
@@ -137,9 +134,9 @@ def make_label_assignment_fixed_window_kernel(
                 is_last_centroid_window
             )
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
             first_centroid_idx += window_n_centroids
+
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # No update step, only store min_idx in the output array
         if sample_idx >= n_samples:

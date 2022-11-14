@@ -242,25 +242,14 @@ if __name__ == "__main__":
             is_slow=True,
         )
 
-    work_group_size_multipliers = [1, 2, 4, 8]
+    with override_attr_context(KMeansEngine, _DRIVER_CONFIG=dict(device="cpu")):
+        kmeans_timer.timeit(
+            name="Kmeans numba_dpex lloyd CPU",
+            engine_provider="sklearn_numba_dpex",
+            is_slow=True,
+        )
 
-    for multiplier in work_group_size_multipliers:
-
-        with override_attr_context(
-            KMeansEngine,
-            _DRIVER_CONFIG=dict(device="cpu", work_group_size_multiplier=multiplier),
-        ):
-            kmeans_timer.timeit(
-                name=f"Kmeans numba_dpex lloyd CPU (work_group_size_multiplier={multiplier})",
-                engine_provider="sklearn_numba_dpex",
-                is_slow=True,
-            )
-
-        with override_attr_context(
-            KMeansEngine,
-            _DRIVER_CONFIG=dict(device="gpu", work_group_size_multiplier=multiplier),
-        ):
-            kmeans_timer.timeit(
-                name=f"Kmeans numba_dpex lloyd GPU (work_group_size_multiplier={multiplier})",
-                engine_provider="sklearn_numba_dpex",
-            )
+    with override_attr_context(KMeansEngine, _DRIVER_CONFIG=dict(device="gpu")):
+        kmeans_timer.timeit(
+            name="Kmeans numba_dpex lloyd GPU", engine_provider="sklearn_numba_dpex"
+        )

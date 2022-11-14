@@ -55,28 +55,6 @@ class KMeansDriver:
 
     Parameters
     ----------
-    preferred_work_group_size_multiple : int
-        The kernels will use this value to optimize the distribution of work items. If
-        None, it is automatically fetched with pyopencl if possible, else a default of
-        64 is applied. It is required to be a power of two.
-
-    work_group_size_multiplier : int
-        The size of groups of work items used to execute the kernels is defined as
-        `work_group_size_multiplier * preferred_work_group_size_multiple` and, if None,
-        is chosen to be equal to the value of max_work_group_size which is fetched
-        with dpctl. It is required to be a power of two.
-
-    centroids_window_width_multiplier : int
-        The width of the window over the centroids is defined as
-        `centroids_window_width_multiplier x preferred_work_group_size_multiple`. The
-        higher the value, the higher the cost in shared memory. If None, will default
-        to 1. It is required to be a power of two.
-
-    centroids_window_height : int
-        The height of the window, counted as a number of features. The higher the
-        value, the higher the cost in shared memory. If None, will default to 16. It is
-        required to be a power of two.
-
     global_mem_cache_size : int
         Size in bytes of the size of the global memory cache size. If None, the value
         will be automatically fetched with dpctl. It is used to estimate the maximum
@@ -116,52 +94,31 @@ class KMeansDriver:
 
     def __init__(
         self,
-        preferred_work_group_size_multiple=None,
-        work_group_size_multiplier=None,
-        centroids_window_width_multiplier=None,
-        centroids_window_height=None,
         global_mem_cache_size=None,
         centroids_private_copies_max_cache_occupancy=None,
         device=None,
         X_layout=None,
         dtype=None,
     ):
-        dpctl_device = dpctl.SyclDevice(device)
-        device_params = DeviceParams(dpctl_device)
-
-        # TODO: set the best possible defaults for all the parameters based on an
-        # exhaustive grid search.
-
-        self.global_mem_cache_size = (
-            global_mem_cache_size or device_params.global_mem_cache_size
-        )
-
-        self.preferred_work_group_size_multiple = _check_power_of_2(
-            preferred_work_group_size_multiple
-            or device_params.preferred_work_group_size_multiple
-        )
-
-        # So far the best default value has been empirically found to be 2 so we use
-        # this default.
-        # TODO: when it's available in dpctl, use the `max_group_size` attribute
-        # exposed by the kernel instead ?
-        work_group_size_multiplier = _check_power_of_2(work_group_size_multiplier or 2)
-
-        self.work_group_size = (
-            work_group_size_multiplier * self.preferred_work_group_size_multiple
-        )
-
-        self.centroids_window_width_multiplier = _check_power_of_2(
-            centroids_window_width_multiplier or 1
-        )
-
-        self.centroids_window_height = _check_power_of_2(centroids_window_height or 16)
-
         self.centroids_private_copies_max_cache_occupancy = (
             centroids_private_copies_max_cache_occupancy or 0.7
         )
 
+        dpctl_device = dpctl.SyclDevice(device)
+
         self.device = dpctl_device
+
+        max_work_group_size = dpctl_device.max_work_group_size
+
+        self.sub_group_size = max_work_group_size // dpctl_device.max_num_sub_groups
+
+        self.max_work_group_size = max_work_group_size
+
+        device_params = DeviceParams(dpctl_device)
+
+        self.global_mem_cache_size = (
+            global_mem_cache_size or device_params.global_mem_cache_size
+        )
 
         # FIXME: "C" is not available at the time (raises a ValueError).
         self.X_layout = X_layout or "F"
@@ -174,7 +131,7 @@ class KMeansDriver:
         """This call is expected to accept the same inputs than sklearn's private
         _kmeans_single_lloyd and produce the same outputs.
         """
-        (X, sample_weight, cluster_centers, output_dtype) = self._check_inputs(
+        X, sample_weight, cluster_centers, output_dtype = self._check_inputs(
             X, sample_weight, centers_init
         )
 
@@ -184,14 +141,8 @@ class KMeansDriver:
             X, sample_weight, cluster_centers
         )
 
-        (assignments_idx, inertia, best_centroids, n_iteration,) = self._lloyd(
-            X_t,
-            sample_weight,
-            centroids_t,
-            use_uniform_weights,
-            max_iter,
-            verbose,
-            tol,
+        assignments_idx, inertia, best_centroids, n_iteration = self._lloyd(
+            X_t, sample_weight, centroids_t, use_uniform_weights, max_iter, verbose, tol
         )
 
         # TODO: explore leveraging dpnp to benefit from USM to avoid moving
@@ -233,12 +184,10 @@ class KMeansDriver:
             n_features,
             n_clusters,
             return_assignments=bool(verbose),
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
+            sub_group_size=self.sub_group_size,
             global_mem_cache_size=self.global_mem_cache_size,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
             centroids_private_copies_max_cache_occupancy=self.centroids_private_copies_max_cache_occupancy,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
@@ -246,21 +195,19 @@ class KMeansDriver:
             n_samples,
             n_features,
             n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
-            work_group_size=self.work_group_size,
+            sub_group_size=self.sub_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
         compute_inertia_kernel = make_compute_inertia_kernel(
-            n_samples, n_features, self.work_group_size, compute_dtype
+            n_samples, n_features, self.max_work_group_size, compute_dtype
         )
 
         reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
             size0=n_centroids_private_copies,
             size1=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
@@ -268,40 +215,40 @@ class KMeansDriver:
             size0=n_centroids_private_copies,
             size1=n_features,
             size2=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
         broadcast_division_kernel = make_broadcast_division_1d_2d_kernel(
             size0=n_features,
             size1=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
         )
 
         compute_centroid_shifts_kernel = make_centroid_shifts_kernel(
             n_clusters=n_clusters,
             n_features=n_features,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
         half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
             size0=n_features,
             size1=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
         reduce_inertia_kernel = make_sum_reduction_1d_kernel(
             size=n_samples,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             device=self.device,
             dtype=compute_dtype,
         )
 
         reduce_centroid_shifts_kernel = make_sum_reduction_1d_kernel(
             size=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             device=self.device,
             dtype=compute_dtype,
         )
@@ -310,7 +257,7 @@ class KMeansDriver:
             n_centroids_private_copies=n_centroids_private_copies,
             n_features=n_features,
             n_clusters=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
@@ -516,7 +463,7 @@ class KMeansDriver:
 
         select_samples_far_from_centroid_kernel = (
             make_select_samples_far_from_centroid_kernel(
-                n_empty_clusters, n_samples, self.work_group_size
+                n_empty_clusters, n_samples, self.max_work_group_size
             )
         )
 
@@ -558,7 +505,7 @@ class KMeansDriver:
             n_empty_clusters,
             n_features,
             n_selected_gt_threshold_,
-            self.work_group_size,
+            self.max_work_group_size,
             compute_dtype,
         )
 
@@ -612,21 +559,21 @@ class KMeansDriver:
         n_features, n_samples = X_t.shape
         n_clusters = centroids_t.shape[1]
 
-        label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
-            work_group_size=self.work_group_size,
-            dtype=compute_dtype,
+        label_assignment_fixed_window_kernel = (
+            make_label_assignment_fixed_window_kernel(
+                n_samples,
+                n_features,
+                n_clusters,
+                sub_group_size=self.sub_group_size,
+                work_group_size=self.max_work_group_size,
+                dtype=compute_dtype,
+            )
         )
 
         half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
             size0=n_features,
             size1=n_clusters,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             dtype=compute_dtype,
         )
 
@@ -645,12 +592,12 @@ class KMeansDriver:
             return assignments_idx, None
 
         compute_inertia_kernel = make_compute_inertia_kernel(
-            n_samples, n_features, self.work_group_size, compute_dtype
+            n_samples, n_features, self.max_work_group_size, compute_dtype
         )
 
         reduce_inertia_kernel = make_sum_reduction_1d_kernel(
             size=n_samples,
-            work_group_size=self.work_group_size,
+            work_group_size=self.max_work_group_size,
             device=self.device,
             dtype=compute_dtype,
         )
@@ -687,15 +634,15 @@ class KMeansDriver:
         n_features, n_samples = X_t.shape
         n_clusters = Y_t.shape[1]
 
-        euclidean_distances_fixed_window_kernel = make_compute_euclidean_distances_fixed_window_kernel(
-            n_samples,
-            n_features,
-            n_clusters,
-            preferred_work_group_size_multiple=self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
-            work_group_size=self.work_group_size,
-            dtype=compute_dtype,
+        euclidean_distances_fixed_window_kernel = (
+            make_compute_euclidean_distances_fixed_window_kernel(
+                n_samples,
+                n_features,
+                n_clusters,
+                sub_group_size=self.sub_group_size,
+                work_group_size=self.max_work_group_size,
+                dtype=compute_dtype,
+            )
         )
 
         euclidean_distances_t = dpt.empty(
