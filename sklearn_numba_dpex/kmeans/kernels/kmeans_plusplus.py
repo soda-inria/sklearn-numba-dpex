@@ -84,7 +84,7 @@ def make_sample_center_candidates_kernel(
         total_potential,          # IN             (1,)
         random_state,             # INOUT          (n_local_trials, 2)
         candidates_id,            # OUT            (n_local_trials,)
-        ):
+    ):
     # fmt: on
         local_trial_idx = dpex.get_global_id(zero_idx)
         if local_trial_idx >= n_local_trials:
@@ -109,41 +109,41 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     n_features,
     n_candidates,
     preferred_work_group_size_multiple,
-    centroids_window_width_multiplier,
-    centroids_window_height,
+    candidates_window_width_multiplier,
+    candidates_window_height,
     work_group_size,
     dtype,
 ):
 
-    window_n_centroids = (
-        preferred_work_group_size_multiple * centroids_window_width_multiplier
+    window_n_candidates = (
+        preferred_work_group_size_multiple * candidates_window_width_multiplier
     )
 
     (
-        _initialize_window_of_centroids,
-        _load_window_of_centroids_and_features,
+        _initialize_window_of_candidates,
+        _load_window_of_candidates_and_features,
     ) = _make_initialize_window_kernel_funcs(
         n_samples,
         n_features,
         work_group_size,
-        window_n_centroids,
-        centroids_window_height,
+        window_n_candidates,
+        candidates_window_height,
         dtype,
     )
 
     _accumulate_sq_distances = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
         n_features,
-        centroids_window_height,
-        window_n_centroids,
+        candidates_window_height,
+        window_n_candidates,
         ops="squared_diff",
         dtype=dtype,
     )
 
-    n_windows_per_feature = math.ceil(n_candidates / window_n_centroids)
-    n_windows_per_centroid = math.ceil(n_features / centroids_window_height)
+    n_windows_per_feature = math.ceil(n_candidates / window_n_candidates)
+    n_windows_per_candidate = math.ceil(n_features / candidates_window_height)
 
-    centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
+    candidates_window_shape = (candidates_window_height, (window_n_candidates + 1))
 
     zero_idx = np.int64(0)
 
@@ -154,41 +154,41 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         sample_weight,                     # IN READ-ONLY   (n_samples,)
         candidates_ids,                    # IN             (n_candidates,)
         closest_dist_sq,                   # IN             (n_samples,)
-        euclidean_distances_t,             # OUT            (n_candidates, n_samples)
+        sq_distances_t,                    # OUT            (n_candidates, n_samples)
     ):
     # fmt: on
         sample_idx = dpex.get_global_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
 
-        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
+        candidates_window = dpex.local.array(shape=candidates_window_shape, dtype=dtype)
 
-        sq_distances = dpex.private.array(shape=window_n_centroids, dtype=dtype)
+        sq_distances = dpex.private.array(shape=window_n_candidates, dtype=dtype)
 
-        first_centroid_idx = zero_idx
+        first_candidate_idx = zero_idx
 
-        window_loading_centroid_idx = local_work_id % window_n_centroids
-        window_loading_feature_offset = local_work_id // window_n_centroids
+        window_loading_candidate_idx = local_work_id % window_n_candidates
+        window_loading_feature_offset = local_work_id // window_n_candidates
 
         for _0 in range(n_windows_per_feature):
-            _initialize_window_of_centroids(sq_distances)
+            _initialize_window_of_candidates(sq_distances)
 
-            loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
-            if loading_centroid_idx < n_candidates:
-                loading_centroid_idx = candidates_ids[loading_centroid_idx]
+            loading_candidate_idx = first_candidate_idx + window_loading_candidate_idx
+            if loading_candidate_idx < n_candidates:
+                loading_candidate_idx = candidates_ids[loading_candidate_idx]
             else:
-                loading_centroid_idx = n_samples
+                loading_candidate_idx = n_samples
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_per_centroid):
+            for _1 in range(n_windows_per_candidate):
 
-                _load_window_of_centroids_and_features(
+                _load_window_of_candidates_and_features(
                     first_feature_idx,
-                    loading_centroid_idx,
-                    window_loading_centroid_idx,
+                    loading_candidate_idx,
+                    window_loading_candidate_idx,
                     window_loading_feature_offset,
                     X_t,
-                    centroids_window,
+                    candidates_window,
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -197,28 +197,28 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     sample_idx,
                     first_feature_idx,
                     X_t,
-                    centroids_window,
+                    candidates_window,
                     sq_distances,
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                first_feature_idx += centroids_window_height
+                first_feature_idx += candidates_window_height
 
             if sample_idx < n_samples:
                 sample_weight_ = sample_weight[sample_idx]
                 closest_dist_sq_ = closest_dist_sq[sample_idx]
-                for i in range(window_n_centroids):
-                    centroid_idx = first_centroid_idx + i
-                    if centroid_idx < n_candidates:
+                for i in range(window_n_candidates):
+                    candidate_idx = first_candidate_idx + i
+                    if candidate_idx < n_candidates:
                         sq_distance_i = min(
                             sq_distances[i] * sample_weight_,
                             closest_dist_sq_)
-                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = sq_distance_i
+                        sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            first_centroid_idx += window_n_centroids
+            first_candidate_idx += window_n_candidates
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return kmeansplusplus_single_step[global_size, work_group_size]

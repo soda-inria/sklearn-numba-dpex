@@ -77,6 +77,7 @@ class KMeansLloydTimeit:
         centers_init = self.centers_init
         if hasattr(centers_init, "copy"):
             centers_init = centers_init.copy()
+
         X = self.X.copy()
         sample_weight = (
             None if self.sample_weight_ is None else self.sample_weight_.copy()
@@ -219,6 +220,7 @@ if __name__ == "__main__":
         random_state=random_state,
         n_clusters=n_clusters,
         sample_weight=sample_weight,
+        init=init,
     )
 
     kmeans_timer.timeit(

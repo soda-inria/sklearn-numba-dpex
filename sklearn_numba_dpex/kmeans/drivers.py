@@ -848,7 +848,7 @@ class KMeansDriver:
                 from_cpu_to_device = True
             except dpctl.SyclDeviceCreationError:
                 warnings.warn(
-                    "No CPU found, fallbacking to the initialization of the k-means "
+                    "No CPU found, falling back to the initialization of the k-means "
                     "RNG on the default device."
                 )
 
@@ -875,8 +875,8 @@ class KMeansDriver:
             n_features,
             n_local_trials,
             self.preferred_work_group_size_multiple,
-            centroids_window_width_multiplier=self.centroids_window_width_multiplier,
-            centroids_window_height=self.centroids_window_height,
+            candidates_window_width_multiplier=self.centroids_window_width_multiplier,
+            candidates_window_height=self.centroids_window_height,
             work_group_size=work_group_size,
             dtype=compute_dtype,
         )
@@ -921,7 +921,7 @@ class KMeansDriver:
 
         center_indices = dpt.full((n_clusters,), -1, dtype=np.int32)
 
-        distance_to_candidates_t = dpt.empty(
+        sq_distances_t = dpt.empty(
             sh=(n_local_trials, n_samples), dtype=compute_dtype, device=self.device
         )
 
@@ -987,18 +987,16 @@ class KMeansDriver:
                 sample_weight,
                 candidate_ids,
                 closest_dist_sq,
-                distance_to_candidates_t,
+                sq_distances_t,
             )
 
-            candidate_potentials = reduce_potential_2d_kernel(distance_to_candidates_t)[
-                :, 0
-            ]
+            candidate_potentials = reduce_potential_2d_kernel(sq_distances_t)[:, 0]
             best_candidate = select_best_candidate_kernel(candidate_potentials)[0]
 
             total_potential = candidate_potentials[
                 best_candidate : (best_candidate + 1)
             ]
-            closest_dist_sq = distance_to_candidates_t[best_candidate, :]
+            closest_dist_sq = sq_distances_t[best_candidate, :]
             center_index = candidate_ids[best_candidate]
             centers_t[:, c] = X_t[:, center_index]
             center_indices[c] = center_index
