@@ -40,6 +40,12 @@ def get_random_raw(states):
 
 @lru_cache
 def make_random_raw_kernel():
+    """Returns a single pseudo-random `uint64` integer value.
+    Similar to numpy.random.BitGenerator.random_raw(size=1).
+
+    Note, this always uses and updates state states[0].
+    """
+
     @dpex.kernel
     def _get_random_raw_kernel(states, result):
         result[zero_idx] = _xoroshiro128pp_next(states, zero_idx)
@@ -56,7 +62,7 @@ def make_rand_uniform_kernel_func(dtype):
     variant can be compiled to target a device that does not support the
     float64 aspect.
 
-    The returned kernel functions takes two arguments:
+    The returned kernel function takes two arguments:
 
     - states : a state array. See create_xoroshiro128pp_states for details.
 
