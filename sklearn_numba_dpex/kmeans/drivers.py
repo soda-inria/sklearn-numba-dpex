@@ -900,7 +900,7 @@ class KMeansDriver:
 
         random_state = create_xoroshiro128pp_states(
             n_local_trials,
-            random_state,
+            seed=random_state,
             device=cpu_device if from_cpu_to_device else self.device,
         )
         if from_cpu_to_device:
