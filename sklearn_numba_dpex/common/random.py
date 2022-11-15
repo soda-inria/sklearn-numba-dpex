@@ -27,9 +27,12 @@ one_idx = int64(1)
 
 
 def get_random_raw(states):
-    """Returns one `uint64` random integer.
+    """Returns a single pseudo-random `uint64` integer value.
 
-    NB: uses and updates the state states[0]"""
+    Similar to numpy.random.BitGenerator.random_raw(size=1).
+
+    Note, this always uses and updates state states[0].
+    """
     result = dpt.empty(sh=(1,), dtype=np.uint64, device=states.device)
     make_random_raw_kernel()(states, result)
     return result
@@ -103,7 +106,11 @@ def make_rand_uniform_kernel_func(dtype):
 
     @dpex.func
     def xoroshiro128pp_uniform(states, state_idx):
-        """Return one random float in [0, 1)"""
+        """Return one random float in [0, 1)
+
+        Calling this function advances the states[state_idx] by a single RNG step and
+        leaves the other states unchanged.
+        """
         return uint64_to_unit_float(_xoroshiro128pp_next(states, state_idx))
 
     return xoroshiro128pp_uniform
