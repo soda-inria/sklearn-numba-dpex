@@ -116,7 +116,7 @@ def make_rand_uniform_kernel_func(dtype):
     return xoroshiro128pp_uniform
 
 
-def create_xoroshiro128pp_states(n_states, seed=None, device=None):
+def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, device=None):
     """Returns a new device array initialized for n random number generators.
 
     This initializes the RNG states so that states in the array correspond to
@@ -132,6 +132,12 @@ def create_xoroshiro128pp_states(n_states, seed=None, device=None):
         parallelism when using the RNG to generate a large enough sequence of
         pseudo-random values. Subsequent states are initialized 2**64 RNG steps away
         from one another.
+
+    subsequence_start : int
+        Advance the first RNG state by a multiple of 2**64 steps after the
+        state induced by the seed.  The subsequent RNG states controlled by
+        `n_states` are each initialized 2**64 steps further from their
+        predecessor in the states array.
 
     seed : int or None
         Starting seed for the list of generators.
@@ -166,6 +172,10 @@ def create_xoroshiro128pp_states(n_states, seed=None, device=None):
             splitmix64_state
         )
         _, states[zero_idx, one_idx] = _splitmix64_next(splitmix64_state)
+
+        # advance to starting subsequence number
+        for _ in range(subsequence_start):
+            _xoroshiro128pp_jump(states, zero_idx)
 
         # populate the rest of the array
         for idx in range(one_idx, n_states):
