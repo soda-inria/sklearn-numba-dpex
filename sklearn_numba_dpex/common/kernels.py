@@ -24,6 +24,8 @@ import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 
+from sklearn_numba_dpex.common._utils import check_power_of_2
+
 
 zero_idx = np.int64(0)
 
@@ -131,9 +133,11 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 
 @lru_cache
 def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dtype):
-    """numba_dpex does not provide tools such as `cuda.reduce` so we implement from
-    scratch a reduction strategy. The strategy relies on the commutativity of the
-    operation used for the reduction, thus allowing to reduce the input in any order.
+    """Implement data_2d.sum(axis=1) or data_1d.sum()
+
+    numba_dpex does not provide tools such as `cuda.reduce` so we implement from scratch
+    a reduction strategy. The strategy relies on the commutativity of the operation used
+    for the reduction, thus allowing to reduce the input in any order.
 
     The strategy consists in performing local reductions in each work group using local
     memory where each work item combine two values, thus halving the number of values,
@@ -147,30 +151,34 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
     `2 * work_group_size`. This is repeated as many time as needed until only one value
     remains in global memory.
 
-    NB: work_group_size is assumed to be a power of 2.
+    Notes
+    -----
+    `work_group_size` is assumed to be a power of 2.
 
-    NB: if size1 is None then the kernel expects 1d tensor inputs. If size1 is not None
-    then the expected shape of input tensors is (size0, size1), and the reduction
+    if `size1` is None then the kernel expects 1d tensor inputs. If `size1` is not None
+    then the expected shape of input tensors is `(size0, size1)`, and the reduction
     operation is equivalent to input.sum(axis=1). In this case, the kernel is a good
-    choice if size1 >> preferred_work_group_size_multiple, and if size0 ranges in the
-    same order of magnitude than preferred_work_group_size_multiple. If not, other
-    reduction implementations might give better performances.
-
-    ???: how does this strategy compares to having each thread reducing N contiguous
-    items ?
+    choice if `size1` >> `preferred_work_group_size_multiple`, and if `size0` ranges in
+    the same order of magnitude than `preferred_work_group_size_multiple`. If not,
+    other reduction implementations might give better performances.
     """
+    check_power_of_2(work_group_size)
+
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     zero = dtype(0.0)
-    two_long = np.int64(2)
     one_idx = np.int64(1)
+    minus_one_idx = np.int64(-1)
+    two_as_a_long = np.int64(2)
 
     is_1d = size1 is None
+    # TODO: this set of kernel functions could be abstracted away to other coalescing
+    # functions
     if is_1d:
         sum_axis_size = size0
         n_rows = np.int64(1)
-        local_data_size = work_group_size
+        local_values_size = work_group_size
 
         @dpex.func
         def set_col_to_zero(array, i):
@@ -181,7 +189,7 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
             to_array[to_col] = from_array[from_col]
 
         @dpex.func
-        def coalesce_cols(
+        def add_cols(
             from_array,
             left_from_col,
             right_from_col,
@@ -191,7 +199,7 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
             to_array[to_col] = from_array[left_from_col] + from_array[right_from_col]
 
         @dpex.func
-        def coalesce_cols_inplace(
+        def add_cols_inplace(
             array,
             from_col,
             to_col,
@@ -199,13 +207,13 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
             array[to_col] += array[from_col]
 
         @dpex.func
-        def coalesce_first_cols(from_array, to_array, to_col):
+        def add_first_cols(from_array, to_array, to_col):
             to_array[to_col] = from_array[zero_idx] + from_array[one_idx]
 
     else:
         sum_axis_size = size1
         n_rows = size0
-        local_data_size = (size0, work_group_size)
+        local_values_size = (size0, work_group_size)
 
         @dpex.func
         def set_col_to_zero(array, i):
@@ -218,7 +226,7 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
                 to_array[row, to_col] = from_array[row, from_col]
 
         @dpex.func
-        def coalesce_cols(
+        def add_cols(
             from_array,
             left_from_col,
             right_from_col,
@@ -231,7 +239,7 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
                 )
 
         @dpex.func
-        def coalesce_cols_inplace(
+        def add_cols_inplace(
             array,
             from_col,
             to_col,
@@ -240,18 +248,17 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
                 array[row, to_col] += array[row, from_col]
 
         @dpex.func
-        def coalesce_first_cols(from_array, to_array, to_col):
+        def add_first_cols(from_array, to_array, to_col):
             for row in range(n_rows):
                 to_array[row, to_col] = (
                     from_array[row, zero_idx] + from_array[row, one_idx]
                 )
 
-    two_long = np.int64(2)
-    m_one_idx = np.int64(-1)
-
     # Optimized for C-contiguous array where the size of the sum axis is
     # >> preferred_work_group_size_multiple, and the size of the other axis (if any) is
     # is smaller or similar to preferred_work_group_size_multiple.
+    # ???: how does this strategy compares to having each thread reducing N contiguous
+    # items ?
     @dpex.kernel
     # fmt: off
     def partial_sum_reduction(
@@ -264,38 +271,38 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
         local_work_id = dpex.get_local_id(zero_idx)
         first_work_id = local_work_id == zero_idx
 
-        size = summands.shape[m_one_idx]
+        size = summands.shape[minus_one_idx]
 
-        local_data = dpex.local.array(local_data_size, dtype=dtype)
+        local_values = dpex.local.array(local_values_size, dtype=dtype)
 
-        first_value_idx = group_id * work_group_size * two_long
+        first_value_idx = group_id * work_group_size * two_as_a_long
         augend_idx = first_value_idx + local_work_id
         addend_idx = first_value_idx + work_group_size + local_work_id
 
         # Each work item reads two value in global memory and sum it into the local
         # memory
         if augend_idx >= size:
-            set_col_to_zero(local_data, local_work_id)
+            set_col_to_zero(local_values, local_work_id)
         elif addend_idx >= size:
-            copy_col(summands, augend_idx, local_data, local_work_id)
+            copy_col(summands, augend_idx, local_values, local_work_id)
         else:
-            coalesce_cols(summands, augend_idx, addend_idx, local_data, local_work_id)
+            add_cols(summands, augend_idx, addend_idx, local_values, local_work_id)
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         current_n_work_items = work_group_size
         for i in range(local_n_iterations):
             # We discard half of the remaining active work items at each iteration
-            current_n_work_items = current_n_work_items // two_long
+            current_n_work_items = current_n_work_items // two_as_a_long
             if local_work_id < current_n_work_items:
-                coalesce_cols_inplace(local_data, local_work_id + current_n_work_items, local_work_id)
+                add_cols_inplace(local_values, local_work_id + current_n_work_items, local_work_id)
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        # At this point local_data[0] + local_data[1] is equal to the sum of all
+        # At this point local_values[0] + local_values[1] is equal to the sum of all
         # elements in summands that have been covered by the work group, we write it
         # into global memory
         if first_work_id:
-            coalesce_first_cols(local_data, result, group_id)
+            add_first_cols(local_values, result, group_id)
 
     # As many partial reductions as necessary are chained until only one element
     # remains.
@@ -310,6 +317,11 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
         global_size = n_groups * work_group_size
         kernel = partial_sum_reduction[global_size, work_group_size]
         result_shape = n_groups if is_1d else (n_rows, n_groups)
+        # NB: here memory for partial results is allocated ahead of time and will only
+        # be garbage collected when the instance of `sum_reduction` is garbage
+        # collected. Thus it can be more efficient to re-use a same instance of
+        # `sum_reduction` (e.g within iterations of a loop) since it avoid deallocation
+        # and reallocation every time.
         result = dpt.empty(result_shape, dtype=dtype, device=device)
         kernels_and_empty_tensors_pairs.append((kernel, result))
 
@@ -326,10 +338,12 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
 @lru_cache
 def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
     """Implement 1d argmin with the same strategy than for make_sum_reduction_2d_axis1_kernel."""
+    check_power_of_2(work_group_size)
+
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
-    two_long = np.int64(2)
+    two_as_a_long = np.int64(2)
     one_idx = np.int64(1)
     inf = dtype(np.inf)
 
@@ -340,9 +354,9 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
     @dpex.kernel
     # fmt: off
     def partial_argmin_reduction(
-        data,               # IN        (size,)
+        values,             # IN        (size,)
         previous_result,    # IN        (current_size,)
-        result,             # OUT       (math.ceil(
+        argmin_indices,     # OUT       (math.ceil(
                             #               (current_size if current_size else size)
                             #                / (2 * work_group_size),)
                             #            ))
@@ -354,63 +368,63 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
 
         previous_result_size = previous_result.shape[zero_idx]
         has_previous_result = previous_result_size > one_idx
-        current_size = previous_result_size if has_previous_result else data.shape[zero_idx]
+        current_size = previous_result_size if has_previous_result else values.shape[zero_idx]
 
         local_argmin = dpex.local.array(work_group_size, dtype=np.int32)
-        local_data = dpex.local.array(work_group_size, dtype=dtype)
+        local_values = dpex.local.array(work_group_size, dtype=dtype)
 
-        first_value_idx = group_id * work_group_size * two_long
+        first_value_idx = group_id * work_group_size * two_as_a_long
         x_idx = first_value_idx + local_work_id
         y_idx = first_value_idx + work_group_size + local_work_id
 
         if x_idx >= current_size:
-            local_data[local_work_id] = inf
+            local_values[local_work_id] = inf
         else:
             if has_previous_result:
                 x_idx = previous_result[x_idx]
 
             if y_idx >= current_size:
                 local_argmin[local_work_id] = x_idx
-                local_data[local_work_id] = data[x_idx]
+                local_values[local_work_id] = values[x_idx]
 
             else:
                 if has_previous_result:
                     y_idx = previous_result[y_idx]
 
-                x_data = data[x_idx]
-                y_data = data[y_idx]
-                if x_data <= y_data:
+                x = values[x_idx]
+                y = values[y_idx]
+                if x < y or (x == y and x_idx < y_idx):
                     local_argmin[local_work_id] = x_idx
-                    local_data[local_work_id] = x_data
+                    local_values[local_work_id] = x 
                 else:
                     local_argmin[local_work_id] = y_idx
-                    local_data[local_work_id] = y_data
+                    local_values[local_work_id] = y
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         current_n_work_items = work_group_size
         for i in range(local_n_iterations):
-            current_n_work_items = current_n_work_items // two_long
+            current_n_work_items = current_n_work_items // two_as_a_long
             if local_work_id < current_n_work_items:
                 local_x_idx = local_work_id
                 local_y_idx = local_work_id + current_n_work_items
 
-                x_data = local_data[local_x_idx]
-                y_data = local_data[local_y_idx]
+                x= local_values[local_x_idx]
+                y= local_values[local_y_idx]
 
-                if x_data > y_data:
-                    local_data[local_x_idx] = y_data
+                if x> y:
+                    local_values[local_x_idx] = y
                     local_argmin[local_x_idx] = local_argmin[local_y_idx]
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         if first_work_id:
-            if local_data[zero_idx] <= local_data[one_idx]:
-                result[group_id] = local_argmin[zero_idx]
+            if local_values[zero_idx] <= local_values[one_idx]:
+                argmin_indices[group_id] = local_argmin[zero_idx]
             else:
-                result[group_id] = local_argmin[one_idx]
+                argmin_indices[group_id] = local_argmin[one_idx]
 
     # As many partial reductions as necessary are chained until only one element
-    # remains.
+    # remains.argmin_indices
     kernels_and_empty_tensors_tuples = []
     n_groups = size
     previous_result = dpt.empty((1,), dtype=np.int32, device=device)
@@ -422,9 +436,9 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
         kernels_and_empty_tensors_tuples.append((kernel, previous_result, result))
         previous_result = result
 
-    def argmin_reduction(data):
+    def argmin_reduction(values):
         for kernel, previous_result, result in kernels_and_empty_tensors_tuples:
-            kernel(data, previous_result, result)
+            kernel(values, previous_result, result)
         return result
 
     return argmin_reduction

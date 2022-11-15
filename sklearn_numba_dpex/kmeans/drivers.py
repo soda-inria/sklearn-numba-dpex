@@ -907,12 +907,17 @@ class KMeansDriver:
             device=cpu_device if from_cpu_to_device else self.device,
         )
         if from_cpu_to_device:
+            new_work_group_size = cpu_device.max_work_group_size
+            new_global_size = (
+                math.ceil(
+                    sample_center_candidates_kernel.global_size[0] / new_work_group_size
+                )
+                * new_work_group_size
+            )
             sample_center_candidates_kernel = sample_center_candidates_kernel.configure(
                 sycl_queue=random_state.sycl_queue,
-                global_size=sample_center_candidates_kernel.global_size,
-                local_size=[
-                    DeviceParams(cpu_device).preferred_work_group_size_multiple
-                ],
+                global_size=[new_global_size],
+                local_size=[new_work_group_size],
             )
 
         centers_t = dpt.empty(
@@ -963,6 +968,7 @@ class KMeansDriver:
             # reuse it at each iteration ?
             if from_cpu_to_device:
                 candidate_ids = candidate_ids.to_device(cpu_device)
+
                 sample_center_candidates_kernel(
                     closest_dist_sq.to_device(cpu_device),
                     total_potential.to_device(cpu_device),

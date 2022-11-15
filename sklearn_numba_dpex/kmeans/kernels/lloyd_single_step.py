@@ -225,7 +225,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                     first_feature_idx,
                     X_t,
                     centroids_window,
-                    dot_products,
+                    dot_products
                 )
 
                 # When the next iteration starts work items will overwrite shared memory

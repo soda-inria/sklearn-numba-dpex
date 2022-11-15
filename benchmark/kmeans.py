@@ -185,7 +185,7 @@ if __name__ == "__main__":
     # close results but with significant differences for a few elements.
     run_consistency_checks = False
 
-    def benchmark_data_initialization(random_state, n_clusters, sample_weight, init):
+    def benchmark_data_initialization(random_state, n_clusters, sample_weight):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True, parser="auto")
         X = X.astype(dtype)
         scaler_x = MinMaxScaler()
@@ -195,8 +195,8 @@ if __name__ == "__main__":
         # X = np.hstack([X for _ in range(5)])
         # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
-        if init == "random":
-            init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
+        if (init_ := init) == "random":
+            init_ = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
 
         if sample_weight is None:
             pass
@@ -210,7 +210,7 @@ if __name__ == "__main__":
                 f" {sample_weight} instead."
             )
 
-        return X, sample_weight, init, n_clusters
+        return X, sample_weight, init_, n_clusters
 
     kmeans_timer = KMeansLloydTimeit(
         benchmark_data_initialization,
@@ -220,12 +220,11 @@ if __name__ == "__main__":
         random_state=random_state,
         n_clusters=n_clusters,
         sample_weight=sample_weight,
-        init=init,
     )
 
-    kmeans_timer.timeit(
-        name="Sklearn vanilla lloyd",
-    )
+    # kmeans_timer.timeit(
+    #     name="Sklearn vanilla lloyd",
+    # )
 
     with override_attr_context(
         skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine

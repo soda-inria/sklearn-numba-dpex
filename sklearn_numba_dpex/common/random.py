@@ -13,7 +13,7 @@ import numba_dpex as dpex
 # numba/cuda/random.py where it's defined (v<0.57), and by the implementation of the
 # same algorithm in the package `randomgen`.
 
-# numba.cuda.random :https://github.com/numba/numba/blob/0.56.3/numba/cuda/random.py
+# numba.cuda.random: https://github.com/numba/numba/blob/0.56.3/numba/cuda/random.py
 # randomgen: https://github.com/bashtage/randomgen/blob/v1.23.1/randomgen/xoroshiro128.pyx
 
 # NB1: we implement xoroshiro128++ rather than just xoroshiro128+, which is preferred.
@@ -27,6 +27,12 @@ one_idx = int64(1)
 
 
 def get_random_raw(states):
+    """Returns a single pseudo-random `uint64` integer value.
+
+    Similar to numpy.random.BitGenerator.random_raw(size=1).
+
+    Note, this always uses and updates state states[0].
+    """
     result = dpt.empty(sh=(1,), dtype=np.uint64, device=states.device)
     make_random_raw_kernel()(states, result)
     return result
@@ -34,6 +40,12 @@ def get_random_raw(states):
 
 @lru_cache
 def make_random_raw_kernel():
+    """Returns a single pseudo-random `uint64` integer value.
+    Similar to numpy.random.BitGenerator.random_raw(size=1).
+
+    Note, this always uses and updates state states[0].
+    """
+
     @dpex.kernel
     def _get_random_raw_kernel(states, result):
         result[zero_idx] = _xoroshiro128pp_next(states, zero_idx)
@@ -43,6 +55,21 @@ def make_random_raw_kernel():
 
 @lru_cache
 def make_rand_uniform_kernel_func(dtype):
+    """Instantiate a kernel function that returns a random float in [0, 1)
+
+    This factory returns a kernel function specialized to either generate
+    float32 or float64 values. Care has been taken so that the float32
+    variant can be compiled to target a device that does not support the
+    float64 aspect.
+
+    The returned kernel function takes two arguments:
+
+    - states : a state array. See create_xoroshiro128pp_states for details.
+
+    - state_idx : the index of the RNG state to use to generate the next
+      random float.
+
+    """
     if not hasattr(dtype, "name"):
         raise ValueError(
             "dtype is expected to have an attribute 'name', like np.dtype or numba "
@@ -51,13 +78,13 @@ def make_rand_uniform_kernel_func(dtype):
 
     if dtype.name == "float64":
         convert_rshift = uint32(11)
-        convert_const = uint64(1) << uint32(53)
+        convert_const = float64(uint64(1) << uint32(53))
         convert_const_one = float64(1)
 
         @dpex.func
         def uint64_to_unit_float(x):
             """Convert uint64 to float64 value in the range [0.0, 1.0)"""
-            return (x >> convert_rshift) * (convert_const_one / convert_const)
+            return float64(x >> convert_rshift) * (convert_const_one / convert_const)
 
     elif dtype.name == "float32":
         convert_rshift = uint32(40)
@@ -67,6 +94,7 @@ def make_rand_uniform_kernel_func(dtype):
         @dpex.func
         def uint64_to_unit_float(x):
             """Convert uint64 to float32 value in the range [0.0, 1.0)
+
             NB: this is different than original numba.cuda.random code. Instead of
             generating a float64 random number before casting it to float32, a float32
             number is generated from uint64 without intermediate float64. This enables
@@ -83,30 +111,42 @@ def make_rand_uniform_kernel_func(dtype):
         )
 
     @dpex.func
-    def xoroshiro128pp_uniform(states, index):
-        return uint64_to_unit_float(_xoroshiro128pp_next(states, index))
+    def xoroshiro128pp_uniform(states, state_idx):
+        """Return one random float in [0, 1)
+
+        Calling this function advances the states[state_idx] by a single RNG step and
+        leaves the other states unchanged.
+        """
+        return uint64_to_unit_float(_xoroshiro128pp_next(states, state_idx))
 
     return xoroshiro128pp_uniform
 
 
-def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, device=None):
+def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, device=None):
     """Returns a new device array initialized for n random number generators.
 
-    This initializes the RNG states so that each state in the array corresponds
-    subsequences in the separated by 2**64 steps from each other in the main
-    sequence.  Therefore, as long no thread requests more than 2**64 random numbers,
-    all of the RNG states produced by this function are guaranteed to be independent.
+    This initializes the RNG states so that states in the array correspond to
+    subsequences separated by 2**64 steps from each other in the main sequence.
+    Therefore, as long as no thread requests more than 2**64 random numbers, all the
+    RNG states produced by this function are guaranteed to be independent.
 
     Parameters
     ----------
     n_states : int
-        number of RNG states to create
-
-    seed : int or None
-        starting seed for the list of generators
+        Number of RNG states to create. Each RNG state is meant to be used by a distinct
+        thread in the xoroshiro128pp RNG. Therefore n_states controls the amount of
+        parallelism when using the RNG to generate a large enough sequence of
+        pseudo-random values. Subsequent states are initialized 2**64 RNG steps away
+        from one another.
 
     subsequence_start : int
-        advance the first RNG state by a multiple of 2**64 steps
+        Advance the first RNG state by a multiple of 2**64 steps after the
+        state induced by the seed.  The subsequent RNG states controlled by
+        `n_states` are each initialized 2**64 steps further from their
+        predecessor in the states array.
+
+    seed : int or None
+        Starting seed for the list of generators.
 
     device : str or None (default)
         A SYCL device or if None, takes the default sycl device.
@@ -125,7 +165,7 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     @dpex.kernel
     def init_xoroshiro128pp_states(states):
         """
-        Use SplitMix64 to generate an xoroshiro128p state from 64-bit seed.
+        Use SplitMix64 to generate an xoroshiro128p state from a uint64 seed.
 
         This ensures that manually set small seeds don't result in a predictable
         initial sequence from the random number generator.
@@ -173,8 +213,8 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     long_64 = int64(64)
 
     @dpex.func
-    def _xoroshiro128pp_jump(states, index):
-        """Advance the RNG in ``states[index]`` by 2**64 steps."""
+    def _xoroshiro128pp_jump(states, state_idx):
+        """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
         s0 = jump_init
         s1 = jump_init
 
@@ -185,12 +225,12 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
                 jump_const = jump_const_2
             for b in range(long_64):
                 if jump_const & jump_const_3 << uint32(b):
-                    s0 ^= states[index, zero_idx]
-                    s1 ^= states[index, one_idx]
-                _xoroshiro128pp_next(states, index)
+                    s0 ^= states[state_idx, zero_idx]
+                    s1 ^= states[state_idx, one_idx]
+                _xoroshiro128pp_next(states, state_idx)
 
-        states[index, zero_idx] = s0
-        states[index, one_idx] = s1
+        states[state_idx, zero_idx] = s0
+        states[state_idx, one_idx] = s1
 
     # TODO: it seems that the reference python implementation in the package
     # `randomgen` that inspired this code contains errors.
@@ -212,8 +252,8 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     # long_64 = int64(64)
 
     # @dpex.func
-    # def _xoroshiro128pp_jump(states, index):
-    #     """Advance the RNG in ``states[index]`` by 2**64 steps."""
+    # def _xoroshiro128pp_jump(states, state_idx):
+    #     """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
     #     s0 = jump_init
     #     s1 = jump_init
 
@@ -224,12 +264,30 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     #             jump_const = jump_const_2
     #         for b in range(long_64):
     #             if jump_const & jump_const_3 << uint32(b):
-    #                 s0 ^= states[index, zero_idx]
-    #                 s1 ^= states[index, one_idx]
-    #             _xoroshiro128p_next(states, index)
+    #                 s0 ^= states[state_idx, zero_idx]
+    #                 s1 ^= states[state_idx, one_idx]
+    #             # NB: this is _xoroshiro128p_next, not _xoroshiro128pp_next
+    #             _xoroshiro128p_next(states, state_idx)
 
-    #     states[index, zero_idx] = s0
-    #     states[index, one_idx] = s1
+    #     states[state_idx, zero_idx] = s0
+    #     states[state_idx, one_idx] = s1
+
+    # next_rot_p_1 = uint32(24)
+    # next_rot_p_2 = uint32(16)
+    # next_rot_p_3 = uint32(37)
+
+    # @dpex.func
+    # def _xoroshiro128p_next(states, state_idx):
+    #     """Return the next random uint64 and advance the RNG in states[state_idx]."""
+    #     s0 = states[state_idx, zero_idx]
+    #     s1 = states[state_idx, one_idx]
+    #     result = s0 + s1
+
+    #     s1 ^= s0
+    #     states[state_idx, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)
+    #     states[state_idx, one_idx] = _rotl(s1, next_rot_p_3)
+
+    #     return result
 
     # Initialization is purely sequential so it will be faster on CPU, if a cpu device
     # is available make sure to use it.
@@ -267,42 +325,23 @@ shift_1 = uint32(21)
 
 
 @dpex.func
-def _xoroshiro128pp_next(states, index):
-    """Return the next random uint64 and advance the RNG in states[index]."""
-    s0 = states[index, zero_idx]
-    s1 = states[index, one_idx]
+def _xoroshiro128pp_next(states, state_idx):
+    """Return the next random uint64 and advance the RNG in states[state_idx]."""
+    s0 = states[state_idx, zero_idx]
+    s1 = states[state_idx, one_idx]
     result = _rotl(s0 + s1, next_rot_1) + s0
 
     s1 ^= s0
-    states[index, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
-    states[index, one_idx] = _rotl(s1, next_rot_3)
+    states[state_idx, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
+    states[state_idx, one_idx] = _rotl(s1, next_rot_3)
 
     return result
 
 
-# next_rot_p_1 = uint32(24)
-# next_rot_p_2 = uint32(16)
-# next_rot_p_3 = uint32(37)
-
-
-# @dpex.func
-# def _xoroshiro128p_next(states, index):
-#     """Return the next random uint64 and advance the RNG in states[index]."""
-#     s0 = states[index, zero_idx]
-#     s1 = states[index, one_idx]
-#     result = s0 + s1
-
-#     s1 ^= s0
-#     states[index, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)
-#     states[index, one_idx] = _rotl(s1, next_rot_p_3)
-
-#     return result
-
-
-uint32_64 = uint32(64)
+_64_as_uint32 = uint32(64)
 
 
 @dpex.func
 def _rotl(x, k):
-    """Left rotate x by k bits."""
-    return (x << k) | (x >> (uint32_64 - k))
+    """Left rotate x by k bits. x is expected to be a uint64 integer."""
+    return (x << k) | (x >> (_64_as_uint32 - k))
