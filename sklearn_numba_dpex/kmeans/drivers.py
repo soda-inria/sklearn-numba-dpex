@@ -785,9 +785,9 @@ class KMeansDriver:
             # XXX: cannot be supported at this time because of this bug:
             # https://github.com/IntelPython/numba-dpex/issues/767
             #
-            # TODO: support the F layout for X_t and benchmark it and default
-            # to it if performances are better once the blocking bug is fixed
-            # in numba_dpex.
+            # TODO: when the blocking bug is fixed in `numba_dpex`, remove 
+            # all array transpositions and support the C-layout for X. Benchmark
+            # it and default to the layout that gives better performances.
             #
             raise ValueError(
                 "Kernels compiled by numba_dpex called on an input array with "
