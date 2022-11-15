@@ -1,3 +1,7 @@
+import math
+import pytest
+from functools import lru_cache
+
 import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
@@ -9,6 +13,8 @@ from sklearn_numba_dpex.common.random import (
     get_random_raw,
     make_rand_uniform_kernel_func,
 )
+
+from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 def test_xoroshiro128pp_raw():
@@ -87,33 +93,10 @@ def test_xoroshiro128pp_raw():
     assert expected_res_2 == actual_res_2
 
 
-def _make_get_single_rand_value_kernel(dtype):
-
-    rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
-    zero_idx = np.int64(0)
-
-    @dpex.kernel
-    # fmt: off
-    def _get_single_rand_value(
-        random_state,                     # IN             (1, 2)
-        single_rand_value,                # OUT            (1,)
-        ):
-        single_rand_value[0] = rand_uniform_kernel_func(random_state, zero_idx)
-
-    def get_single_rand_value(random_state):
-        single_rand_value = dpt.empty(sh=1, dtype=dtype)
-        _get_single_rand_value[1, 1](random_state, single_rand_value)
-        return dpt.asnumpy(single_rand_value)[0]
-
-    return get_single_rand_value
-
-
-def test_xoroshiro128pp_rand_consistency_accross_dtypes():
+def test_xoroshiro128pp_rand_consistency():
     # Let's generate some random float32 numbers...
-    random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
-    get_single_rand_value_kernel_float32 = _make_get_single_rand_value_kernel(
-        np.float32
-    )
+    seed = 42
+    random_state = create_xoroshiro128pp_states(n_states=1, seed=seed)
 
     expected_res_float32 = np.array(
         [
@@ -130,11 +113,20 @@ def test_xoroshiro128pp_rand_consistency_accross_dtypes():
         ],
         dtype=np.float32,
     )
+    n_items = len(expected_res_float32)
 
     actual_res_float32 = [
-        get_single_rand_value_kernel_float32(random_state) for _ in expected_res_float32
+        _get_single_rand_value(random_state, np.float32) for _ in expected_res_float32
     ]
 
+    assert_allclose(expected_res_float32, actual_res_float32)
+
+    # ... and again the same random float32 numbers, but now the generation loop is
+    # jitted...
+
+    actual_res_float32 = dpt.asnumpy(
+        _rand_uniform(n_items, np.float32, seed=seed, n_work_items=1)
+    )
     assert_allclose(expected_res_float32, actual_res_float32)
 
     # ...and if the device supports it, also some random float64 numbers, with the same
@@ -142,13 +134,92 @@ def test_xoroshiro128pp_rand_consistency_accross_dtypes():
     if not random_state.device.sycl_device.has_aspect_fp64:
         return
 
-    random_state = create_xoroshiro128pp_states(n_states=1, seed=42)
-    get_single_rand_value_kernel_float64 = _make_get_single_rand_value_kernel(
-        np.float64
-    )
+    random_state = create_xoroshiro128pp_states(n_states=1, seed=seed)
     actual_res_float64 = [
-        get_single_rand_value_kernel_float64(random_state) for _ in expected_res_float32
+        _get_single_rand_value(random_state, np.float64) for _ in expected_res_float32
     ]
 
     # ...and ensure that the float32 rng and float64 rng produce close numbers.
     assert_allclose(actual_res_float64, expected_res_float32)
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_rng_quality(dtype):
+    """Check that the distribution of the few first floats sampled uniformly in [0, 1)
+    actually approximate a uniform distribution"""
+    size = int(1e6)
+    random_floats = dpt.asnumpy(_rand_uniform(size, dtype, seed=42))
+    distribution_in_bins, _ = np.histogram(random_floats, bins=np.linspace(0, 1, 6))
+    assert (np.abs(distribution_in_bins - 2e5) < 1e3).all()
+
+
+def _get_single_rand_value(random_state, dtype):
+    """Return a single rand value sampled uniformly in [0, 1)"""
+    _get_single_rand_value_kernel = _make_get_single_rand_value_kernel(dtype)
+    single_rand_value = dpt.empty(sh=1, dtype=dtype)
+    _get_single_rand_value_kernel[1, 1](random_state, single_rand_value)
+    return dpt.asnumpy(single_rand_value)[0]
+
+
+def _rand_uniform(size, dtype, seed, n_work_items=1000):
+    """Return an array of floats sampled uniformly in [0, 1)"""
+    out = dpt.empty(sh=(size,), dtype=dtype)
+    work_group_size = out.device.sycl_device.max_work_group_size
+    size_per_work_item = math.ceil(size / n_work_items)
+
+    _rand_uniform_kernel = _make_rand_uniform_kernel(size, dtype, size_per_work_item)
+
+    global_size = (
+        math.ceil(size / (size_per_work_item * work_group_size)) * work_group_size
+    )
+    states = create_xoroshiro128pp_states(n_states=global_size, seed=seed)
+    _rand_uniform_kernel[global_size, work_group_size](states, out)
+    return out
+
+
+@lru_cache
+def _make_get_single_rand_value_kernel(dtype):
+    rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
+    zero_idx = np.int64(0)
+
+    @dpex.kernel
+    # fmt: off
+    def get_single_rand_value(
+        random_state,                     # IN             (1, 2)
+        single_rand_value,                # OUT            (1,)
+    ):
+    #fmt: on
+        single_rand_value[0] = rand_uniform_kernel_func(random_state, zero_idx)
+
+    return get_single_rand_value
+
+
+@lru_cache
+def _make_rand_uniform_kernel(size, dtype, size_per_work_item):
+    rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
+    private_states_shape = (1, 2)
+
+    @dpex.kernel
+    # fmt: off
+    def _rand_uniform_kernel(
+        states,                           # IN               (global_size, 2)
+        out,                              # OUT              (size,)
+    ):
+    # fmt: on
+        item_idx = dpex.get_global_id(0)
+        out_idx = item_idx * size_per_work_item
+
+        private_states = dpex.private.array(shape=private_states_shape, dtype=np.uint64)
+        private_states[0, 0] = states[item_idx, 0]
+        private_states[0, 1] = states[item_idx, 1]
+
+        for _ in range(size_per_work_item):
+            if out_idx >= size:
+                return
+            out[out_idx] = rand_uniform_kernel_func(private_states, 0)
+            out_idx += 1
+
+        states[item_idx, 0] = private_states[0, 0]
+        states[item_idx, 1] = private_states[0, 1]
+
+    return _rand_uniform_kernel

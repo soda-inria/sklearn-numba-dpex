@@ -46,7 +46,21 @@ def make_random_raw_kernel():
 
 @lru_cache
 def make_rand_uniform_kernel_func(dtype):
-    """Instanciate a kernel function that returns a random float in [0, 1)"""
+    """Instantiate a kernel function that returns a random float in [0, 1)
+
+    This factory returns a kernel function specialized to either generate
+    float32 or float64 values. Care has been taken so that the float32
+    variant can be compiled to target a device that does not support the
+    float64 aspect.
+
+    The returned kernel functions takes two arguments:
+
+    - states : a state array. See create_xoroshiro128pp_states for details.
+
+    - state_idx : the index of the RNG state to use to generate the next
+      random float.
+
+    """
     if not hasattr(dtype, "name"):
         raise ValueError(
             "dtype is expected to have an attribute 'name', like np.dtype or numba "
@@ -88,14 +102,14 @@ def make_rand_uniform_kernel_func(dtype):
         )
 
     @dpex.func
-    def xoroshiro128pp_uniform(states, index):
+    def xoroshiro128pp_uniform(states, state_idx):
         """Return one random float in [0, 1)"""
-        return uint64_to_unit_float(_xoroshiro128pp_next(states, index))
+        return uint64_to_unit_float(_xoroshiro128pp_next(states, state_idx))
 
     return xoroshiro128pp_uniform
 
 
-def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, device=None):
+def create_xoroshiro128pp_states(n_states, seed=None, device=None):
     """Returns a new device array initialized for n random number generators.
 
     This initializes the RNG states so that states in the array correspond to
@@ -106,13 +120,14 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     Parameters
     ----------
     n_states : int
-        number of RNG states to create
+        Number of RNG states to create. Each RNG state is meant to be used by a distinct
+        thread in the xoroshiro128pp RNG. Therefore n_states controls the amount of
+        parallelism when using the RNG to generate a large enough sequence of
+        pseudo-random values. Subsequent states are initialized 2**64 RNG steps away
+        from one another.
 
     seed : int or None
-        starting seed for the list of generators
-
-    subsequence_start : int
-        advance the first RNG state by a multiple of 2**64 steps
+        Starting seed for the list of generators.
 
     device : str or None (default)
         A SYCL device or if None, takes the default sycl device.
@@ -145,10 +160,6 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
         )
         _, states[zero_idx, one_idx] = _splitmix64_next(splitmix64_state)
 
-        # advance to starting subsequence number
-        for _ in range(subsequence_start):
-            _xoroshiro128pp_jump(states, zero_idx)
-
         # populate the rest of the array
         for idx in range(one_idx, n_states):
             # take state of previous generator
@@ -179,8 +190,8 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     long_64 = int64(64)
 
     @dpex.func
-    def _xoroshiro128pp_jump(states, index):
-        """Advance the RNG in ``states[index]`` by 2**64 steps."""
+    def _xoroshiro128pp_jump(states, state_idx):
+        """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
         s0 = jump_init
         s1 = jump_init
 
@@ -191,12 +202,12 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
                 jump_const = jump_const_2
             for b in range(long_64):
                 if jump_const & jump_const_3 << uint32(b):
-                    s0 ^= states[index, zero_idx]
-                    s1 ^= states[index, one_idx]
-                _xoroshiro128pp_next(states, index)
+                    s0 ^= states[state_idx, zero_idx]
+                    s1 ^= states[state_idx, one_idx]
+                _xoroshiro128pp_next(states, state_idx)
 
-        states[index, zero_idx] = s0
-        states[index, one_idx] = s1
+        states[state_idx, zero_idx] = s0
+        states[state_idx, one_idx] = s1
 
     # TODO: it seems that the reference python implementation in the package
     # `randomgen` that inspired this code contains errors.
@@ -218,8 +229,8 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     # long_64 = int64(64)
 
     # @dpex.func
-    # def _xoroshiro128pp_jump(states, index):
-    #     """Advance the RNG in ``states[index]`` by 2**64 steps."""
+    # def _xoroshiro128pp_jump(states, state_idx):
+    #     """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
     #     s0 = jump_init
     #     s1 = jump_init
 
@@ -230,28 +241,28 @@ def create_xoroshiro128pp_states(n_states, seed=None, subsequence_start=0, devic
     #             jump_const = jump_const_2
     #         for b in range(long_64):
     #             if jump_const & jump_const_3 << uint32(b):
-    #                 s0 ^= states[index, zero_idx]
-    #                 s1 ^= states[index, one_idx]
+    #                 s0 ^= states[state_idx, zero_idx]
+    #                 s1 ^= states[state_idx, one_idx]
     #             # NB: this is _xoroshiro128p_next, not _xoroshiro128pp_next
-    #             _xoroshiro128p_next(states, index)
+    #             _xoroshiro128p_next(states, state_idx)
 
-    #     states[index, zero_idx] = s0
-    #     states[index, one_idx] = s1
+    #     states[state_idx, zero_idx] = s0
+    #     states[state_idx, one_idx] = s1
 
     # next_rot_p_1 = uint32(24)
     # next_rot_p_2 = uint32(16)
     # next_rot_p_3 = uint32(37)
 
     # @dpex.func
-    # def _xoroshiro128p_next(states, index):
-    #     """Return the next random uint64 and advance the RNG in states[index]."""
-    #     s0 = states[index, zero_idx]
-    #     s1 = states[index, one_idx]
+    # def _xoroshiro128p_next(states, state_idx):
+    #     """Return the next random uint64 and advance the RNG in states[state_idx]."""
+    #     s0 = states[state_idx, zero_idx]
+    #     s1 = states[state_idx, one_idx]
     #     result = s0 + s1
 
     #     s1 ^= s0
-    #     states[index, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)
-    #     states[index, one_idx] = _rotl(s1, next_rot_p_3)
+    #     states[state_idx, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)
+    #     states[state_idx, one_idx] = _rotl(s1, next_rot_p_3)
 
     #     return result
 
@@ -290,15 +301,15 @@ shift_1 = uint32(21)
 
 
 @dpex.func
-def _xoroshiro128pp_next(states, index):
-    """Return the next random uint64 and advance the RNG in states[index]."""
-    s0 = states[index, zero_idx]
-    s1 = states[index, one_idx]
+def _xoroshiro128pp_next(states, state_idx):
+    """Return the next random uint64 and advance the RNG in states[state_idx]."""
+    s0 = states[state_idx, zero_idx]
+    s1 = states[state_idx, one_idx]
     result = _rotl(s0 + s1, next_rot_1) + s0
 
     s1 ^= s0
-    states[index, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
-    states[index, one_idx] = _rotl(s1, next_rot_3)
+    states[state_idx, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
+    states[state_idx, one_idx] = _rotl(s1, next_rot_3)
 
     return result
 
