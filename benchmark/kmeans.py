@@ -222,9 +222,9 @@ if __name__ == "__main__":
         sample_weight=sample_weight,
     )
 
-    # kmeans_timer.timeit(
-    #     name="Sklearn vanilla lloyd",
-    # )
+    kmeans_timer.timeit(
+        name="Sklearn vanilla lloyd",
+    )
 
     with override_attr_context(
         skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine

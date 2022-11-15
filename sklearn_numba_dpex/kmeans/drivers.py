@@ -39,10 +39,7 @@ from sklearn_numba_dpex.kmeans.kernels import (
 )
 
 
-def _check_power_of_2(e):
-    if e != 2 ** (math.log2(e)):
-        raise ValueError(f"Expected a power of 2, got {e}")
-    return e
+from sklearn_numba_dpex.common._utils import check_power_of_2
 
 
 class _IgnoreSampleWeight:
@@ -145,7 +142,7 @@ class KMeansDriver:
             global_mem_cache_size or device_params.global_mem_cache_size
         )
 
-        self.preferred_work_group_size_multiple = _check_power_of_2(
+        self.preferred_work_group_size_multiple = check_power_of_2(
             preferred_work_group_size_multiple
             or device_params.preferred_work_group_size_multiple
         )
@@ -154,15 +151,15 @@ class KMeansDriver:
         # this default.
         # TODO: when it's available in dpctl, use the `max_group_size` attribute
         # exposed by the kernel instead ?
-        self.work_group_size_multiplier = _check_power_of_2(
+        self.work_group_size_multiplier = check_power_of_2(
             work_group_size_multiplier or 2
         )
 
-        self.centroids_window_width_multiplier = _check_power_of_2(
+        self.centroids_window_width_multiplier = check_power_of_2(
             centroids_window_width_multiplier or 1
         )
 
-        self.centroids_window_height = _check_power_of_2(centroids_window_height or 16)
+        self.centroids_window_height = check_power_of_2(centroids_window_height or 16)
 
         self.centroids_private_copies_max_cache_occupancy = (
             centroids_private_copies_max_cache_occupancy or 0.7
@@ -326,7 +323,7 @@ class KMeansDriver:
 
         reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_samples,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,
@@ -334,7 +331,7 @@ class KMeansDriver:
 
         reduce_centroid_shifts_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_clusters,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,
@@ -726,7 +723,7 @@ class KMeansDriver:
 
         reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_samples,
-            size1=None,
+            size1=None,  # 1d reduction
             work_group_size=work_group_size,
             device=self.device,
             dtype=compute_dtype,
@@ -1002,6 +999,9 @@ class KMeansDriver:
             total_potential = candidate_potentials[
                 best_candidate : (best_candidate + 1)
             ]
+
+            # Pick the c-th centroid and update the distance
+            # to the closest centroid for each sample.
             closest_dist_sq = sq_distances_t[best_candidate, :]
             center_index = candidate_ids[best_candidate]
             centers_t[:, c] = X_t[:, center_index]
@@ -1077,6 +1077,7 @@ class KMeansDriver:
         return X, sample_weight, centers_init, compute_dtype, output_dtype
 
     def _check_inputs(self, X, sample_weight, cluster_centers):
+
         if sample_weight is None:
             sample_weight = np.ones(len(X), dtype=(self.dtype or X.dtype))
 
