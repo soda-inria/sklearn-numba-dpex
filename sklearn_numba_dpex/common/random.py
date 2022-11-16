@@ -300,7 +300,8 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
             from_cpu_to_device = True
         except dpctl.SyclDeviceCreationError:
             warnings.warn(
-                "No CPU found, fallbacking random initiatlization to default " "device."
+                "No CPU found, falling back random initiatlization to default "
+                "device."
             )
 
     states = dpt.empty(
