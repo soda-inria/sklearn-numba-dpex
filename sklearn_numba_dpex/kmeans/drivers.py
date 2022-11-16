@@ -876,18 +876,30 @@ class KMeansDriver:
         # Transfer the input data to device memory,
         # TODO: let the user pass directly dpt or dpnp arrays to avoid copies.
         if self.X_layout == "C":
-            # TODO: support the C layout and benchmark it and default to it if
-            # performances are better
-            raise ValueError("C layout is currently not supported.")
+            # X_t is allocated as a F-contiguous array on device.
+            #
+            # XXX: cannot be supported at this time because of this bug:
+            # https://github.com/IntelPython/numba-dpex/issues/767
+            #
+            # TODO: when the blocking bug is fixed in `numba_dpex`, remove 
+            # all array transpositions and support the C-layout for X. Benchmark
+            # it and default to the layout that gives better performances.
+            #
+            raise ValueError(
+                "Kernels compiled by numba_dpex called on an input array with "
+                "the Fortran memory layout silently return incorrect results: "
+                "https://github.com/IntelPython/numba-dpex/issues/767"
+            )
             X_t = dpt.from_numpy(X, device=self.device).T
             assert (
                 X_t.strides[0] == 1
-            )  # Fortran memory layout, equivalent to C layout on transposed
+            )
         elif self.X_layout == "F":
+            # X_t is allocated as a C-contiguous array on device.
             X_t = dpt.from_numpy(X.T, device=self.device)
             assert (
                 X_t.strides[1] == 1
-            )  # C memory layout, equivalent to Fortran layout on transposed
+            )
         else:
             raise ValueError(
                 f"Expected X_layout to be equal to 'C' or 'F', but got {self.X_layout} ."
