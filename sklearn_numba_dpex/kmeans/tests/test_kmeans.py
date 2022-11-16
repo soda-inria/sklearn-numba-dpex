@@ -8,7 +8,7 @@ from numpy.testing import assert_array_equal
 
 from sklearn import config_context
 from sklearn.base import clone
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, kmeans_plusplus
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 from sklearn.cluster.tests.test_k_means import (
@@ -284,6 +284,68 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     assert (
         selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
     ).all()
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_plusplus_same_quality(dtype):
+    random_state = 42
+    X = X_sklearn_test.astype(dtype)
+    n_clusters = n_clusters_sklearn_test
+
+    # HACK: to compare the quality of the initialization, it's convenient to use the
+    # `score` method of an estimator whose fitted attribute cluster_centers_ has been
+    # set to the result of the initialization, without running the remaining steps of
+    # the  KMeans algorithm. For this purpose, since KMeans does not support passing
+    # `max_iter=0` we forcefully set fitted attribute values without actually running
+    # `fit`.
+    kmeans = KMeans(n_clusters=n_clusters)
+    kmeans._n_threads = 1
+
+    def _get_score_with_centers(centers):
+        kmeans.cluster_centers_ = np.ascontiguousarray(centers)
+        return kmeans.score(X)
+
+    scores_vanilla_kmeans_plusplus = []
+    scores_engine_kmeans_plusplus = []
+    scores_random_init = []
+
+    for random_state in range(10):
+        random_centers = np.random.default_rng(random_state).choice(
+            X, size=n_clusters, replace=False
+        )
+        scores_random_init.append(_get_score_with_centers(random_centers))
+
+        vanilla_kmeans_plusplus_centers, _ = kmeans_plusplus(
+            X, n_clusters, random_state=random_state
+        )
+        scores_vanilla_kmeans_plusplus.append(
+            _get_score_with_centers(vanilla_kmeans_plusplus_centers)
+        )
+
+        engine_kmeans_plusplus_centers, _ = driver.kmeans_plusplus(
+            X=X,
+            sample_weight=None,
+            n_clusters=n_clusters,
+            random_state=random_state,
+        )
+        scores_engine_kmeans_plusplus.append(
+            _get_score_with_centers(engine_kmeans_plusplus_centers)
+        )
+
+    # Those results confirm that both sklearn KMeans++ and ours have similar quality,
+    # and are both very significantly better than random init.
+    assert_allclose(
+        [
+            np.mean(scores_random_init),
+            np.mean(scores_vanilla_kmeans_plusplus),
+            np.mean(scores_engine_kmeans_plusplus),
+        ],
+        [
+            -1827.2270605322217,
+            -1027.674264781121,
+            -885.1541877428601,
+        ],
+    )
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
