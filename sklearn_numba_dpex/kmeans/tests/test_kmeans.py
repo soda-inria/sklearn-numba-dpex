@@ -308,7 +308,7 @@ def test_error_raised_on_invalid_group_sizes():
     centroids_private_copies_max_cache_occupancy = 0.7
 
     with pytest.raises(ValueError):
-        make_label_assignment_fixed_window_kernel(
+        make_lloyd_single_step_fixed_window_kernel(
             n_samples,
             n_features,
             n_clusters,
