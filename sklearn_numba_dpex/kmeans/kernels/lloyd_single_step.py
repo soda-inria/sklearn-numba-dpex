@@ -57,9 +57,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "product",
-        dtype,
-        work_group_size,
+        ops="product",
+        dtype=dtype,
+        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 

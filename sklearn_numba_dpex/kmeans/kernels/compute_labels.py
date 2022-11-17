@@ -39,9 +39,9 @@ def make_label_assignment_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "product",
-        dtype,
-        work_group_size,
+        ops="product",
+        dtype=dtype,
+        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
@@ -121,7 +121,9 @@ def make_label_assignment_fixed_window_kernel(
                     first_feature_idx,
                     X_t,
                     centroids_window,
-                    dot_products, is_last_feature_window, is_last_centroid_window
+                    dot_products,
+                    is_last_feature_window,
+                    is_last_centroid_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)

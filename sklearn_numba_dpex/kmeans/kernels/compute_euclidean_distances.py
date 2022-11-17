@@ -36,9 +36,9 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "squared_diff",
-        dtype,
-        work_group_size,
+        ops="squared_diff",
+        dtype=dtype,
+        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=False,
     )
 
@@ -93,7 +93,14 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-                accumulate_sq_distances(sample_idx, first_feature_idx, X_t, centroids_window, sq_distances, is_last_feature_window, is_last_centroid_window)
+                accumulate_sq_distances(
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    sq_distances,
+                    is_last_feature_window,
+                    is_last_centroid_window)
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
