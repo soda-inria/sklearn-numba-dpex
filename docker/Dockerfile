@@ -339,7 +339,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     # that causes missing files in the final tarball.
     # The workaround consists in triggering building steps by running `setup.py develop`
     # before running `setup.py bdist_wheel`.
-    # See https://github.com/ogrisel/sklearn-numba-dpex/issues/5
+    # See https://github.com/soda-inria/sklearn-numba-dpex/issues/5
     && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \

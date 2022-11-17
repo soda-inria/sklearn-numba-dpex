@@ -11,6 +11,7 @@ requires-python = ">=3.8"
 license = { file="LICENSE.txt" }
 maintainers = [
   { name="Olivier Grisel", email="olivier.grisel@ensta.org" },
+  { name="Franck Charras", email="franck.charras@inria.fr" },
 ]
 classifiers = [
     "Intended Audience :: Science/Research",
@@ -50,7 +51,7 @@ benchmark = [
 
 
 [project.urls]
-"Homepage" = "https://github.com/ogrisel/sklearn-numba-dpex"
+"Homepage" = "https://github.com/soda-inria/sklearn-numba-dpex"
 
 
 [project.entry-points.sklearn_engines]
