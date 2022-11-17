@@ -302,7 +302,7 @@ class _LoadWindowKernelFuncsFactory:
 
 
 class _AccumulateSumOfOpsKernelFuncFactory:
-    def __init__(self, n_samples, n_features, ops, dtype):
+    def __init__(self, n_samples, ops, dtype):
         self.n_samples = n_samples
 
         self.accumulate_dot_product = ops == "product"
