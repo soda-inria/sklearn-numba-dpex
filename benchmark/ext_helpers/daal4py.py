@@ -29,13 +29,6 @@ from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 # (impossible ?)
 class DAAL4PYEngine(KMeansEngine):
     def prepare_fit(self, X, y=None, sample_weight=None):
-        estimator = self.estimator
-        init = estimator.init
-        if isinstance(init, str) and init == "k-means++":
-            raise NotSupportedByEngineError(
-                "The daal4py engine for KMeans does not support k-means++ init."
-            )
-
         if sample_weight is not None and any(sample_weight != sample_weight[0]):
             raise NotSupportedByEngineError(
                 "Non unary sample_weight is not supported by daal4py."
