@@ -129,7 +129,7 @@ class KMeansDriver:
         # exhaustive grid search.
 
         self.global_mem_cache_size = (
-            global_mem_cache_size or device_params.global_mem_cache_size
+            global_mem_cache_size or dpctl_device.global_mem_cache_size
         )
 
         self.preferred_work_group_size_multiple = check_power_of_2(
@@ -881,7 +881,7 @@ class KMeansDriver:
             # XXX: cannot be supported at this time because of this bug:
             # https://github.com/IntelPython/numba-dpex/issues/767
             #
-            # TODO: when the blocking bug is fixed in `numba_dpex`, remove 
+            # TODO: when the blocking bug is fixed in `numba_dpex`, remove
             # all array transpositions and support the C-layout for X. Benchmark
             # it and default to the layout that gives better performances.
             #
