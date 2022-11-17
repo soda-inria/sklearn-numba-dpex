@@ -309,7 +309,7 @@ def test_kmeans_plusplus_same_quality(dtype):
     scores_engine_kmeans_plusplus = []
     scores_random_init = []
 
-    for random_state in range(10):
+    for random_state in range(100):
         random_centers = np.random.default_rng(random_state).choice(
             X, size=n_clusters, replace=False
         )
@@ -334,6 +334,17 @@ def test_kmeans_plusplus_same_quality(dtype):
 
     # Those results confirm that both sklearn KMeans++ and ours have similar quality,
     # and are both very significantly better than random init.
+    #
+    # NB: the gap between scores_vanilla_kmeans_plusplus and
+    # scores_engine_kmeans_plusplus goes away with more iterations in the previous
+    # loop. E.g., for 100 iterations:
+    #
+    # [
+    #     -1833.4422766113282,  # np.mean(scores_random_init)
+    #     -900.3062860107422,   # np.mean(scores_vanilla_kmeans_plusplus)
+    #     -902.9209448242187,   # np.mean(scores_engine_kmeans_plusplus)
+    # ]
+
     assert_allclose(
         [
             np.mean(scores_random_init),
