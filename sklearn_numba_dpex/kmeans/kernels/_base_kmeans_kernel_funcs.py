@@ -39,17 +39,28 @@ def make_pairwise_ops_base_kernel_funcs(
     # instance depending on the state of the main loop over the windows
     # (`is_last_centroid_window`, `is_last_feature_window`)
 
-    last_window_n_centroids = ((n_clusters - 1) % window_n_centroids) + 1
-    last_window_n_features = ((n_features - 1) % window_n_features) + 1
-
-    initialize_window_of_centroids_factory = _InitializeWindowKernelFuncFactory(
-        dtype, initialize_window_of_centroids_half_l2_norms
+    kmeans_kernel_func_factory = _KMeansKernelFuncFactory(
+        n_clusters,
+        n_features,
+        window_n_centroids,
+        ops,
+        dtype,
+        work_group_size,
+        initialize_window_of_centroids_half_l2_norms,
     )
 
-    initialize_full_window_of_centroids = initialize_window_of_centroids_factory.make(
+    last_window_n_centroids = n_clusters % window_n_centroids or window_n_centroids
+    last_window_n_features = n_features % window_n_features or window_n_features
+
+    make_initialize_window_kernel_func = (
+        kmeans_kernel_func_factory.make_initialize_window_kernel_func
+    )
+
+    initialize_full_window_of_centroids = make_initialize_window_kernel_func(
         window_n_centroids
     )
-    initialize_last_window_of_centroids = initialize_window_of_centroids_factory.make(
+
+    initialize_last_window_of_centroids = make_initialize_window_kernel_func(
         last_window_n_centroids
     )
 
@@ -90,16 +101,16 @@ def make_pairwise_ops_base_kernel_funcs(
             else:
                 initialize_full_window_of_centroids(dot_products)
 
-    load_window_of_centroids_and_features_factory = _LoadWindowKernelFuncsFactory(
-        n_clusters, n_features, work_group_size, window_n_centroids, dtype
+    make_load_window_kernel_func = (
+        kmeans_kernel_func_factory.make_load_window_kernel_func
     )
 
-    load_full_window_of_centroids_and_features = (
-        load_window_of_centroids_and_features_factory.make(window_n_features)
+    load_full_window_of_centroids_and_features = make_load_window_kernel_func(
+        window_n_features
     )
 
-    load_last_feature_window_of_centroids_and_features = (
-        load_window_of_centroids_and_features_factory.make(window_n_features)
+    load_last_feature_window_of_centroids_and_features = make_load_window_kernel_func(
+        last_window_n_features
     )
 
     @dpex.func
@@ -132,24 +143,28 @@ def make_pairwise_ops_base_kernel_funcs(
                 centroids_window,
             )
 
-    accumulate_dot_products_factory = _AccumulateSumOfOpsKernelFuncFactory(
-        n_samples, ops=ops, dtype=dtype
+    make_accumulate_sum_of_ops_kernel_func = (
+        kmeans_kernel_func_factory.make_accumulate_sum_of_ops_kernel_func
     )
 
-    accumulate_full_window_dot_products = accumulate_dot_products_factory.make(
+    accumulate_full_window_dot_products = make_accumulate_sum_of_ops_kernel_func(
         window_n_features, window_n_centroids
     )
 
-    accumulate_last_centroid_window_dot_products = accumulate_dot_products_factory.make(
-        window_n_features, last_window_n_centroids
+    accumulate_last_centroid_window_dot_products = (
+        make_accumulate_sum_of_ops_kernel_func(
+            window_n_features, last_window_n_centroids
+        )
     )
 
-    accumulate_last_feature_window_dot_products = accumulate_dot_products_factory.make(
-        last_window_n_features, window_n_centroids
+    accumulate_last_feature_window_dot_products = (
+        make_accumulate_sum_of_ops_kernel_func(
+            last_window_n_features, window_n_centroids
+        )
     )
 
     accumulate_last_centroid_and_last_feature_window_dot_products = (
-        accumulate_dot_products_factory.make(
+        make_accumulate_sum_of_ops_kernel_func(
             last_window_n_features, last_window_n_centroids
         )
     )
@@ -188,18 +203,37 @@ def make_pairwise_ops_base_kernel_funcs(
     )
 
 
-class _InitializeWindowKernelFuncFactory:
+class _KMeansKernelFuncFactory:
     def __init__(
         self,
+        n_clusters,
+        n_features,
+        full_window_n_centroids,
+        ops,
         dtype,
+        work_group_size,
         initialize_window_of_centroids_half_l2_norms,
     ):
+        self.n_clusters = n_clusters
+        self.n_features = n_features
+        self.work_group_size = work_group_size
+        self.full_window_n_centroids = full_window_n_centroids
+
+        self.accumulate_dot_product = ops == "product"
+        self.accumulate_squared_diff = ops == "squared_diff"
+
+        if not self.accumulate_dot_product and not self.accumulate_squared_diff:
+            raise ValueError(
+                f'Expected ops to take values "product" or "squared_diff", got "{ops}" '
+                "instead."
+            )
+
         self.dtype = dtype
         self.initialize_window_of_centroids_half_l2_norms = (
             initialize_window_of_centroids_half_l2_norms
         )
 
-    def make(self, window_n_centroids):
+    def make_initialize_window_kernel_func(self, window_n_centroids):
         zero = self.dtype(0.0)
 
         @dpex.func
@@ -229,23 +263,13 @@ class _InitializeWindowKernelFuncFactory:
             # item loads one single value.
             if local_work_id < window_n_centroids:
                 half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-                window_of_centroids_half_l2_norms[local_work_id] = centroids_half_l2_norm[
-                    half_l2_norm_loading_idx]
+                window_of_centroids_half_l2_norms[local_work_id] = (
+                    centroids_half_l2_norm[half_l2_norm_loading_idx]
+                )
 
         return _initialize_window_of_centroids
 
-
-class _LoadWindowKernelFuncsFactory:
-    def __init__(
-        self, n_clusters, n_features, work_group_size, window_n_centroids, dtype
-    ):
-        self.n_clusters = n_clusters
-        self.n_features = n_features
-        self.work_group_size = work_group_size
-        self.window_n_centroids = window_n_centroids
-        self.dtype = dtype
-
-    def make(self, window_n_features):
+    def make_load_window_kernel_func(self, window_n_features):
         n_features = self.n_features
         n_clusters = self.n_clusters
 
@@ -253,7 +277,7 @@ class _LoadWindowKernelFuncsFactory:
         zero_idx = np.int64(0)
 
         n_window_features_per_work_group = (
-            self.work_group_size // self.window_n_centroids
+            self.work_group_size // self.full_window_n_centroids
         )
 
         centroids_window_height_ratio_multiplier = math.ceil(
@@ -300,22 +324,9 @@ class _LoadWindowKernelFuncsFactory:
 
         return _load_window_of_centroids_and_features
 
-
-class _AccumulateSumOfOpsKernelFuncFactory:
-    def __init__(self, n_samples, ops, dtype):
-        self.n_samples = n_samples
-
-        self.accumulate_dot_product = ops == "product"
-        self.accumulate_squared_diff = ops == "squared_diff"
-
-        if not self.accumulate_dot_product and not self.accumulate_squared_diff:
-            raise ValueError(
-                f'Expected ops to take values "product" or "squared_diff", got "{ops}" '
-                "instead."
-            )
-        self.dtype = dtype
-
-    def make(self, window_n_features, window_n_centroids):
+    def make_accumulate_sum_of_ops_kernel_func(
+        self, window_n_features, window_n_centroids
+    ):
 
         zero = self.dtype(0.0)
         n_samples = self.n_samples

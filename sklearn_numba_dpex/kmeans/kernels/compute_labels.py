@@ -86,8 +86,8 @@ def make_label_assignment_fixed_window_kernel(
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(n_windows_for_centroids):
-            is_last_centroid_window = _0 == last_centroid_window_idx
+        for centroid_window_idx in range(n_windows_for_centroids):
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
 
             initialize_window_of_centroids(
                 local_work_id,
@@ -102,8 +102,8 @@ def make_label_assignment_fixed_window_kernel(
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_for_features):
-                is_last_feature_window = _1 == last_feature_window_idx
+            for feature_windiw_idx in range(n_windows_for_features):
+                is_last_feature_window = feature_windiw_idx == last_feature_window_idx
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,

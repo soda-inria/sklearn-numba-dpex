@@ -183,10 +183,10 @@ def make_lloyd_single_step_fixed_window_kernel(
         # `numba`. Note though, that `numba` cannot unroll nested loops, so won't
         # `numba_dpex`. To leverage loop unrolling, the following nested loop will
         # require to be un-nested.
-        for _0 in range(n_windows_for_centroids):
+        for centroid_window_idx in range(n_windows_for_centroids):
             # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
-            is_last_centroid_window = _0 == last_centroid_window_idx
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
@@ -202,9 +202,9 @@ def make_lloyd_single_step_fixed_window_kernel(
 
             # Inner loop: interate on successive windows of size window_n_features
             # that cover all features for current given centroids
-            for _1 in range(n_windows_for_features):
+            for feature_window_idx in range(n_windows_for_features):
                 # centroids_window is modified inplace
-                is_last_feature_window = _1 == last_feature_window_idx
+                is_last_feature_window = feature_window_idx == last_feature_window_idx
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
