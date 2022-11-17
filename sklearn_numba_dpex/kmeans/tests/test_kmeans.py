@@ -309,7 +309,7 @@ def test_kmeans_plusplus_same_quality(dtype):
     scores_engine_kmeans_plusplus = []
     scores_random_init = []
 
-    for random_state in range(100):
+    for random_state in range(10):
         random_centers = np.random.default_rng(random_state).choice(
             X, size=n_clusters, replace=False
         )
