@@ -23,14 +23,14 @@ def make_label_assignment_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
+    window_n_centroids = sub_group_size
+
     centroids_window_height = work_group_size // sub_group_size
     if centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
-
-    window_n_centroids = sub_group_size
 
     (
         initialize_window_of_centroids,
@@ -42,8 +42,8 @@ def make_label_assignment_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "product",
-        dtype,
+        ops="product",
+        dtype=dtype,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
@@ -118,7 +118,13 @@ def make_label_assignment_fixed_window_kernel(
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
-                    sample_idx, first_feature_idx, X_t, centroids_window, dot_products, is_last_feature_window, is_last_centroid_window
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    dot_products,
+                    is_last_feature_window,
+                    is_last_centroid_window
                 )
 
                 first_feature_idx += centroids_window_height

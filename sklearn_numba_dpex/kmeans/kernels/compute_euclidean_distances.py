@@ -4,9 +4,7 @@ from functools import lru_cache
 import numpy as np
 import numba_dpex as dpex
 
-from ._base_kmeans_kernel_funcs import (
-    make_pairwise_ops_base_kernel_funcs,
-)
+from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
 # inline commenting of the kernel.
@@ -21,14 +19,14 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
+    window_n_centroids = sub_group_size
+
     centroids_window_height = work_group_size // sub_group_size
     if centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
-
-    window_n_centroids = sub_group_size
 
     (
         initialize_window_of_centroids,
@@ -40,8 +38,8 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "squared_diff",
-        dtype,
+        ops="squared_diff",
+        dtype=dtype,
     )
 
     n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
@@ -97,8 +95,13 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
                 accumulate_sq_distances(
-                    sample_idx, first_feature_idx, X_t, centroids_window, sq_distances, is_last_feature_window, is_last_centroid_window
-                )
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    sq_distances,
+                    is_last_feature_window,
+                    is_last_centroid_window)
 
                 first_feature_idx += centroids_window_height
 

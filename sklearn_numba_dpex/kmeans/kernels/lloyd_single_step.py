@@ -41,14 +41,21 @@ def make_lloyd_single_step_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
+    window_n_centroids = sub_group_size
+
+    # The height of the window on centroids (or, equivalently, the number of features
+    # in the window), is chosen such that the window counts `work_group_size` items.
+    # When a window is cooperatively loaded into shared memory by a work group, each
+    # work item is thus tasked with loading one and only one item.
+    # The number of items is `centroids_window_height * window_n_centroids =
+    # centroids_window_height * sub_group_size`, hence the height is:
     centroids_window_height = work_group_size // sub_group_size
+
     if centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
-
-    window_n_centroids = sub_group_size
 
     (
         initialize_window_of_centroids,
@@ -60,8 +67,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         n_clusters,
         centroids_window_height,
         window_n_centroids,
-        "product",
-        dtype,
+        ops="product",
+        dtype=dtype,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
@@ -82,8 +89,8 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_cluster_items = n_clusters * (n_features + 1)
     n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
     # TODO: control that this value is not higher than the number of sub-groups of size
-    # preferred_work_group_size_multiple that can effectively run concurrently. We
-    # should fetch this information and apply it here.
+    # sub_group_size that can effectively run concurrently. We should fetch this
+    # information and apply it here.
     n_centroids_private_copies = (
         global_mem_cache_size * centroids_private_copies_max_cache_occupancy
     ) // n_cluster_bytes
@@ -221,7 +228,13 @@ def make_lloyd_single_step_fixed_window_kernel(
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
-                    sample_idx, first_feature_idx, X_t, centroids_window, dot_products, is_last_feature_window, is_last_centroid_window
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    dot_products,
+                    is_last_feature_window,
+                    is_last_centroid_window
                 )
 
                 first_feature_idx += centroids_window_height
@@ -277,8 +290,8 @@ def make_lloyd_single_step_fixed_window_kernel(
         # which we mitigate with a strategy of "privatization" for reducing the
         # probability of collisions. The array of centroids is duplicated in global
         # memory as many time as possible and each sub-group of work items of size
-        # `preferred_work_group_size_multiple` is assigned to a different duplicata and
-        # update the values of this single duplicata.
+        # `sub_group_size` is assigned to a different duplicata and update the values 
+        # of this single duplicata.
 
         # The resulting copies of centroids updates will then need to be reduced to a
         # single array of centroids in a complementary kernel.
@@ -294,17 +307,11 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
+        privatization_idx = (sample_idx // sub_group_size) % n_centroids_private_copies
+
         weight = sample_weight[sample_idx]
 
-        privatization_idx = (
-            sample_idx // sub_group_size
-        ) % n_centroids_private_copies
-
-        dpex.atomic.add(
-            cluster_sizes_private_copies,
-            (privatization_idx, min_idx),
-            weight
-        )
+        dpex.atomic.add(cluster_sizes_private_copies, (privatization_idx, min_idx), weight)
 
         for feature_idx in range(n_features):
             dpex.atomic.add(

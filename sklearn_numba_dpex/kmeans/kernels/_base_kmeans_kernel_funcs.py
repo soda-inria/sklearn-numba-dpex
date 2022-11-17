@@ -11,15 +11,17 @@ def make_pairwise_ops_base_kernel_funcs(
     dtype,
     initialize_window_of_centroids_half_l2_norms=False,
 ):
-    # The kernel funcs in this file must behave differently depending on wether the
-    # window over the array of centroids, which has a fixed size, cover a full set of
-    # elements of the array (_full window_), or a partial set of elements (_last
-    # window_), which can happen for the last windows along each dimension, if the size
-    # of the window along said dimensions does not divide the size of the array of
-    # centroids. Indeed, for such windows, the loops on the elements of the window must
-    # be interrupted early to not include compute that would correspond to out-of-bounds
+    # The kernel funcs in this file must behave differently depending on whether the
+    # window over the array of centroids (which has a fixed size):
+    #    - covers a full set of elements of the array (_full window_),
+    #    - covers a partial set of elements (_last window_), which can happen for
+    #      the last windows along each dimension if the size of the window along
+    #      said dimensions does not divide the size of the array of centroids.
+    #
+    # Indeed, for such windows, the loops on the elements of the window must  be
+    # interrupted early to not include compute that would correspond to out-of-bounds
     # elements in the array of centroids (which would, in this case, cause extra
-    # compute time that, depending on the case, could noticeably hurt the performance).
+    # compute time that, depending on the case, could noticeably hurt performance).
 
     # Unfortunately, `numba_dpex` does not offer tools that would enable at the same
     # time re-using the same kernel functions for the different cases, and passing the
@@ -37,8 +39,7 @@ def make_pairwise_ops_base_kernel_funcs(
     last_window_n_features = ((n_features - 1) % window_n_features) + 1
 
     initialize_window_of_centroids_factory = _InitializeWindowKernelFuncFactory(
-        dtype,
-        initialize_window_of_centroids_half_l2_norms=initialize_window_of_centroids_half_l2_norms,
+        dtype, initialize_window_of_centroids_half_l2_norms
     )
 
     initialize_full_window_of_centroids = initialize_window_of_centroids_factory.make(
@@ -90,31 +91,24 @@ def make_pairwise_ops_base_kernel_funcs(
     )
 
     accumulate_dot_products_factory = _AccumulateSumOfOpsKernelFuncFactory(
-        n_samples,
-        n_features,
-        ops=ops,
-        dtype=dtype,
+        n_samples, ops=ops, dtype=dtype
     )
 
     accumulate_full_window_dot_products = accumulate_dot_products_factory.make(
-        window_n_features,
-        window_n_centroids,
+        window_n_features, window_n_centroids
     )
 
     accumulate_last_centroid_window_dot_products = accumulate_dot_products_factory.make(
-        window_n_features,
-        last_window_n_centroids,
+        window_n_features, last_window_n_centroids
     )
 
     accumulate_last_feature_window_dot_products = accumulate_dot_products_factory.make(
-        last_window_n_features,
-        window_n_centroids,
+        last_window_n_features, window_n_centroids
     )
 
     accumulate_last_centroid_and_last_feature_window_dot_products = (
         accumulate_dot_products_factory.make(
-            last_window_n_features,
-            last_window_n_centroids,
+            last_window_n_features, last_window_n_centroids
         )
     )
 
@@ -179,11 +173,11 @@ class _InitializeWindowKernelFuncFactory:
         @dpex.func
         # fmt: off
         def _initialize_window_of_centroids(
-            local_work_id,                  # PARAM
-            first_centroid_idx,             # PARAM
-            centroids_half_l2_norm,         # IN
+            local_work_id,                      # PARAM
+            first_centroid_idx,                 # PARAM
+            centroids_half_l2_norm,             # IN
             window_of_centroids_half_l2_norms,  # OUT
-            results,                        # OUT
+            results,                            # OUT
         ):
         # fmt: on
             _initialize_results(results)
@@ -239,7 +233,6 @@ def _make_load_window_kernel_funcs(
 class _AccumulateSumOfOpsKernelFuncFactory:
     def __init__(self, n_samples, n_features, ops, dtype):
         self.n_samples = n_samples
-        self.n_features = n_features
 
         self.accumulate_dot_product = ops == "product"
         self.accumulate_squared_diff = ops == "squared_diff"
@@ -254,7 +247,6 @@ class _AccumulateSumOfOpsKernelFuncFactory:
     def make(self, window_n_features, window_n_centroids):
 
         zero = self.dtype(0.0)
-        n_features = self.n_features
         n_samples = self.n_samples
         accumulate_dot_product = self.accumulate_dot_product
 
@@ -271,8 +263,7 @@ class _AccumulateSumOfOpsKernelFuncFactory:
             for window_feature_idx in range(window_n_features):
 
                 feature_idx = window_feature_idx + first_feature_idx
-                if (feature_idx < n_features) and (sample_idx < n_samples):
-                # if sample_idx < n_samples:
+                if sample_idx < n_samples:
                     # performance for the line thereafter relies on L1 cache
                     X_value = X_t[feature_idx, sample_idx]
                 else:

@@ -19,6 +19,12 @@ from sklearn_numba_dpex.kmeans.kernels.utils import (
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
+from sklearn_numba_dpex.kmeans.kernels import (
+    make_compute_euclidean_distances_fixed_window_kernel,
+    make_label_assignment_fixed_window_kernel,
+    make_lloyd_single_step_fixed_window_kernel,
+)
+
 
 def test_dpnp_implements_argpartition():
     # Detect if dpnp exposes an argpartition kernel and alert that sklearn-numba-dpex
@@ -277,3 +283,39 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     assert (
         selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
     ).all()
+
+
+def test_error_raised_on_invalid_group_sizes():
+    n_samples = 10
+    n_features = 2
+    n_clusters = 2
+    sub_group_size = 64
+    work_group_size = 500  # invalid because is not a multiple of sub_group_size
+    dtype = np.float32
+
+    with pytest.raises(ValueError):
+        make_compute_euclidean_distances_fixed_window_kernel(
+            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+        )
+
+    with pytest.raises(ValueError):
+        make_label_assignment_fixed_window_kernel(
+            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+        )
+
+    return_assignments = False
+    global_mem_cache_size = 123456789
+    centroids_private_copies_max_cache_occupancy = 0.7
+
+    with pytest.raises(ValueError):
+        make_label_assignment_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            return_assignments,
+            sub_group_size,
+            global_mem_cache_size,
+            centroids_private_copies_max_cache_occupancy,
+            work_group_size,
+            dtype,
+        )
