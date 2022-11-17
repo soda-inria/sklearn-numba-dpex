@@ -183,7 +183,7 @@ pip install -e . --no-build-isolation
 
 ## Intended usage
 
-See the `sklearn_numba_dpex/tests` folder for example usage.
+See the `sklearn_numba_dpex/kmeans/tests` folder for example usage.
 
 TODO: write some doc here instead.
 
