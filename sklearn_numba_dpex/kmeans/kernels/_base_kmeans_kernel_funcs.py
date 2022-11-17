@@ -40,8 +40,9 @@ def make_pairwise_ops_base_kernel_funcs(
     # (`is_last_centroid_window`, `is_last_feature_window`)
 
     kmeans_kernel_func_factory = _KMeansKernelFuncFactory(
-        n_clusters,
+        n_samples,
         n_features,
+        n_clusters,
         window_n_centroids,
         ops,
         dtype,
@@ -206,16 +207,18 @@ def make_pairwise_ops_base_kernel_funcs(
 class _KMeansKernelFuncFactory:
     def __init__(
         self,
-        n_clusters,
+        n_samples,
         n_features,
+        n_clusters,
         full_window_n_centroids,
         ops,
         dtype,
         work_group_size,
         initialize_window_of_centroids_half_l2_norms,
     ):
-        self.n_clusters = n_clusters
+        self.n_samples = n_samples
         self.n_features = n_features
+        self.n_clusters = n_clusters
         self.work_group_size = work_group_size
         self.full_window_n_centroids = full_window_n_centroids
 

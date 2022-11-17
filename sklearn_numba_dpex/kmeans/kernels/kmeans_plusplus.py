@@ -4,10 +4,8 @@ from functools import lru_cache
 import numpy as np
 import numba_dpex as dpex
 
-from ._base_kmeans_kernel_funcs import (
-    _make_initialize_window_kernel_funcs,
-    _make_accumulate_sum_of_ops_kernel_func,
-)
+from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
+
 from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
@@ -120,28 +118,25 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     )
 
     (
-        _initialize_window_of_candidates,
-        _load_window_of_candidates_and_features,
-    ) = _make_initialize_window_kernel_funcs(
+        initialize_window_of_candidates,
+        load_window_of_candidates_and_features,
+        accumulate_sq_distances,
+    ) = make_pairwise_ops_base_kernel_funcs(
         n_samples,
         n_features,
-        work_group_size,
-        window_n_candidates,
-        candidates_window_height,
-        dtype,
-    )
-
-    _accumulate_sq_distances = _make_accumulate_sum_of_ops_kernel_func(
         n_samples,
-        n_features,
         candidates_window_height,
         window_n_candidates,
         ops="squared_diff",
         dtype=dtype,
+        work_group_size=work_group_size,
+        initialize_window_of_centroids_half_l2_norms=False,
     )
 
-    n_windows_per_feature = math.ceil(n_candidates / window_n_candidates)
-    n_windows_per_candidate = math.ceil(n_features / candidates_window_height)
+    n_windows_for_candidates = math.ceil(n_candidates / window_n_candidates)
+    n_windows_for_features = math.ceil(n_features / candidates_window_height)
+    last_candidate_window_idx = n_windows_for_candidates - 1
+    last_feature_window_idx = n_windows_for_features - 1
 
     candidates_window_shape = (candidates_window_height, (window_n_candidates + 1))
 
@@ -169,8 +164,9 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         window_loading_candidate_idx = local_work_id % window_n_candidates
         window_loading_feature_offset = local_work_id // window_n_candidates
 
-        for _0 in range(n_windows_per_feature):
-            _initialize_window_of_candidates(sq_distances)
+        for candidate_window_idx in range(n_windows_for_candidates):
+            is_last_candidate_window = candidate_window_idx == last_candidate_window_idx
+            initialize_window_of_candidates(sq_distances, is_last_candidate_window)
 
             loading_candidate_idx = first_candidate_idx + window_loading_candidate_idx
             if loading_candidate_idx < n_candidates:
@@ -180,25 +176,28 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_per_candidate):
-
-                _load_window_of_candidates_and_features(
+            for feature_window_idx in range(n_windows_for_features):
+                is_last_feature_window = feature_window_idx == last_feature_window_idx
+                load_window_of_candidates_and_features(
                     first_feature_idx,
                     loading_candidate_idx,
                     window_loading_candidate_idx,
                     window_loading_feature_offset,
                     X_t,
                     candidates_window,
+                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-                _accumulate_sq_distances(
+                accumulate_sq_distances(
                     sample_idx,
                     first_feature_idx,
                     X_t,
                     candidates_window,
                     sq_distances,
+                    is_last_feature_window,
+                    is_last_candidate_window,
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
