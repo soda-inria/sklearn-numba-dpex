@@ -65,18 +65,6 @@ class DeviceParams:
                 device_name=self.name,
             )
 
-    @property
-    def global_mem_cache_size(self):
-        try:
-            return self._sycl_device.global_mem_cache_size
-        except AttributeError:
-            return _get_cl_param(
-                cl_device=self._cl_device,
-                value="global_mem_cache_size",
-                default=_DEFAULT_VALUES.global_mem_cache_size,
-                device_name=self.name,
-            )
-
 
 def _get_cl_platforms():
     return pyopencl.get_platforms() if pyopencl else []
