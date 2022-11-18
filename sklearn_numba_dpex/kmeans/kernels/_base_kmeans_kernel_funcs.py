@@ -35,17 +35,27 @@ def make_pairwise_ops_base_kernel_funcs(
     # instance depending on the state of the main loop over the windows
     # (`is_last_centroid_window`, `is_last_feature_window`)
 
-    last_window_n_centroids = ((n_clusters - 1) % window_n_centroids) + 1
-    last_window_n_features = ((n_features - 1) % window_n_features) + 1
-
-    initialize_window_of_centroids_factory = _InitializeWindowKernelFuncFactory(
-        dtype, initialize_window_of_centroids_half_l2_norms
+    kmeans_kernel_func_factory = _KMeansKernelFuncFactory(
+        n_samples,
+        n_features,
+        n_clusters,
+        ops,
+        dtype,
+        initialize_window_of_centroids_half_l2_norms,
     )
 
-    initialize_full_window_of_centroids = initialize_window_of_centroids_factory.make(
+    last_window_n_centroids = n_clusters % window_n_centroids or window_n_centroids
+    last_window_n_features = n_features % window_n_features or window_n_features
+
+    make_initialize_window_kernel_func = (
+        kmeans_kernel_func_factory.make_initialize_window_kernel_func
+    )
+
+    initialize_full_window_of_centroids = make_initialize_window_kernel_func(
         window_n_centroids
     )
-    initialize_last_window_of_centroids = initialize_window_of_centroids_factory.make(
+
+    initialize_last_window_of_centroids = make_initialize_window_kernel_func(
         last_window_n_centroids
     )
 
@@ -86,28 +96,32 @@ def make_pairwise_ops_base_kernel_funcs(
             else:
                 initialize_full_window_of_centroids(dot_products)
 
-    load_window_of_centroids_and_features = _make_load_window_kernel_funcs(
-        n_clusters, n_features, dtype
+    load_window_of_centroids_and_features = (
+        kmeans_kernel_func_factory.make_load_window_kernel_func()
     )
 
-    accumulate_dot_products_factory = _AccumulateSumOfOpsKernelFuncFactory(
-        n_samples, ops=ops, dtype=dtype
+    make_accumulate_sum_of_ops_kernel_func = (
+        kmeans_kernel_func_factory.make_accumulate_sum_of_ops_kernel_func
     )
 
-    accumulate_full_window_dot_products = accumulate_dot_products_factory.make(
+    accumulate_full_window_dot_products = make_accumulate_sum_of_ops_kernel_func(
         window_n_features, window_n_centroids
     )
 
-    accumulate_last_centroid_window_dot_products = accumulate_dot_products_factory.make(
-        window_n_features, last_window_n_centroids
+    accumulate_last_centroid_window_dot_products = (
+        make_accumulate_sum_of_ops_kernel_func(
+            window_n_features, last_window_n_centroids
+        )
     )
 
-    accumulate_last_feature_window_dot_products = accumulate_dot_products_factory.make(
-        last_window_n_features, window_n_centroids
+    accumulate_last_feature_window_dot_products = (
+        make_accumulate_sum_of_ops_kernel_func(
+            last_window_n_features, window_n_centroids
+        )
     )
 
     accumulate_last_centroid_and_last_feature_window_dot_products = (
-        accumulate_dot_products_factory.make(
+        make_accumulate_sum_of_ops_kernel_func(
             last_window_n_features, last_window_n_centroids
         )
     )
@@ -146,18 +160,35 @@ def make_pairwise_ops_base_kernel_funcs(
     )
 
 
-class _InitializeWindowKernelFuncFactory:
+class _KMeansKernelFuncFactory:
     def __init__(
         self,
+        n_samples,
+        n_features,
+        n_clusters,
+        ops,
         dtype,
         initialize_window_of_centroids_half_l2_norms,
     ):
+        self.n_samples = n_samples
+        self.n_features = n_features
+        self.n_clusters = n_clusters
+
+        self.accumulate_dot_product = ops == "product"
+        self.accumulate_squared_diff = ops == "squared_diff"
+
+        if not self.accumulate_dot_product and not self.accumulate_squared_diff:
+            raise ValueError(
+                f'Expected ops to take values "product" or "squared_diff", got "{ops}" '
+                "instead."
+            )
+
         self.dtype = dtype
         self.initialize_window_of_centroids_half_l2_norms = (
             initialize_window_of_centroids_half_l2_norms
         )
 
-    def make(self, window_n_centroids):
+    def make_initialize_window_kernel_func(self, window_n_centroids):
         zero = self.dtype(0.0)
 
         @dpex.func
@@ -187,64 +218,50 @@ class _InitializeWindowKernelFuncFactory:
             # item loads one single value.
             if local_work_id < window_n_centroids:
                 half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-                window_of_centroids_half_l2_norms[local_work_id] = centroids_half_l2_norm[
-                    half_l2_norm_loading_idx]
+                window_of_centroids_half_l2_norms[local_work_id] = (
+                    centroids_half_l2_norm[half_l2_norm_loading_idx]
+                )
 
         return _initialize_window_of_centroids
 
+    def make_load_window_kernel_func(self):
+        n_features = self.n_features
+        n_clusters = self.n_clusters
 
-def _make_load_window_kernel_funcs(
-    n_clusters,
-    n_features,
-    dtype,
-):
-    zero = dtype(0.0)
+        zero = self.dtype(0.0)
 
-    @dpex.func
-    # fmt: off
-    def _load_window_of_centroids_and_features(
-        first_feature_idx,              # PARAM
-        loading_centroid_idx,           # PARAM
-        window_loading_centroid_idx,    # PARAM
-        window_loading_feature_offset,  # PARAM
-        current_centroids_t,            # IN
-        centroids_window,               # OUT
-    ):
-    # fmt: on
-        # The work items in the work group cooperatively load the values in shared 
-        # memory. Each work item loads one value and adjacent work items load adjacent 
-        # values.
-        loading_feature_idx = first_feature_idx + window_loading_feature_offset
-
-        if (loading_feature_idx < n_features) and (
-            loading_centroid_idx < n_clusters
+        @dpex.func
+        # fmt: off
+        def _load_window_of_centroids_and_features(
+            first_feature_idx,              # PARAM
+            loading_centroid_idx,           # PARAM
+            window_loading_centroid_idx,    # PARAM
+            window_loading_feature_offset,  # PARAM
+            current_centroids_t,            # IN
+            centroids_window,               # OUT
         ):
-            value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
-        else:
-            value = zero
+        # fmt: on
+            # The work items in the work group cooperatively load the values in shared
+            # memory. At each iteration, the work item loads one value and adjacent work
+            # items load adjacent values.
+            loading_feature_idx = first_feature_idx + window_loading_feature_offset
+            
+            if (loading_feature_idx < n_features) and (
+                loading_centroid_idx < n_clusters
+             ):
+                 value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
+            else:
+                 value = zero
 
-        centroids_window[
-            window_loading_feature_offset, window_loading_centroid_idx
-        ] = value
+            centroids_window[
+                window_loading_feature_offset, window_loading_centroid_idx
+            ] = value
 
-    return _load_window_of_centroids_and_features
+        return _load_window_of_centroids_and_features
 
-
-class _AccumulateSumOfOpsKernelFuncFactory:
-    def __init__(self, n_samples, ops, dtype):
-        self.n_samples = n_samples
-
-        self.accumulate_dot_product = ops == "product"
-        self.accumulate_squared_diff = ops == "squared_diff"
-
-        if not self.accumulate_dot_product and not self.accumulate_squared_diff:
-            raise ValueError(
-                f'Expected ops to take values "product" or "squared_diff", got "{ops}" '
-                "instead."
-            )
-        self.dtype = dtype
-
-    def make(self, window_n_features, window_n_centroids):
+    def make_accumulate_sum_of_ops_kernel_func(
+        self, window_n_features, window_n_centroids
+    ):
 
         zero = self.dtype(0.0)
         n_samples = self.n_samples

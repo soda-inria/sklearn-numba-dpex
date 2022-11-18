@@ -9,7 +9,6 @@ from ._base_kmeans_kernel_funcs import (
     make_update_closest_centroid_kernel_func,
 )
 
-
 # NB: refer to the definition of the main lloyd function for a more comprehensive
 # inline commenting of the kernel.
 
@@ -24,8 +23,8 @@ def make_label_assignment_fixed_window_kernel(
     dtype,
 ):
     window_n_centroids = sub_group_size
-
     centroids_window_height = work_group_size // sub_group_size
+
     if centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -88,8 +87,9 @@ def make_label_assignment_fixed_window_kernel(
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(n_windows_for_centroids):
-            is_last_centroid_window = _0 == last_centroid_window_idx
+        for centroid_window_idx in range(n_windows_for_centroids):
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
+
             initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
@@ -103,9 +103,8 @@ def make_label_assignment_fixed_window_kernel(
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_for_features):
-                is_last_feature_window = _1 == last_feature_window_idx
-
+            for feature_windiw_idx in range(n_windows_for_features):
+                is_last_feature_window = feature_windiw_idx == last_feature_window_idx
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
@@ -126,7 +125,7 @@ def make_label_assignment_fixed_window_kernel(
                     is_last_feature_window,
                     is_last_centroid_window
                 )
-
+                
                 first_feature_idx += centroids_window_height
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -141,7 +140,7 @@ def make_label_assignment_fixed_window_kernel(
             )
 
             first_centroid_idx += window_n_centroids
-
+            
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # No update step, only store min_idx in the output array

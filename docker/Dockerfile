@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-f3cc5b196af0d6f69df8c67543f160bb73425b5a
+ARG BASE_IMAGE_VERSION=latest-082cde669552482c541a297e38adce4afee4fd34
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -71,24 +71,24 @@ ARG PYTHON_VERSION=3.9.13
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/18852
-ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.3.0.8767.sh
+ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc_nas/18970
+ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.3.1.17310.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
-ARG CMAKE_VERSION=3.24
-ARG CMAKE_VERSION_BUILD=2
+ARG CMAKE_VERSION=3.25
+ARG CMAKE_VERSION_BUILD=0
 
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.13.0
+ARG DPCTL_GIT_BRANCH=0.14.0rc2
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.10.2
+ARG DPNP_GIT_BRANCH=0.11.0rc1
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
@@ -339,7 +339,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     # that causes missing files in the final tarball.
     # The workaround consists in triggering building steps by running `setup.py develop`
     # before running `setup.py bdist_wheel`.
-    # See https://github.com/ogrisel/sklearn-numba-dpex/issues/5
+    # See https://github.com/soda-inria/sklearn-numba-dpex/issues/5
     && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \

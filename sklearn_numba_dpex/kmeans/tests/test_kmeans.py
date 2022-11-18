@@ -8,10 +8,13 @@ from numpy.testing import assert_array_equal
 
 from sklearn import config_context
 from sklearn.base import clone
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, kmeans_plusplus
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
-
+from sklearn.cluster.tests.test_k_means import (
+    X as X_sklearn_test,
+    n_clusters as n_clusters_sklearn_test,
+)
 
 from sklearn_numba_dpex.kmeans.kernels.utils import (
     make_select_samples_far_from_centroid_kernel,
@@ -24,6 +27,10 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_label_assignment_fixed_window_kernel,
     make_lloyd_single_step_fixed_window_kernel,
 )
+
+# This is safely reusable between tests because
+# this instance has no internal tests.
+driver = KMeansDriver()
 
 
 def test_dpnp_implements_argpartition():
@@ -41,7 +48,9 @@ def test_kmeans_same_results(dtype):
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
 
-    kmeans_vanilla = KMeans(random_state=random_seed, algorithm="lloyd", max_iter=1)
+    kmeans_vanilla = KMeans(
+        random_state=random_seed, algorithm="lloyd", max_iter=1, init="random"
+    )
     kmeans_engine = clone(kmeans_vanilla)
 
     # Fit a reference model with the default scikit-learn engine:
@@ -137,7 +146,6 @@ def test_euclidean_distance(dtype):
 
     expected = np.sqrt(((a - b) ** 2).sum())
 
-    driver = KMeansDriver()
     result = driver.get_euclidean_distances(a, b)
 
     rtol = 1e-4 if dtype == np.float32 else 1e-7
@@ -154,7 +162,6 @@ def test_inertia(dtype):
     sample_weight = rng.standard_normal(100, dtype=dtype)
     centers = rng.standard_normal((5, 10), dtype=dtype)
 
-    driver = KMeansDriver()
     labels = driver.get_labels(X, centers)
 
     distances = ((X - centers[labels]) ** 2).sum(axis=1)
@@ -283,6 +290,133 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     assert (
         selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
     ).all()
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_plusplus_same_quality(dtype):
+    random_state = 42
+    X = X_sklearn_test.astype(dtype)
+    n_clusters = n_clusters_sklearn_test
+
+    # HACK: to compare the quality of the initialization, it's convenient to use the
+    # `score` method of an estimator whose fitted attribute cluster_centers_ has been
+    # set to the result of the initialization, without running the remaining steps of
+    # the  KMeans algorithm. For this purpose, since KMeans does not support passing
+    # `max_iter=0` we forcefully set fitted attribute values without actually running
+    # `fit`.
+    kmeans = KMeans(n_clusters=n_clusters)
+    kmeans._n_threads = 1
+
+    def _get_score_with_centers(centers):
+        kmeans.cluster_centers_ = np.ascontiguousarray(centers)
+        return kmeans.score(X)
+
+    scores_vanilla_kmeans_plusplus = []
+    scores_engine_kmeans_plusplus = []
+    scores_random_init = []
+
+    for random_state in range(10):
+        random_centers = np.random.default_rng(random_state).choice(
+            X, size=n_clusters, replace=False
+        )
+        scores_random_init.append(_get_score_with_centers(random_centers))
+
+        vanilla_kmeans_plusplus_centers, _ = kmeans_plusplus(
+            X, n_clusters, random_state=random_state
+        )
+        scores_vanilla_kmeans_plusplus.append(
+            _get_score_with_centers(vanilla_kmeans_plusplus_centers)
+        )
+
+        engine_kmeans_plusplus_centers, _ = driver.kmeans_plusplus(
+            X=X,
+            sample_weight=None,
+            n_clusters=n_clusters,
+            random_state=random_state,
+        )
+        scores_engine_kmeans_plusplus.append(
+            _get_score_with_centers(engine_kmeans_plusplus_centers)
+        )
+
+    # Those results confirm that both sklearn KMeans++ and ours have similar quality,
+    # and are both very significantly better than random init.
+    #
+    # NB: the gap between scores_vanilla_kmeans_plusplus and
+    # scores_engine_kmeans_plusplus goes away with more iterations in the previous
+    # loop. E.g., for 100 iterations:
+    #
+    # [
+    #     -1833.4422766113282,  # np.mean(scores_random_init)
+    #     -900.3062860107422,   # np.mean(scores_vanilla_kmeans_plusplus)
+    #     -902.9209448242187,   # np.mean(scores_engine_kmeans_plusplus)
+    # ]
+
+    assert_allclose(
+        [
+            np.mean(scores_random_init),
+            np.mean(scores_vanilla_kmeans_plusplus),
+            np.mean(scores_engine_kmeans_plusplus),
+        ],
+        [
+            -1827.2270605322217,
+            -1027.674264781121,
+            -885.1541877428601,
+        ],
+    )
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_plusplus_output(dtype):
+    """Test adapted from sklearn's test_kmeans_plusplus_output"""
+    # Check for the correct number of seeds and all positive values
+    X = X_sklearn_test.astype(dtype)
+
+    sample_weight = default_rng(42).random(X.shape[0], dtype=dtype)
+
+    centers, indices = driver.kmeans_plusplus(
+        X=X,
+        sample_weight=sample_weight,
+        n_clusters=n_clusters_sklearn_test,
+        random_state=42,
+    )
+
+    # Check there are the correct number of indices and that all indices are
+    # positive and within the number of samples
+    assert indices.shape[0] == n_clusters_sklearn_test
+    assert (indices >= 0).all()
+    assert (indices <= X.shape[0]).all()
+
+    # Check for the correct number of seeds and that they are bound by the data
+    assert centers.shape[0] == n_clusters_sklearn_test
+    assert (centers.max(axis=0) <= X.max(axis=0)).all()
+    assert (centers.min(axis=0) >= X.min(axis=0)).all()
+    # NB: dtype can change depending on the device, so we accept all valid dtypes.
+    assert centers.dtype.type in {np.float32, np.float64}
+
+    # Check that indices correspond to reported centers
+    assert_allclose(X[indices].astype(dtype), centers)
+
+
+def test_kmeans_plusplus_dataorder():
+    """Test adapted from sklearn's test_kmeans_plusplus_dataorder"""
+    # Check that memory layout does not effect result
+    centers_c, _ = driver.kmeans_plusplus(
+        X=X_sklearn_test,
+        sample_weight=None,
+        n_clusters=n_clusters_sklearn_test,
+        random_state=42,
+    )
+
+    X_fortran = np.asfortranarray(X_sklearn_test)
+
+    centers_fortran, _ = driver.kmeans_plusplus(
+        X=X_fortran,
+        sample_weight=None,
+        n_clusters=n_clusters_sklearn_test,
+        random_state=42,
+    )
+
+    assert_allclose(centers_c, centers_fortran)
 
 
 def test_error_raised_on_invalid_group_sizes():

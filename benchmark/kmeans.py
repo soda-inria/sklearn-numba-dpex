@@ -43,6 +43,7 @@ class KMeansLloydTimeit:
             self.X,
             self.sample_weight_,
             self.centers_init,
+            self.n_clusters,
         ) = data_initialization_fn(**data_initialization_kwargs)
 
         self.sample_weight = data_initialization_kwargs.get(
@@ -72,8 +73,11 @@ class KMeansLloydTimeit:
             return
 
         max_iter = self.max_iter
-        n_clusters = self.centers_init.shape[0]
-        centers_init = self.centers_init.copy()
+        n_clusters = self.n_clusters
+        centers_init = self.centers_init
+        if hasattr(centers_init, "copy"):
+            centers_init = centers_init.copy()
+
         X = self.X.copy()
         sample_weight = (
             None if self.sample_weight_ is None else self.sample_weight_.copy()
@@ -85,8 +89,6 @@ class KMeansLloydTimeit:
             n_init=1,
             max_iter=max_iter,
             tol=0,
-            # random_state is set but since we don't use kmeans++ or random
-            # init this parameter shouldn't have any impact on the outputs
             random_state=42,
             copy_x=True,
             algorithm="lloyd",
@@ -172,7 +174,8 @@ if __name__ == "__main__":
     # TODO: expose CLI args.
 
     random_state = 123
-    sample_weight = "random"  # None, "unary", or "random"
+    sample_weight = "unary"  # None, "unary", or "random"
+    init = "k-means++"  # "k-means++" or "random"
     n_clusters = 127
     max_iter = 100
     tol = 0
@@ -182,11 +185,7 @@ if __name__ == "__main__":
     # close results but with significant differences for a few elements.
     run_consistency_checks = False
 
-    def benchmark_data_initialization(
-        random_state,
-        n_clusters,
-        sample_weight,
-    ):
+    def benchmark_data_initialization(random_state, n_clusters, sample_weight):
         X, _ = fetch_openml(name="spoken-arabic-digit", return_X_y=True, parser="auto")
         X = X.astype(dtype)
         scaler_x = MinMaxScaler()
@@ -196,7 +195,8 @@ if __name__ == "__main__":
         # X = np.hstack([X for _ in range(5)])
         # X = np.vstack([X for _ in range(20)])
         rng = default_rng(random_state)
-        init = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
+        if (init_ := init) == "random":
+            init_ = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
 
         if sample_weight is None:
             pass
@@ -210,7 +210,7 @@ if __name__ == "__main__":
                 f" {sample_weight} instead."
             )
 
-        return X, sample_weight, init
+        return X, sample_weight, init_, n_clusters
 
     kmeans_timer = KMeansLloydTimeit(
         benchmark_data_initialization,

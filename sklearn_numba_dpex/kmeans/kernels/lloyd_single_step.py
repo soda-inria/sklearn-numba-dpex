@@ -41,14 +41,22 @@ def make_lloyd_single_step_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
-    window_n_centroids = sub_group_size
-
     # The height of the window on centroids (or, equivalently, the number of features
-    # in the window), is chosen such that the window counts `work_group_size` items.
+    # in the window), and the width (number of centroids in the window), are chosen
+    # such that:
+    # - the width is equal to the `sub_group_size`, which is the mininal size that
+    # optimizes IO patterns by having items in each sub group read contiguous memory
+    # slots, which can optimize IO bandwitch by trigerring coalescence of the read
+    # operations of each item in the sub group. Higher sizes would increase the
+    # pressure on private memory (since the size of the private array
+    # `dot_products` is equal to the width of the window) with no particular gain to
+    # expect.
+    # - the height is chosen such that the window counts `work_group_size` items.
     # When a window is cooperatively loaded into shared memory by a work group, each
     # work item is thus tasked with loading one and only one item.
     # The number of items is `centroids_window_height * window_n_centroids =
-    # centroids_window_height * sub_group_size`, hence the height is:
+    # centroids_window_height * sub_group_size`
+    window_n_centroids = sub_group_size
     centroids_window_height = work_group_size // sub_group_size
 
     if centroids_window_height * sub_group_size != work_group_size:
@@ -192,8 +200,10 @@ def make_lloyd_single_step_fixed_window_kernel(
         # `numba`. Note though, that `numba` cannot unroll nested loops, so won't
         # `numba_dpex`. To leverage loop unrolling, the following nested loop will
         # require to be un-nested.
-        for _0 in range(n_windows_for_centroids):
-            is_last_centroid_window = _0 == last_centroid_window_idx
+        for centroid_window_idx in range(n_windows_for_centroids):
+            # window_of_centroids_half_l2_norms and dot_products
+            # are modified in place.
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(
                 local_work_id,
                 first_centroid_idx,
@@ -209,10 +219,9 @@ def make_lloyd_single_step_fixed_window_kernel(
 
             # Inner loop: interate on successive windows of size window_n_features
             # that cover all features for current given centroids
-            for _1 in range(n_windows_for_features):
-                is_last_feature_window = _1 == last_feature_window_idx
-
+            for feature_window_idx in range(n_windows_for_features):
                 # centroids_window is modified inplace
+                is_last_feature_window = feature_window_idx == last_feature_window_idx
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
@@ -221,7 +230,6 @@ def make_lloyd_single_step_fixed_window_kernel(
                     current_centroids_t,
                     centroids_window,
                 )
-
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
@@ -244,6 +252,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # operations in the current iteration to be over for all work items.
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
+
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
             # inertia for the current sample.
@@ -257,6 +266,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             )
 
             first_centroid_idx += window_n_centroids
+
 
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
@@ -307,11 +317,17 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
-        privatization_idx = (sample_idx // sub_group_size) % n_centroids_private_copies
+        privatization_idx = (
+            sample_idx // sub_group_size
+        ) % n_centroids_private_copies
 
         weight = sample_weight[sample_idx]
 
-        dpex.atomic.add(cluster_sizes_private_copies, (privatization_idx, min_idx), weight)
+        dpex.atomic.add(
+            cluster_sizes_private_copies,
+            (privatization_idx, min_idx),
+            weight
+        )
 
         for feature_idx in range(n_features):
             dpex.atomic.add(

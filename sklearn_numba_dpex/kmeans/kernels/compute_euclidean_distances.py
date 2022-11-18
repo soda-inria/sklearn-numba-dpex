@@ -19,9 +19,10 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     work_group_size,
     dtype,
 ):
-    window_n_centroids = sub_group_size
 
+    window_n_centroids = sub_group_size
     centroids_window_height = work_group_size // sub_group_size
+
     if centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -40,6 +41,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_n_centroids,
         ops="squared_diff",
         dtype=dtype,
+        initialize_window_of_centroids_half_l2_norms=False,
     )
 
     n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
@@ -72,17 +74,16 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(n_windows_for_centroids):
-            is_last_centroid_window = _0 == last_centroid_window_idx
+        for centroid_window_idx in range(n_windows_for_centroids):
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(sq_distances, is_last_centroid_window)
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_for_features):
-                is_last_feature_window = _1 == last_feature_window_idx
-
+            for feature_window_idx in range(n_windows_for_features):
+                is_last_feature_window = feature_window_idx == last_feature_window_idx
                 load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
@@ -93,7 +94,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
                 accumulate_sq_distances(
                     sample_idx,
                     first_feature_idx,
@@ -101,7 +101,8 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                     centroids_window,
                     sq_distances,
                     is_last_feature_window,
-                    is_last_centroid_window)
+                    is_last_centroid_window,
+                )
 
                 first_feature_idx += centroids_window_height
 
@@ -114,7 +115,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                         euclidean_distances_t[first_centroid_idx + i, sample_idx] = math.sqrt(sq_distances[i])
 
             first_centroid_idx += window_n_centroids
-
+            
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
