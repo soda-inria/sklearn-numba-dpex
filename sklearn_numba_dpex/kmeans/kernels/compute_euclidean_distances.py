@@ -4,10 +4,7 @@ from functools import lru_cache
 import numpy as np
 import numba_dpex as dpex
 
-from ._base_kmeans_kernel_funcs import (
-    _make_initialize_window_kernel_funcs,
-    _make_accumulate_sum_of_ops_kernel_func,
-)
+from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
 # inline commenting of the kernel.
@@ -30,28 +27,25 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     )
 
     (
-        _initialize_window_of_centroids,
-        _load_window_of_centroids_and_features,
-    ) = _make_initialize_window_kernel_funcs(
-        n_clusters,
-        n_features,
-        work_group_size,
-        window_n_centroids,
-        centroids_window_height,
-        dtype,
-    )
-
-    _accumulate_sq_distances = _make_accumulate_sum_of_ops_kernel_func(
+        initialize_window_of_centroids,
+        load_window_of_centroids_and_features,
+        accumulate_sq_distances,
+    ) = make_pairwise_ops_base_kernel_funcs(
         n_samples,
         n_features,
+        n_clusters,
         centroids_window_height,
         window_n_centroids,
         ops="squared_diff",
         dtype=dtype,
+        work_group_size=work_group_size,
+        initialize_window_of_centroids_half_l2_norms=False,
     )
 
     n_windows_for_centroids = math.ceil(n_clusters / window_n_centroids)
     n_windows_for_features = math.ceil(n_features / centroids_window_height)
+    last_centroid_window_idx = n_windows_for_centroids - 1
+    last_feature_window_idx = n_windows_for_features - 1
 
     centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
 
@@ -78,25 +72,36 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_loading_centroid_idx = local_work_id % window_n_centroids
         window_loading_feature_offset = local_work_id // window_n_centroids
 
-        for _0 in range(n_windows_for_centroids):
-            _initialize_window_of_centroids(sq_distances)
+        for centroid_window_idx in range(n_windows_for_centroids):
+            is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
+            initialize_window_of_centroids(sq_distances, is_last_centroid_window)
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 
             first_feature_idx = zero_idx
 
-            for _1 in range(n_windows_for_features):
-                _load_window_of_centroids_and_features(
+            for feature_window_idx in range(n_windows_for_features):
+                is_last_feature_window = feature_window_idx == last_feature_window_idx
+                load_window_of_centroids_and_features(
                     first_feature_idx,
                     loading_centroid_idx,
                     window_loading_centroid_idx,
                     window_loading_feature_offset,
                     current_centroids_t,
                     centroids_window,
+                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-                _accumulate_sq_distances(sample_idx, first_feature_idx, X_t, centroids_window, sq_distances)
+                accumulate_sq_distances(
+                    sample_idx,
+                    first_feature_idx,
+                    X_t,
+                    centroids_window,
+                    sq_distances,
+                    is_last_feature_window,
+                    is_last_centroid_window,
+                )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
