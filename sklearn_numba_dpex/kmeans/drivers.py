@@ -719,21 +719,16 @@ class KMeansDriver:
                 f"n_samples={X.shape[0]} should be >= n_clusters={n_clusters}."
             )
 
-        (
-            X,
-            sample_weight,
-            _,
-            compute_dtype,
-            output_dtype,
-            work_group_size,
-        ) = self._check_inputs(X, sample_weight, cluster_centers=None)
+        (X, sample_weight, _, output_dtype) = self._check_inputs(
+            X, sample_weight, cluster_centers=None
+        )
 
         X_t, sample_weight, _ = self._load_transposed_data_to_device(
             X, sample_weight, cluster_centers=None
         )
 
         centers, center_indices = self._kmeans_plusplus(
-            X_t, sample_weight, n_clusters, random_state, work_group_size, compute_dtype
+            X_t, sample_weight, n_clusters, random_state
         )
 
         centers = dpt.asnumpy(centers).astype(output_dtype, copy=False)
@@ -746,10 +741,8 @@ class KMeansDriver:
         sample_weight,
         n_clusters,
         random_state,
-        work_group_size,
-        compute_dtype,
     ):
-
+        compute_dtype = X_t.dtype.type
         n_features, n_samples = X_t.shape
 
         # NB: the implementation differs from sklearn implementation with regards to
@@ -776,7 +769,7 @@ class KMeansDriver:
             n_samples,
             n_features,
             self.preferred_work_group_size_multiple,
-            work_group_size,
+            self.work_group_size,
             compute_dtype,
         )
 
@@ -784,7 +777,7 @@ class KMeansDriver:
             n_samples,
             n_local_trials,
             self.preferred_work_group_size_multiple,
-            work_group_size,
+            self.work_group_size,
             compute_dtype,
         )
 
@@ -797,18 +790,21 @@ class KMeansDriver:
             self.preferred_work_group_size_multiple,
             candidates_window_width_multiplier=self.centroids_window_width_multiplier,
             candidates_window_height=self.centroids_window_height,
-            work_group_size=work_group_size,
+            work_group_size=self.work_group_size,
             dtype=compute_dtype,
         )
 
         select_best_candidate_kernel = make_argmin_reduction_1d_kernel(
-            n_local_trials, work_group_size, device=self.device, dtype=compute_dtype
+            n_local_trials,
+            self.work_group_size,
+            device=self.device,
+            dtype=compute_dtype,
         )
 
         reduce_potential_1d_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_samples,
             size1=None,
-            work_group_size=work_group_size,
+            work_group_size=self.work_group_size,
             device=self.device,
             dtype=compute_dtype,
         )
@@ -816,7 +812,7 @@ class KMeansDriver:
         reduce_potential_2d_kernel = make_sum_reduction_2d_axis1_kernel(
             size0=n_local_trials,
             size1=n_samples,
-            work_group_size=work_group_size,
+            work_group_size=self.work_group_size,
             device=self.device,
             dtype=compute_dtype,
         )
@@ -865,11 +861,7 @@ class KMeansDriver:
         # track index of point, initialize list of closest distances and calculate
         # current potential
         kmeansplusplus_init_kernel(
-            X_t,
-            sample_weight,
-            centers_t,
-            center_indices,
-            closest_dist_sq,
+            X_t, sample_weight, centers_t, center_indices, closest_dist_sq
         )
         total_potential = reduce_potential_1d_kernel(closest_dist_sq)
 
@@ -909,11 +901,7 @@ class KMeansDriver:
             # `dtype.nbytes * n_local_trials * n_sample` bytes in memory.
             # Which is better ?
             kmeansplusplus_single_step_fixed_window_kernel(
-                X_t,
-                sample_weight,
-                candidate_ids,
-                closest_dist_sq,
-                sq_distances_t,
+                X_t, sample_weight, candidate_ids, closest_dist_sq, sq_distances_t
             )
 
             candidate_potentials = reduce_potential_2d_kernel(sq_distances_t)[:, 0]
