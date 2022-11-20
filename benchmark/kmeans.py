@@ -120,7 +120,7 @@ class KMeansLloydTimeit:
             self._check_same_fit(
                 estimator, name, max_iter, assert_allclose=self.run_consistency_checks
             )
-            print(f"Running {name} ... done in {t1 - t0}\n")
+            print(f"Running {name} ... done in {t1 - t0:.1f} s\n")
 
     def _check_same_fit(self, estimator, name, max_iter, assert_allclose):
         runtime_error_message = (
