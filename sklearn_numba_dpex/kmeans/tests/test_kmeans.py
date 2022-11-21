@@ -22,6 +22,12 @@ from sklearn_numba_dpex.kmeans.kernels.utils import (
 from sklearn_numba_dpex.kmeans.drivers import KMeansDriver
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
+from sklearn_numba_dpex.kmeans.kernels import (
+    make_compute_euclidean_distances_fixed_window_kernel,
+    make_label_assignment_fixed_window_kernel,
+    make_lloyd_single_step_fixed_window_kernel,
+)
+
 # This is safely reusable between tests because
 # this instance has no internal tests.
 driver = KMeansDriver()
@@ -411,3 +417,44 @@ def test_kmeans_plusplus_dataorder():
     )
 
     assert_allclose(centers_c, centers_fortran)
+
+
+def test_error_raised_on_invalid_group_sizes():
+    n_samples = 10
+    n_features = 2
+    n_clusters = 2
+    sub_group_size = 64
+    work_group_size = 500  # invalid because is not a multiple of sub_group_size
+    dtype = np.float32
+
+    expected_msg = (
+        "Expected work_group_size to be a multiple of sub_group_size but got "
+        f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+    )
+
+    with pytest.raises(ValueError, match=expected_msg):
+        make_compute_euclidean_distances_fixed_window_kernel(
+            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+        )
+
+    with pytest.raises(ValueError, match=expected_msg):
+        make_label_assignment_fixed_window_kernel(
+            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+        )
+
+    return_assignments = False
+    global_mem_cache_size = 123456789
+    centroids_private_copies_max_cache_occupancy = 0.7
+
+    with pytest.raises(ValueError, match=expected_msg):
+        make_lloyd_single_step_fixed_window_kernel(
+            n_samples,
+            n_features,
+            n_clusters,
+            return_assignments,
+            sub_group_size,
+            global_mem_cache_size,
+            centroids_private_copies_max_cache_occupancy,
+            work_group_size,
+            dtype,
+        )

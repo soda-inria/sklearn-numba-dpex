@@ -1,6 +1,3 @@
-import math
-
-import numpy as np
 import numba_dpex as dpex
 
 
@@ -12,7 +9,6 @@ def make_pairwise_ops_base_kernel_funcs(
     window_n_centroids,
     ops,
     dtype,
-    work_group_size,
     initialize_window_of_centroids_half_l2_norms=False,
 ):
     # The kernel funcs in this file must behave differently depending on whether the
@@ -43,10 +39,8 @@ def make_pairwise_ops_base_kernel_funcs(
         n_samples,
         n_features,
         n_clusters,
-        window_n_centroids,
         ops,
         dtype,
-        work_group_size,
         initialize_window_of_centroids_half_l2_norms,
     )
 
@@ -102,47 +96,9 @@ def make_pairwise_ops_base_kernel_funcs(
             else:
                 initialize_full_window_of_centroids(dot_products)
 
-    make_load_window_kernel_func = (
-        kmeans_kernel_func_factory.make_load_window_kernel_func
+    load_window_of_centroids_and_features = (
+        kmeans_kernel_func_factory.make_load_window_kernel_func()
     )
-
-    load_full_window_of_centroids_and_features = make_load_window_kernel_func(
-        window_n_features
-    )
-
-    load_last_feature_window_of_centroids_and_features = make_load_window_kernel_func(
-        last_window_n_features
-    )
-
-    @dpex.func
-    def load_window_of_centroids_and_features(
-        first_feature_idx,
-        loading_centroid_idx,
-        window_loading_centroid_idx,
-        window_loading_feature_offset,
-        current_centroids_t,
-        centroids_window,
-        is_last_feature_window,
-    ):
-        if is_last_feature_window:
-            load_last_feature_window_of_centroids_and_features(
-                first_feature_idx,
-                loading_centroid_idx,
-                window_loading_centroid_idx,
-                window_loading_feature_offset,
-                current_centroids_t,
-                centroids_window,
-            )
-
-        else:
-            load_full_window_of_centroids_and_features(
-                first_feature_idx,
-                loading_centroid_idx,
-                window_loading_centroid_idx,
-                window_loading_feature_offset,
-                current_centroids_t,
-                centroids_window,
-            )
 
     make_accumulate_sum_of_ops_kernel_func = (
         kmeans_kernel_func_factory.make_accumulate_sum_of_ops_kernel_func
@@ -210,17 +166,13 @@ class _KMeansKernelFuncFactory:
         n_samples,
         n_features,
         n_clusters,
-        full_window_n_centroids,
         ops,
         dtype,
-        work_group_size,
         initialize_window_of_centroids_half_l2_norms,
     ):
         self.n_samples = n_samples
         self.n_features = n_features
         self.n_clusters = n_clusters
-        self.work_group_size = work_group_size
-        self.full_window_n_centroids = full_window_n_centroids
 
         self.accumulate_dot_product = ops == "product"
         self.accumulate_squared_diff = ops == "squared_diff"
@@ -272,20 +224,11 @@ class _KMeansKernelFuncFactory:
 
         return _initialize_window_of_centroids
 
-    def make_load_window_kernel_func(self, window_n_features):
+    def make_load_window_kernel_func(self):
         n_features = self.n_features
         n_clusters = self.n_clusters
 
         zero = self.dtype(0.0)
-        zero_idx = np.int64(0)
-
-        n_window_features_per_work_group = (
-            self.work_group_size // self.full_window_n_centroids
-        )
-
-        centroids_window_height_ratio_multiplier = math.ceil(
-            window_n_features / n_window_features_per_work_group
-        )
 
         @dpex.func
         # fmt: off
@@ -298,32 +241,21 @@ class _KMeansKernelFuncFactory:
             centroids_window,               # OUT
         ):
         # fmt: on
-            centroid_window_first_loading_feature_idx = zero_idx
-
             # The work items in the work group cooperatively load the values in shared
             # memory. At each iteration, the work item loads one value and adjacent work
             # items load adjacent values.
-            for _2 in range(centroids_window_height_ratio_multiplier):
-                window_loading_feature_idx = (
-                    centroid_window_first_loading_feature_idx
-                    + window_loading_feature_offset
-                )
-                loading_feature_idx = first_feature_idx + window_loading_feature_idx
+            loading_feature_idx = first_feature_idx + window_loading_feature_offset
+            
+            if (loading_feature_idx < n_features) and (
+                loading_centroid_idx < n_clusters
+             ):
+                 value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
+            else:
+                 value = zero
 
-                if (loading_feature_idx < n_features) and (
-                    loading_centroid_idx < n_clusters
-                ):
-                    value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
-                else:
-                    value = zero
-
-                centroids_window[
-                    window_loading_feature_idx, window_loading_centroid_idx
-                ] = value
-
-                centroid_window_first_loading_feature_idx += (
-                    n_window_features_per_work_group
-                )
+            centroids_window[
+                window_loading_feature_offset, window_loading_centroid_idx
+            ] = value
 
         return _load_window_of_centroids_and_features
 

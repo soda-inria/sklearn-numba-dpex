@@ -15,16 +15,19 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
-    preferred_work_group_size_multiple,
-    centroids_window_width_multiplier,
-    centroids_window_height,
+    sub_group_size,
     work_group_size,
     dtype,
 ):
 
-    window_n_centroids = (
-        preferred_work_group_size_multiple * centroids_window_width_multiplier
-    )
+    window_n_centroids = sub_group_size
+    centroids_window_height = work_group_size // sub_group_size
+
+    if centroids_window_height * sub_group_size != work_group_size:
+        raise ValueError(
+            "Expected work_group_size to be a multiple of sub_group_size but got "
+            f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+        )
 
     (
         initialize_window_of_centroids,
@@ -38,7 +41,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_n_centroids,
         ops="squared_diff",
         dtype=dtype,
-        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=False,
     )
 
@@ -89,7 +91,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                     window_loading_feature_offset,
                     current_centroids_t,
                     centroids_window,
-                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -103,9 +104,9 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                     is_last_centroid_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
                 first_feature_idx += centroids_window_height
+
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
             if sample_idx < n_samples:
                 for i in range(window_n_centroids):
@@ -113,9 +114,9 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                     if centroid_idx < n_clusters:
                         euclidean_distances_t[first_centroid_idx + i, sample_idx] = math.sqrt(sq_distances[i])
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
             first_centroid_idx += window_n_centroids
+            
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return compute_distances[global_size, work_group_size]

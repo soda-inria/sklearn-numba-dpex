@@ -18,16 +18,18 @@ def make_label_assignment_fixed_window_kernel(
     n_samples,
     n_features,
     n_clusters,
-    preferred_work_group_size_multiple,
-    centroids_window_width_multiplier,
-    centroids_window_height,
+    sub_group_size,
     work_group_size,
     dtype,
 ):
+    window_n_centroids = sub_group_size
+    centroids_window_height = work_group_size // sub_group_size
 
-    window_n_centroids = (
-        preferred_work_group_size_multiple * centroids_window_width_multiplier
-    )
+    if centroids_window_height * sub_group_size != work_group_size:
+        raise ValueError(
+            "Expected work_group_size to be a multiple of sub_group_size but got "
+            f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+        )
 
     (
         initialize_window_of_centroids,
@@ -41,7 +43,6 @@ def make_label_assignment_fixed_window_kernel(
         window_n_centroids,
         ops="product",
         dtype=dtype,
-        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 
@@ -111,7 +112,6 @@ def make_label_assignment_fixed_window_kernel(
                     window_loading_feature_offset,
                     centroids_t,
                     centroids_window,
-                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -125,10 +125,10 @@ def make_label_assignment_fixed_window_kernel(
                     is_last_feature_window,
                     is_last_centroid_window
                 )
+                
+                first_feature_idx += centroids_window_height
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
-                first_feature_idx += centroids_window_height
 
             min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
@@ -139,9 +139,9 @@ def make_label_assignment_fixed_window_kernel(
                 is_last_centroid_window
             )
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
             first_centroid_idx += window_n_centroids
+            
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # No update step, only store min_idx in the output array
         if sample_idx >= n_samples:

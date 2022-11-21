@@ -16,7 +16,6 @@ from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
 def make_kmeansplusplus_init_kernel(
     n_samples,
     n_features,
-    preferred_work_group_size_multiple,
     work_group_size,
     dtype,
 ):
@@ -62,7 +61,6 @@ def make_kmeansplusplus_init_kernel(
 def make_sample_center_candidates_kernel(
     n_samples,
     n_local_trials,
-    preferred_work_group_size_multiple,
     work_group_size,
     dtype,
 ):
@@ -106,16 +104,19 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     n_samples,
     n_features,
     n_candidates,
-    preferred_work_group_size_multiple,
-    candidates_window_width_multiplier,
-    candidates_window_height,
+    sub_group_size,
     work_group_size,
     dtype,
 ):
 
-    window_n_candidates = (
-        preferred_work_group_size_multiple * candidates_window_width_multiplier
-    )
+    window_n_candidates = sub_group_size
+    candidates_window_height = work_group_size // sub_group_size
+
+    if candidates_window_height * sub_group_size != work_group_size:
+        raise ValueError(
+            "Expected work_group_size to be a multiple of sub_group_size but got "
+            f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+        )
 
     (
         initialize_window_of_candidates,
@@ -129,7 +130,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         window_n_candidates,
         ops="squared_diff",
         dtype=dtype,
-        work_group_size=work_group_size,
         initialize_window_of_centroids_half_l2_norms=False,
     )
 
@@ -185,7 +185,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     window_loading_feature_offset,
                     X_t,
                     candidates_window,
-                    is_last_feature_window
                 )
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -200,9 +199,9 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     is_last_candidate_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
                 first_feature_idx += candidates_window_height
+
+                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
             if sample_idx < n_samples:
                 sample_weight_ = sample_weight[sample_idx]
@@ -215,9 +214,9 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                             closest_dist_sq_)
                         sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
             first_candidate_idx += window_n_candidates
+
+            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return kmeansplusplus_single_step[global_size, work_group_size]
