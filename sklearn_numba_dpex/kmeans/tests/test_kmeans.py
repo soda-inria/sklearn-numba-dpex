@@ -427,12 +427,17 @@ def test_error_raised_on_invalid_group_sizes():
     work_group_size = 500  # invalid because is not a multiple of sub_group_size
     dtype = np.float32
 
-    with pytest.raises(ValueError):
+    expected_msg = (
+        "Expected work_group_size to be a multiple of sub_group_size but got "
+        f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+    )
+
+    with pytest.raises(ValueError, match=expected_msg):
         make_compute_euclidean_distances_fixed_window_kernel(
             n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
         )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=expected_msg):
         make_label_assignment_fixed_window_kernel(
             n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
         )
@@ -441,7 +446,7 @@ def test_error_raised_on_invalid_group_sizes():
     global_mem_cache_size = 123456789
     centroids_private_copies_max_cache_occupancy = 0.7
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=expected_msg):
         make_lloyd_single_step_fixed_window_kernel(
             n_samples,
             n_features,

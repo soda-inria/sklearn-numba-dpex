@@ -44,18 +44,18 @@ def make_lloyd_single_step_fixed_window_kernel(
     # The height of the window on centroids (or, equivalently, the number of features
     # in the window), and the width (number of centroids in the window), are chosen
     # such that:
-    # - the width is equal to the `sub_group_size`, which is the mininal size that
-    # optimizes IO patterns by having items in each sub group read contiguous memory
-    # slots, which can optimize IO bandwitch by trigerring coalescence of the read
-    # operations of each item in the sub group. Higher sizes would increase the
-    # pressure on private memory (since the size of the private array
-    # `dot_products` is equal to the width of the window) with no particular gain to
-    # expect.
-    # - the height is chosen such that the window counts `work_group_size` items.
-    # When a window is cooperatively loaded into shared memory by a work group, each
-    # work item is thus tasked with loading one and only one item.
-    # The number of items is `centroids_window_height * window_n_centroids =
-    # centroids_window_height * sub_group_size`
+    #   - the width is equal to the `sub_group_size`, which is the minimal size that
+    #     optimizes IO patterns by having items in each sub group read contiguous
+    #     memory slots.  This configuration can optimize IO bandwidth by triggering
+    #     coalescence of the read operations of each item in the sub group. Higher
+    #     sizes would increase the pressure on private memory (since the size of the
+    #     private `dot_products` array is equal to the width of the window) with no
+    #     particular gain to expect.
+    #   - the height is chosen such that the window counts `work_group_size` items.
+    #     When a window is cooperatively loaded into shared memory by a work group,
+    #     each work item is thus tasked with loading one and only one item. The number
+    #     of items is: `centroids_window_height * window_n_centroids`, i.e.
+    #     `centroids_window_height * sub_group_size`
     window_n_centroids = sub_group_size
     centroids_window_height = work_group_size // sub_group_size
 
@@ -242,7 +242,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                     centroids_window,
                     dot_products,
                     is_last_feature_window,
-                    is_last_centroid_window
+                    is_last_centroid_window,
                 )
 
                 first_feature_idx += centroids_window_height
