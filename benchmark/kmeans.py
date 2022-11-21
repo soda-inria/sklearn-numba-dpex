@@ -242,14 +242,14 @@ if __name__ == "__main__":
             is_slow=True,
         )
 
-    with override_attr_context(KMeansEngine, _DRIVER_CONFIG=dict(device="cpu")):
+    with override_attr_context(KMeansEngine, _CONFIG=dict(device="cpu")):
         kmeans_timer.timeit(
             name="Kmeans numba_dpex lloyd CPU",
             engine_provider="sklearn_numba_dpex",
             is_slow=True,
         )
 
-    with override_attr_context(KMeansEngine, _DRIVER_CONFIG=dict(device="gpu")):
+    with override_attr_context(KMeansEngine, _CONFIG=dict(device="gpu")):
         kmeans_timer.timeit(
             name="Kmeans numba_dpex lloyd GPU", engine_provider="sklearn_numba_dpex"
         )
