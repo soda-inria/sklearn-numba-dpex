@@ -1,14 +1,29 @@
-import warnings
+import numbers
+import contextlib
+import importlib
 
 import numpy as np
 import dpctl
 import dpctl.tensor as dpt
 
+import sklearn
+import sklearn.utils.validation as sklearn_validation
 from sklearn.cluster._kmeans import KMeansCythonEngine
+from sklearn.utils import check_random_state, check_array
+from sklearn.utils.validation import _is_arraylike_not_scalar
 
-from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
+from sklearn.exceptions import NotSupportedByEngineError
 
-from .drivers import lloyd, get_labels_inertia, get_euclidean_distances, kmeans_plusplus
+from sklearn_numba_dpex.testing.config import override_attr_context
+
+from .drivers import (
+    prepare_data_for_lloyd,
+    lloyd,
+    restore_data_after_lloyd,
+    get_labels_inertia,
+    get_euclidean_distances,
+    kmeans_plusplus,
+)
 
 
 class _IgnoreSampleWeight:
@@ -51,32 +66,29 @@ class KMeansEngine(KMeansCythonEngine):
 
     def __init__(self, estimator):
         self.device = dpctl.SyclDevice(self._CONFIG.get("device"))
+
+        # NB: numba_dpex kernels only currently supports working with C memory layout
+        # (see https://github.com/IntelPython/numba-dpex/issues/767) but our KMeans
+        # implementation is hypothetized to be more efficient with the F-memory layout.
+        # As a workaround the kernels work with the transpose of X, X_t, where X_t
+        # is created with a C layout, which results in equivalent memory access
+        # patterns than with a F layout for X.
+        # TODO: when numba_dpex supports inputs with F-layout:
+        # - use X rather than X_t and adapt the codebase (better for readability and
+        # more consistent with sklearn notations)
+        # - test the performances with both layouts and use the best performing layout.
+        order = self._CONFIG.get("order", "F")
+        if order != "F":
+            raise ValueError(
+                "Kernels compiled by numba_dpex called on an input array with "
+                "the Fortran memory layout silently return incorrect results: "
+                "https://github.com/IntelPython/numba-dpex/issues/767"
+            )
+        self.order = order
         super().__init__(estimator)
 
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
-        try:
-            # This pass of data validation only aims at detecting input types that are
-            # supported by the sklearn engine but not by KMeansEngine. For those inputs
-            # we raise a NotSupportedByEngineError exception.
-            # estimator._validate_data is called again in super().prepare_fit later on
-            # and will raise ValueError or TypeError for data that is not even
-            # compatible with the sklearn engine.
-            estimator._validate_data(
-                X,
-                accept_sparse=False,
-                dtype=None,
-                force_all_finite=False,
-                ensure_2d=False,
-                allow_nd=True,
-                ensure_min_samples=0,
-                ensure_min_features=0,
-                estimator=estimator,
-            )
-        except Exception as e:
-            raise NotSupportedByEngineError(
-                "The sklearn_nunmba_dpex engine for KMeans does not support the format of the inputed data."
-            ) from e
 
         algorithm = estimator.algorithm
         if algorithm not in ("lloyd", "auto", "full"):
@@ -84,64 +96,97 @@ class KMeansEngine(KMeansCythonEngine):
                 f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
             )
 
-        self.sample_weight = sample_weight
+        # NB: self.estimator.copy_x is enforced later on only if X_mean has at
+        # least one non-null value
+        X = self._validate_data(X)
+        estimator._check_params_vs_input(X)
 
-        return super().prepare_fit(X, y, sample_weight)
+        self.sample_weight = self._check_sample_weight(sample_weight, X)
+
+        init = self.estimator.init
+        init_is_array_like = _is_arraylike_not_scalar(init)
+        if init_is_array_like:
+            init = self._check_init(init, X)
+
+        X_t, X_mean, self.init, self.tol = prepare_data_for_lloyd(
+            X.T, init, estimator.tol, estimator.copy_x
+        )
+
+        self.X_mean = X_mean
+
+        self.random_state = check_random_state(estimator.random_state)
+
+        return X_t.T, y, self.sample_weight
+
+    def unshift_centers(self, X, best_centers):
+        if (X_mean := self.X_mean) is None:
+            return
+
+        best_centers += dpt.asnumpy(X_mean.get_array())
+
+        # NB: self.estimator.copy_x being set to False does not mean that no copy
+        # actually happened, only that no copy was forced if it was not necessary
+        # with respect to what device, dtype and order that are required at compute
+        # time. Nevertheless, there's no simple way to check if a copy happened
+        # without assumptions on the type of the raw input submitted by the user,
+        # but at the moment it is unknown what those assumptions could be.
+        # As a result, the following instructions are ran every time, even if it
+        # isn't useful when a copy has been made.
+        # TODO: is there a set of assumptions that exhaustively describe the set
+        # of accepted inputs, and also enables checking if a copy happened or not
+        # in a simple way ?
+        if not self.estimator.copy_x:
+            restore_data_after_lloyd(X.T, X_mean)
 
     def init_centroids(self, X):
         init = self.init
+        n_clusters = self.estimator.n_clusters
 
-        if isinstance(init, str) and init == "k-means++":
-            centers, _ = self._kmeans_plusplus(X)
+        if isinstance(init, dpt.usm_ndarray):
+            centers_t = init
+
+        elif isinstance(init, str) and init == "k-means++":
+            centers_t, _ = self._kmeans_plusplus(X)
+
+        elif callable(init):
+            centers = init(X, self.estimator.n_clusters, random_state=self.random_state)
+            centers_t = self._check_init(centers, X)
 
         else:
-            centers = self.estimator._init_centroids(
-                X,
-                x_squared_norms=self.x_squared_norms,
-                init=init,
-                random_state=self.random_state,
+            # NB: sampling without replacement must be executed sequentially so
+            # it's better adapted to CPU
+            centers_idx = self.random_state.choice(
+                X.shape[0], size=n_clusters, replace=False
             )
-        return centers
+            # Poor man's fancy indexing
+            # TODO: write a kernel ? or replace with better equivalent when available ?
+            centers_t = dpt.concat(
+                [dpt.expand_dims(X[center_idx], axes=1) for center_idx in centers_idx],
+                axis=1,
+            )
+
+        return centers_t
 
     def _kmeans_plusplus(self, X):
         n_clusters = self.estimator.n_clusters
 
-        if X.shape[0] < n_clusters:
-            raise ValueError(
-                f"n_samples={X.shape[0]} should be >= n_clusters={n_clusters}."
-            )
-
-        X, sample_weight, _, output_dtype = self._check_inputs(
-            X, self.sample_weight, cluster_centers=None
+        centers_t, center_indices = kmeans_plusplus(
+            X.T, self.sample_weight, n_clusters, self.random_state
         )
+        return centers_t, center_indices
 
-        X_t, sample_weight, _ = self._load_transposed_data_to_device(
-            X, sample_weight, cluster_centers=None
-        )
-
-        centers, center_indices = kmeans_plusplus(
-            X_t, sample_weight, n_clusters, self.random_state
-        )
-
-        centers = dpt.asnumpy(centers).astype(output_dtype, copy=False)
-        center_indices = dpt.asnumpy(center_indices)
-        return centers, center_indices
-
-    def kmeans_single(self, X, sample_weight, centers_init):
-        X, sample_weight, cluster_centers, output_dtype = self._check_inputs(
-            X, sample_weight, centers_init
-        )
-
-        use_uniform_weights = (sample_weight == sample_weight[0]).all()
-
-        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
-            X, sample_weight, cluster_centers
-        )
+    def kmeans_single(self, X, sample_weight, centers_init_t):
+        # ???: using `.all()` often segfaults
+        # TODO: minimal reproducer and issue at dpnp
+        # or write a kernel ?
+        use_uniform_weights = (sample_weight == sample_weight[0]).astype(
+            int
+        ).sum() == len(sample_weight)
 
         assignments_idx, inertia, best_centroids, n_iteration = lloyd(
-            X_t,
+            X.T,
             sample_weight,
-            centroids_t,
+            centers_init_t,
             use_uniform_weights,
             self.estimator.max_iter,
             self.estimator.verbose,
@@ -156,155 +201,160 @@ class KMeansEngine(KMeansCythonEngine):
             inertia,
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
-            np.ascontiguousarray(
-                dpt.asnumpy(best_centroids).astype(output_dtype, copy=False)
-            ),
+            # ???: rather that returning whatever dtype the driver returns (which might
+            # depends on device support for float64), shouldn't we cast to a dtype that
+            # is always consistent with the input ? (e.g. cast to float64 if the input
+            # was given as float64 ?) But what assumptions can we make on the input
+            # so we can infer its input dtype without risking triggering a copy of it ?
+            np.ascontiguousarray(dpt.asnumpy(best_centroids.T)),
             n_iteration,
         )
 
+    def prepare_prediction(self, X, sample_weight):
+        X = self._validate_data(X, reset=False)
+        sample_weight = self._check_sample_weight(sample_weight, X)
+        return X, sample_weight
+
     def get_labels(self, X, sample_weight):
-        labels, _ = self._get_labels_inertia(X, with_inertia=False)
+        # TODO: sample_weight actually not used for get_labels. Fix in sklearn ?
+        labels, _ = self._get_labels_inertia(X, sample_weight, with_inertia=False)
         return dpt.asnumpy(labels).astype(np.int32, copy=False)
 
     def get_score(self, X, sample_weight):
         _, inertia = self._get_labels_inertia(X, sample_weight, with_inertia=True)
         return inertia
 
-    def _get_labels_inertia(
-        self, X, sample_weight=_IgnoreSampleWeight, with_inertia=True
-    ):
-        X, sample_weight, centers, output_dtype = self._check_inputs(
-            X,
-            sample_weight=sample_weight,
-            cluster_centers=self.estimator.cluster_centers_,
-        )
-
-        if sample_weight is _IgnoreSampleWeight:
-            sample_weight = None
-
-        X_t, sample_weight, centroids_t = self._load_transposed_data_to_device(
-            X, sample_weight, centers
+    def _get_labels_inertia(self, X, sample_weight, with_inertia=True):
+        cluster_centers = self._check_init(
+            self.estimator.cluster_centers_, X, copy=False
         )
 
         assignments_idx, inertia = get_labels_inertia(
-            X_t, centroids_t, sample_weight, with_inertia
+            X.T, cluster_centers, sample_weight, with_inertia
         )
 
         if with_inertia:
             # inertia is a 1-sized numpy array, we transform it into a scalar:
-            inertia = inertia.astype(output_dtype)[0]
+            inertia = inertia[0]
 
         return assignments_idx, inertia
 
+    def prepare_transform(self, X):
+        # TODO: fix fit_transform in sklearn: need to call prepare_transform
+        # inbetween fit and transform ? or remove prepare_transform ?
+        return X
+
     def get_euclidean_distances(self, X):
-        X, _, Y, output_dtype = self._check_inputs(
-            X,
-            sample_weight=_IgnoreSampleWeight,
-            cluster_centers=self.estimator.cluster_centers_,
+        X = self._validate_data(X, reset=False)
+        cluster_centers = self._check_init(
+            self.estimator.cluster_centers_, X, copy=False
         )
+        euclidean_distances = get_euclidean_distances(X.T, cluster_centers)
+        return dpt.asnumpy(euclidean_distances)
 
-        X_t, _, Y_t = self._load_transposed_data_to_device(X, None, Y)
-
-        euclidean_distances = get_euclidean_distances(X_t, Y_t)
-
-        return dpt.asnumpy(euclidean_distances).astype(output_dtype, copy=False)
-
-    def _check_inputs(self, X, sample_weight, cluster_centers):
-
-        if sample_weight is None:
-            sample_weight = np.ones(len(X), dtype=X.dtype)
-
-        X, sample_weight, cluster_centers, output_dtype = self._set_dtype(
-            X, sample_weight, cluster_centers
-        )
-
-        return X, sample_weight, cluster_centers, output_dtype
-
-    def _set_dtype(self, X, sample_weight, cluster_centers):
-        output_dtype = compute_dtype = np.dtype(X.dtype).type
-        copy = True
-        if (compute_dtype != np.float32) and (compute_dtype != np.float64):
-            text = (
-                f"KMeans has been set to compute with type {compute_dtype} but only "
-                f"the types float32 and float64 are supported. The computations and "
-                f"outputs will default back to float32 type."
-            )
-            output_dtype = compute_dtype = np.float32
-        elif (compute_dtype == np.float64) and not self.device.has_aspect_fp64:
-            text = (
-                f"KMeans is set to compute with type {compute_dtype} but this type is "
-                f"not supported by the device {self.device.name}. The computations "
-                f"will default back to float32 type."
-            )
-            compute_dtype = np.float32
-
+    def _validate_data(self, X, reset=True):
+        accepted_dtypes = [np.float32]
+        # NB: one could argue that `float32` is a better default, but sklearn defaults
+        # to `np.float64` and we is apply the same for consistence.
+        if self.device.has_aspect_fp64:
+            accepted_dtypes = [np.float64, np.float32]
         else:
-            copy = False
+            accepted_dtypes = [np.float32]
 
-        if copy:
-            text += (
-                f" A copy of the data casted to type {compute_dtype} will be created. "
-                f"To save memory and suppress this warning, ensure that the dtype of "
-                f"the input data matches the dtype required for computations."
+        with _validate_with_array_api():
+            try:
+                X = self.estimator._validate_data(
+                    X,
+                    accept_sparse=False,
+                    dtype=accepted_dtypes,
+                    order=self.order,
+                    copy=False,
+                    reset=reset,
+                    force_all_finite=True,
+                    estimator=self.estimator,
+                )
+                return X
+            except TypeError as type_error:
+                if "A sparse matrix was passed, but dense data is required" in str(
+                    type_error
+                ):
+                    raise NotSupportedByEngineError from TypeError
+
+    def _check_sample_weight(self, sample_weight, X):
+        """Adapted from sklearn.utils.validation._check_sample_weight to be compatible
+        with Array API dispatching"""
+        n_samples = X.shape[0]
+        dtype = X.dtype
+        if sample_weight is None:
+            sample_weight = dpt.ones(n_samples, dtype=dtype, device=self.device)
+        elif isinstance(sample_weight, numbers.Number):
+            sample_weight = dpt.full(n_samples, 1, dtype=dtype, device=self.device)
+        else:
+            with _validate_with_array_api():
+                sample_weight = check_array(
+                    sample_weight,
+                    accept_sparse=False,
+                    order="C",
+                    dtype=dtype,
+                    force_all_finite=True,
+                    ensure_2d=False,
+                    allow_nd=False,
+                    estimator=self.estimator,
+                    input_name="sample_weight",
+                )
+
+            if sample_weight.ndim != 1:
+                raise ValueError("Sample weights must be 1D array or scalar")
+
+            if sample_weight.shape != (n_samples,):
+                raise ValueError(
+                    "sample_weight.shape == {}, expected {}!".format(
+                        sample_weight.shape, (n_samples,)
+                    )
+                )
+            sample_weight = dpt.asarray(sample_weight, device=self.device)
+
+        return sample_weight
+
+    def _check_init(self, init, X, copy=False):
+        with _validate_with_array_api():
+            init = check_array(
+                init,
+                dtype=X.dtype,
+                accept_sparse=False,
+                copy=False,
+                order=self.order,
+                force_all_finite=True,
+                ensure_2d=True,
+                estimator=self.estimator,
+                input_name="init",
             )
-            warnings.warn(text, DataConversionWarning)
-            # TODO: instead of triggering a copy on the host side, we could use the
-            # dtype to allocate a shared USM buffer and fill it with casted values from
-            # X. In this case we should only warn when:
-            #     (dtype == np.float64) and not self.has_aspect_fp64
-            # The other cases would not trigger any additional memory copies.
-            X = X.astype(compute_dtype)
+            self.estimator._validate_center_shape(X, init)
+            init_t = dpt.asarray(init.T, order="C", copy=False)
+            return init_t
 
-        if cluster_centers is not None and (
-            (cluster_centers_dtype := cluster_centers.dtype) != compute_dtype
-        ):
-            warnings.warn(
-                f"The centers have been passed with type {cluster_centers_dtype} but "
-                f"type {compute_dtype} is expected. A copy will be created with the "
-                f"correct type {compute_dtype}. Ensure that the centers are passed "
-                f"with the correct dtype to save memory and suppress this warning.",
-                DataConversionWarning,
-            )
-            cluster_centers = cluster_centers.astype(compute_dtype)
 
-        if (sample_weight is not _IgnoreSampleWeight) and (
-            sample_weight.dtype != compute_dtype
-        ):
-            warnings.warn(
-                f"sample_weight has been passed with type {sample_weight.dtype} but "
-                f"type {compute_dtype} is expected. A copy will be created with the "
-                f"correct type {compute_dtype}. Ensure that sample_weight is passed "
-                f"with the correct dtype to save memory and suppress this warning.",
-                DataConversionWarning,
-            )
-            sample_weight = sample_weight.astype(compute_dtype)
+def _get_namespace(*arrays):
+    return dpt, True
 
-        return X, sample_weight, cluster_centers, output_dtype
 
-    def _load_transposed_data_to_device(self, X, sample_weight, cluster_centers):
-        # Transfer the input data to device memory,
-        # TODO: let the user pass directly dpt or dpnp arrays to avoid copies.
+def _asarray_with_order(array, dtype, order, copy=None, xp=None):
+    return dpt.asarray(array, dtype=dtype, order=order, copy=copy)
 
-        # NB: numba_dpex kernels only currently supports inputs with a C memory layout
-        # (see https://github.com/IntelPython/numba-dpex/issues/767) but our KMeans
-        # implementation is hypothetized to be more efficient with the F-memory layout.
-        # As a workaround the kernels work with the transpose of X, X_t, where X_t
-        # is created with a C layout, which results in equivalent memory access
-        # patterns than with a F layout for X.
-        # TODO: when numba_dpex supports inputs with F-layout:
-        # - use X rather than X_t and adapt the codebase (better for readability and
-        # more consistent with sklearn notations)
-        # - test the performances with both layouts and use the best performing layout.
 
-        X_t = dpt.asarray(X.T, order="C", device=self.device)
-        assert (
-            X_t.strides[1] == 1
-        )  # C memory layout, equivalent to Fortran layout on transposed
-
-        if sample_weight is not None:
-            sample_weight = dpt.from_numpy(sample_weight, device=self.device)
-
-        if cluster_centers is not None:
-            cluster_centers = dpt.from_numpy(cluster_centers.T, device=self.device)
-
-        return X_t, sample_weight, cluster_centers
+@contextlib.contextmanager
+def _validate_with_array_api():
+    # TODO: when https://github.com/IntelPython/dpctl/issues/997 and
+    # https://github.com/scikit-learn/scikit-learn/issues/25000 and are solved
+    # remove those hacks.
+    with sklearn.config_context(
+        array_api_dispatch=True,
+        assume_finite=True  # workaround 1: disable force_all_finite
+        # workaround 2: monkey patch get_namespace and _asarray_with_order to force
+        # dpctl.tensor array namespace
+    ), override_attr_context(
+        sklearn_validation,
+        get_namespace=_get_namespace,
+        _asarray_with_order=_asarray_with_order,
+    ):
+        yield

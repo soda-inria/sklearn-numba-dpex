@@ -142,7 +142,7 @@ def test_euclidean_distance(dtype):
 
     expected = np.sqrt(((a - b) ** 2).sum())
 
-    estimator = KMeans()
+    estimator = KMeans(n_clusters=len(b))
     estimator.cluster_centers_ = b
     engine = KMeansEngine(estimator)
 
@@ -162,16 +162,16 @@ def test_inertia(dtype):
     sample_weight = rng.standard_normal(100, dtype=dtype)
     centers = rng.standard_normal((5, 10), dtype=dtype)
 
-    estimator = KMeans()
+    estimator = KMeans(n_clusters=len(centers))
     estimator.cluster_centers_ = centers
     engine = KMeansEngine(estimator)
-
-    labels = engine.get_labels(X, sample_weight)
+    X_prepared, sample_weight_prepared = engine.prepare_prediction(X, sample_weight)
+    labels = engine.get_labels(X_prepared, sample_weight_prepared)
 
     distances = ((X - centers[labels]) ** 2).sum(axis=1)
     expected = np.sum(distances * sample_weight)
 
-    inertia = engine.get_score(X, sample_weight)
+    inertia = engine.get_score(X_prepared, sample_weight_prepared)
 
     rtol = 1e-4 if dtype == np.float32 else 1e-6
     assert_allclose(inertia, expected, rtol=rtol)
@@ -336,8 +336,10 @@ def test_kmeans_plusplus_same_quality(dtype):
 
         kmeans.set_params(random_state=random_state)
         engine = KMeansEngine(kmeans)
-        engine.prepare_fit(X)
-        engine_kmeans_plusplus_centers = engine.init_centroids(X)
+        X_prepared, *_ = engine.prepare_fit(X)
+        engine_kmeans_plusplus_centers = engine.init_centroids(X_prepared)
+        engine_kmeans_plusplus_centers = dpt.asnumpy(engine_kmeans_plusplus_centers.T)
+        engine.unshift_centers(X_prepared, engine_kmeans_plusplus_centers)
         scores_engine_kmeans_plusplus.append(
             _get_score_with_centers(engine_kmeans_plusplus_centers)
         )
@@ -350,9 +352,9 @@ def test_kmeans_plusplus_same_quality(dtype):
     # loop. E.g., for 200 iterations with dtype float32:
     #
     # [
-    #     -1786.160542907715,   # np.mean(scores_random_init)
-    #     -886.2205599975586,   # np.mean(scores_vanilla_kmeans_plusplus)
-    #     -876.5628140258789,   # np.mean(scores_engine_kmeans_plusplus)
+    #     -1786.16057,     # np.mean(scores_random_init)
+    #     -886.220595,     # np.mean(scores_vanilla_kmeans_plusplus)
+    #     -876.56282806,   # np.mean(scores_engine_kmeans_plusplus)
     # ]
 
     assert_allclose(
@@ -364,7 +366,7 @@ def test_kmeans_plusplus_same_quality(dtype):
         [
             -1827.22702,
             -1027.674243,
-            -865.257397,
+            -865.257501,
         ],
     )
 
@@ -380,13 +382,15 @@ def test_kmeans_plusplus_output(dtype):
     sample_weight = default_rng(random_state).random(X.shape[0], dtype=dtype)
 
     estimator = KMeans(
-        init="k-means++",
-        n_clusters=n_clusters_sklearn_test,
-        random_state=random_state,
+        init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    engine.prepare_fit(X, sample_weight=sample_weight)
-    centers, indices = engine._kmeans_plusplus(X)
+    X_prepared, *_ = engine.prepare_fit(X, sample_weight=sample_weight)
+
+    centers, indices = engine._kmeans_plusplus(X_prepared)
+    centers = dpt.asnumpy(centers.T)
+    engine.unshift_centers(X_prepared, centers)
+    indices = dpt.asnumpy(indices)
 
     # Check there are the correct number of indices and that all indices are
     # positive and within the number of samples
@@ -414,15 +418,16 @@ def test_kmeans_plusplus_dataorder():
         init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    engine.prepare_fit(X_sklearn_test)
-    centers_c = engine.init_centroids(X_sklearn_test)
+    X_sklearn_test_prepared, *_ = engine.prepare_fit(X_sklearn_test)
+    centers_c = engine.init_centroids(X_sklearn_test_prepared)
+    centers_c = dpt.asnumpy(centers_c.T)
 
     X_fortran = np.asfortranarray(X_sklearn_test)
-
     # The engine is re-created to reset random state
     engine = KMeansEngine(estimator)
-    engine.prepare_fit(X_sklearn_test)
-    centers_fortran = engine.init_centroids(X_fortran)
+    X_fortran_prepared, *_ = engine.prepare_fit(X_fortran)
+    centers_fortran = engine.init_centroids(X_fortran_prepared)
+    centers_fortran = dpt.asnumpy(centers_fortran.T)
 
     assert_allclose(centers_c, centers_fortran)
 

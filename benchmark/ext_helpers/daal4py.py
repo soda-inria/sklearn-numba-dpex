@@ -1,33 +1,38 @@
 import warnings
 import sklearn
 
+
 # HACK: daal4py will fail to import with too recent versions of sklearn because
 # of this missing attribute. Let's pretend it still exists.
-
-if not hasattr(sklearn.neighbors._base, "_check_weights"):
-    warnings.warn(
-        f"The current version of scikit-learn ( =={sklearn.__version__} ) is too "
-        "recent to ensure good compatibility with sklearn intelex, who only supports "
-        "sklearn >=0.22, <1.1 . Use very cautiously, things might not work as "
-        "expected...",
-        RuntimeWarning,
-    )
-    try:
+try:
+    if not hasattr(sklearn.neighbors._base, "_check_weights"):
+        warnings.warn(
+            f"The current version of scikit-learn ( =={sklearn.__version__} ) is too "
+            "recent to ensure good compatibility with sklearn intelex, who only supports "
+            "sklearn >=0.22, <1.1 . Use very cautiously, things might not work as "
+            "expected...",
+            RuntimeWarning,
+        )
+        _daal4py_kmeans_compat_mode = True
         sklearn.neighbors._base._check_weights = None
-        from daal4py.sklearn.cluster._k_means_0_23 import KMeans
-    finally:
+    from daal4py.sklearn.cluster._k_means_0_23 import (
+        KMeans,
+        _daal4py_compute_starting_centroids,
+        getFPType,
+    )
+finally:
+    if _daal4py_kmeans_compat_mode:
         del sklearn.neighbors._base._check_weights
-else:
-    from daal4py.sklearn.cluster._k_means_0_23 import KMeans
+
 
 from sklearn.exceptions import NotSupportedByEngineError
-from sklearn_numba_dpex.kmeans.engine import KMeansEngine
+from sklearn.cluster._kmeans import KMeansCythonEngine
 
 
 # TODO: instead of relying on monkey patching the default engine, find a way to
 # register a distinct entry point that can load a distinct engine outside of setup.py
 # (impossible ?)
-class DAAL4PYEngine(KMeansEngine):
+class DAAL4PYEngine(KMeansCythonEngine):
     def prepare_fit(self, X, y=None, sample_weight=None):
         if sample_weight is not None and any(sample_weight != sample_weight[0]):
             raise NotSupportedByEngineError(
@@ -37,7 +42,15 @@ class DAAL4PYEngine(KMeansEngine):
         return super().prepare_fit(X, y, sample_weight)
 
     def init_centroids(self, X):
-        return super(KMeansEngine, self).init_centroids(X)
+        _, centroids = _daal4py_compute_starting_centroids(
+            X,
+            getFPType(X),
+            self.estimator.n_clusters,
+            self.estimator.init,
+            self.estimator.verbose,
+            self.random_state,
+        )
+        return centroids
 
     def kmeans_single(self, X, sample_weight, centers_init):
 
