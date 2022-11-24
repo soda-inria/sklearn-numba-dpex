@@ -264,7 +264,7 @@ class KMeansEngine(KMeansCythonEngine):
         else:
             accepted_dtypes = [np.float32]
 
-        with _validate_with_array_api():
+        with _validate_with_array_api(self.device):
             try:
                 X = self.estimator._validate_data(
                     X,
@@ -293,7 +293,7 @@ class KMeansEngine(KMeansCythonEngine):
         elif isinstance(sample_weight, numbers.Number):
             sample_weight = dpt.full(n_samples, 1, dtype=dtype, device=self.device)
         else:
-            with _validate_with_array_api():
+            with _validate_with_array_api(self.device):
                 sample_weight = check_array(
                     sample_weight,
                     accept_sparse=False,
@@ -319,7 +319,7 @@ class KMeansEngine(KMeansCythonEngine):
         return sample_weight
 
     def _check_init(self, init, X, copy=False):
-        with _validate_with_array_api():
+        with _validate_with_array_api(self.device):
             init = check_array(
                 init,
                 dtype=X.dtype,
