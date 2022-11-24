@@ -38,11 +38,17 @@ def test_dpnp_implements_argpartition():
     )
 
 
+@pytest.mark.parametrize(
+    "array_constr",
+    [np.asarray, dpt.asarray, dpnp.asarray],
+    ids=["numpy", "dpctl", "dpnp"],
+)
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_kmeans_same_results(dtype):
+def test_kmeans_same_results(dtype, array_constr):
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
+    X_array = array_constr(X, dtype=dtype)
 
     kmeans_vanilla = KMeans(
         random_state=random_seed, algorithm="lloyd", max_iter=1, init="random"
@@ -53,7 +59,7 @@ def test_kmeans_same_results(dtype):
     kmeans_vanilla.fit(X)
 
     with config_context(engine_provider="sklearn_numba_dpex"):
-        kmeans_engine.fit(X)
+        kmeans_engine.fit(X_array)
 
     # ensure same results
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
@@ -63,7 +69,7 @@ def test_kmeans_same_results(dtype):
     # test fit_predict
     y_labels = kmeans_vanilla.fit_predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
-        y_labels_engine = kmeans_engine.fit_predict(X)
+        y_labels_engine = kmeans_engine.fit_predict(X_array)
     assert_array_equal(y_labels, y_labels_engine)
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
@@ -72,7 +78,7 @@ def test_kmeans_same_results(dtype):
     # test fit_transform
     y_transform = kmeans_vanilla.fit_transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
-        y_transform_engine = kmeans_engine.fit_transform(X)
+        y_transform_engine = kmeans_engine.fit_transform(X_array)
     assert_allclose(y_transform, y_transform_engine)
     assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
     assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
@@ -81,19 +87,19 @@ def test_kmeans_same_results(dtype):
     # # test predict method (returns labels)
     y_labels = kmeans_vanilla.predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
-        y_labels_engine = kmeans_engine.predict(X)
+        y_labels_engine = kmeans_engine.predict(X_array)
     assert_array_equal(y_labels, y_labels_engine)
 
     # test score method (returns negative inertia for each sample)
     y_scores = kmeans_vanilla.score(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
-        y_scores_engine = kmeans_engine.score(X)
+        y_scores_engine = kmeans_engine.score(X_array)
     assert_allclose(y_scores, y_scores_engine)
 
     # test transform method (returns euclidean distances)
     y_transform = kmeans_vanilla.transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
-        y_transform_engine = kmeans_engine.transform(X)
+        y_transform_engine = kmeans_engine.transform(X_array)
     assert_allclose(y_transform, y_transform_engine)
 
 
@@ -372,12 +378,17 @@ def test_kmeans_plusplus_same_quality(dtype):
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_kmeans_plusplus_output(dtype):
+@pytest.mark.parametrize(
+    "array_constr",
+    [np.asarray, dpt.asarray, dpnp.asarray],
+    ids=["numpy", "dpctl", "dpnp"],
+)
+def test_kmeans_plusplus_output(array_constr, dtype):
     """Test adapted from sklearn's test_kmeans_plusplus_output"""
     random_state = 42
 
     # Check for the correct number of seeds and all positive values
-    X = X_sklearn_test.astype(dtype)
+    X = array_constr(X_sklearn_test, dtype=dtype)
 
     sample_weight = default_rng(random_state).random(X.shape[0], dtype=dtype)
 
@@ -400,13 +411,13 @@ def test_kmeans_plusplus_output(dtype):
 
     # Check for the correct number of seeds and that they are bound by the data
     assert centers.shape[0] == n_clusters_sklearn_test
-    assert (centers.max(axis=0) <= X.max(axis=0)).all()
-    assert (centers.min(axis=0) >= X.min(axis=0)).all()
+    assert (centers.max(axis=0) <= X_sklearn_test.max(axis=0)).all()
+    assert (centers.min(axis=0) >= X_sklearn_test.min(axis=0)).all()
     # NB: dtype can change depending on the device, so we accept all valid dtypes.
     assert centers.dtype.type in {np.float32, np.float64}
 
     # Check that indices correspond to reported centers
-    assert_allclose(X[indices].astype(dtype), centers)
+    assert_allclose(X_sklearn_test[indices].astype(dtype), centers)
 
 
 def test_kmeans_plusplus_dataorder():
