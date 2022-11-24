@@ -5,7 +5,8 @@ import sklearn
 # HACK: daal4py will fail to import with too recent versions of sklearn because
 # of this missing attribute. Let's pretend it still exists.
 try:
-    if not hasattr(sklearn.neighbors._base, "_check_weights"):
+    _daal4py_kmeans_compat_mode = not hasattr(sklearn.neighbors._base, "_check_weights")
+    if _daal4py_kmeans_compat_mode:
         warnings.warn(
             f"The current version of scikit-learn ( =={sklearn.__version__} ) is too "
             "recent to ensure good compatibility with sklearn intelex, who only "
@@ -13,7 +14,6 @@ try:
             "work as expected...",
             RuntimeWarning,
         )
-        _daal4py_kmeans_compat_mode = True
         sklearn.neighbors._base._check_weights = None
     from daal4py.sklearn.cluster._k_means_0_23 import (
         _daal4py_compute_starting_centroids,
