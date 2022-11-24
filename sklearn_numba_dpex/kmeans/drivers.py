@@ -328,76 +328,6 @@ def lloyd(
     return assignments_idx, inertia, centroids_t, n_iteration
 
 
-def prepare_data_for_lloyd(X_t, init, tol, copy_x):
-    n_features, n_samples = X_t.shape
-    compute_dtype = X_t.dtype.type
-
-    device = X_t.device.sycl_device
-    max_work_group_size = device.max_work_group_size
-
-    sum_axis1_kernel = make_sum_reduction_2d_axis1_kernel(
-        X_t.shape[0],
-        X_t.shape[1],
-        device.max_work_group_size,
-        device=device,
-        dtype=compute_dtype,
-    )
-
-    X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
-
-    if (X_mean == 0).astype(int).sum() == len(X_mean):
-        X_mean = None
-    else:
-        X_t = dpt.asarray(X_t, copy=copy_x)
-        broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-            n_features,
-            n_samples,
-            ops="minus",
-            work_group_size=max_work_group_size,
-        )
-
-        broadcast_X_minus_X_mean(X_t, X_mean)
-
-        if isinstance(init, dpt.usm_ndarray):
-            n_clusters = init.shape[1]
-            broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-                n_features,
-                n_clusters,
-                ops="minus",
-                work_group_size=max_work_group_size,
-            )
-            broadcast_init_minus_X_mean(init, X_mean)
-
-    variance_kernel = make_sum_reduction_2d_axis1_kernel(
-        n_features * n_samples,
-        None,
-        max_work_group_size,
-        device=device,
-        dtype=compute_dtype,
-        fused_unary_func=lambda x: x * x,
-    )
-    variance = variance_kernel(dpt.reshape(X_t, -1)) / n_features
-    tol = variance * tol
-
-    return X_t, X_mean, init, tol
-
-
-def restore_data_after_lloyd(X_t, X_mean):
-    n_features, n_samples = X_t.shape
-
-    device = X_t.device.sycl_device
-    max_work_group_size = device.max_work_group_size
-
-    X_t = dpt.asarray(X_t, copy=False)
-    broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-        n_features,
-        n_samples,
-        ops="plus",
-        work_group_size=max_work_group_size,
-    )
-    broadcast_X_plus_X_mean(X_t, X_mean)
-
-
 def _relocate_empty_clusters(
     n_empty_clusters,
     X_t,
@@ -470,6 +400,88 @@ def _relocate_empty_clusters(
         centroids_t,
         cluster_sizes,
     )
+
+
+def prepare_data_for_lloyd(X_t, init, tol, copy_x):
+    n_features, n_samples = X_t.shape
+    compute_dtype = X_t.dtype.type
+
+    device = X_t.device.sycl_device
+    max_work_group_size = device.max_work_group_size
+
+    sum_axis1_kernel = make_sum_reduction_2d_axis1_kernel(
+        X_t.shape[0],
+        X_t.shape[1],
+        device.max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+    )
+
+    X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
+
+    if (X_mean == 0).astype(int).sum() == len(X_mean):
+        X_mean = None
+    else:
+        X_t = dpt.asarray(X_t, copy=copy_x)
+        broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+            n_features,
+            n_samples,
+            ops=_minus,
+            work_group_size=max_work_group_size,
+        )
+
+        broadcast_X_minus_X_mean(X_t, X_mean)
+
+        if isinstance(init, dpt.usm_ndarray):
+            n_clusters = init.shape[1]
+            broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+                n_features,
+                n_clusters,
+                ops=_minus,
+                work_group_size=max_work_group_size,
+            )
+            broadcast_init_minus_X_mean(init, X_mean)
+
+    variance_kernel = make_sum_reduction_2d_axis1_kernel(
+        n_features * n_samples,
+        None,
+        max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+        fused_unary_func=_square,
+    )
+    variance = variance_kernel(dpt.reshape(X_t, -1)) / n_features
+    tol = variance * tol
+
+    return X_t, X_mean, init, tol
+
+
+def _square(x):
+    return x * x
+
+
+def restore_data_after_lloyd(X_t, X_mean):
+    n_features, n_samples = X_t.shape
+
+    device = X_t.device.sycl_device
+    max_work_group_size = device.max_work_group_size
+
+    X_t = dpt.asarray(X_t, copy=False)
+    broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+        n_features,
+        n_samples,
+        ops=_plus,
+        work_group_size=max_work_group_size,
+    )
+    broadcast_X_plus_X_mean(X_t, X_mean)
+
+
+def _minus(x, y):
+    return x - y
+
+
+def _plus(x, y):
+    return x + y
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):

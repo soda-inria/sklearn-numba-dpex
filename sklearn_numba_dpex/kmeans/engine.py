@@ -62,6 +62,11 @@ class KMeansEngine(KMeansCythonEngine):
 
     """
 
+    # This class attribute can alter globally the attributes `device` and `order` of
+    # future instances. It is only used for testing purposes, using
+    # `sklearn_numba_dpex.testing.config.override_attr_context` context, for instance
+    # in the benchmark script.
+    # For normal usage, the compute will follow the __compute_follow_data__ principle.
     _CONFIG = dict()
 
     def __init__(self, estimator):
@@ -96,8 +101,6 @@ class KMeansEngine(KMeansCythonEngine):
                 f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
             )
 
-        # NB: self.estimator.copy_x is enforced later on only if X_mean has at
-        # least one non-null value
         X = self._validate_data(X)
         estimator._check_params_vs_input(X)
 
@@ -132,7 +135,7 @@ class KMeansEngine(KMeansCythonEngine):
         # but at the moment it is unknown what those assumptions could be.
         # As a result, the following instructions are ran every time, even if it
         # isn't useful when a copy has been made.
-        # TODO: is there a set of assumptions that exhaustively describe the set
+        # TODO: is there a set of assumptions that exhaustively describes the set
         # of accepted inputs, and also enables checking if a copy happened or not
         # in a simple way ?
         if not self.estimator.copy_x:
@@ -154,7 +157,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         else:
             # NB: sampling without replacement must be executed sequentially so
-            # it's better adapted to CPU
+            # it's better done on CPU
             centers_idx = self.random_state.choice(
                 X.shape[0], size=n_clusters, replace=False
             )
@@ -255,7 +258,7 @@ class KMeansEngine(KMeansCythonEngine):
     def _validate_data(self, X, reset=True):
         accepted_dtypes = [np.float32]
         # NB: one could argue that `float32` is a better default, but sklearn defaults
-        # to `np.float64` and we is apply the same for consistence.
+        # to `np.float64` and we apply the same for consistency.
         if self.device.has_aspect_fp64:
             accepted_dtypes = [np.float64, np.float32]
         else:
@@ -278,11 +281,11 @@ class KMeansEngine(KMeansCythonEngine):
                 if "A sparse matrix was passed, but dense data is required" in str(
                     type_error
                 ):
-                    raise NotSupportedByEngineError from TypeError
+                    raise NotSupportedByEngineError from type_error
 
     def _check_sample_weight(self, sample_weight, X):
         """Adapted from sklearn.utils.validation._check_sample_weight to be compatible
-        with Array API dispatching"""
+        with Array API dispatch"""
         n_samples = X.shape[0]
         dtype = X.dtype
         if sample_weight is None:
@@ -312,7 +315,6 @@ class KMeansEngine(KMeansCythonEngine):
                         sample_weight.shape, (n_samples,)
                     )
                 )
-            sample_weight = dpt.asarray(sample_weight, device=self.device)
 
         return sample_weight
 
@@ -330,7 +332,7 @@ class KMeansEngine(KMeansCythonEngine):
                 input_name="init",
             )
             self.estimator._validate_center_shape(X, init)
-            init_t = dpt.asarray(init.T, order="C", copy=False)
+            init_t = dpt.asarray(init.T, order="C", copy=False, device=self.device)
             return init_t
 
 
@@ -338,12 +340,11 @@ def _get_namespace(*arrays):
     return dpt, True
 
 
-def _asarray_with_order(array, dtype, order, copy=None, xp=None):
-    return dpt.asarray(array, dtype=dtype, order=order, copy=copy)
-
-
 @contextlib.contextmanager
-def _validate_with_array_api():
+def _validate_with_array_api(device):
+    def _asarray_with_order(array, dtype, order, copy=None, xp=None):
+        return dpt.asarray(array, dtype=dtype, order=order, copy=copy, device=device)
+
     # TODO: when https://github.com/IntelPython/dpctl/issues/997 and
     # https://github.com/scikit-learn/scikit-learn/issues/25000 and are solved
     # remove those hacks.

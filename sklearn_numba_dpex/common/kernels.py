@@ -102,22 +102,14 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
 
 @lru_cache
 def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size):
+    """
+    ops must be a function that will be interpreted as a dpex.func and is subject to
+    the same rules. It is expected to take two scalar arguments and return one scalar
+    value. lambda functions are advised against since the cache will not work with lamda
+    functions."""
+
     global_size = math.ceil(size1 / work_group_size) * work_group_size
-
-    if ops == "plus":
-
-        @dpex.func
-        def ops(augend, addend):
-            return augend + addend
-
-    elif ops == "minus":
-
-        @dpex.func
-        def ops(minuend, subtrahend):
-            return minuend - subtrahend
-
-    else:
-        raise ValueError(f"Invalid ops: {ops} .")
+    ops = dpex.func(ops)
 
     # NB: inplace. # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
@@ -179,13 +171,12 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     minus_one_idx = np.int64(-1)
     two_as_a_long = np.int64(2)
 
-    if fused_unary_func is not None:
-        fused_unary_func = dpex.func(fused_unary_func)
-    else:
+    if fused_unary_func is None:
 
-        @dpex.func
         def fused_unary_func(x):
             return x
+
+    fused_unary_func = dpex.func(fused_unary_func)
 
     # TODO: this set of kernel functions could be abstracted away to other coalescing
     # functions
@@ -341,6 +332,12 @@ def make_sum_reduction_2d_axis1_kernel(
     `2 * work_group_size`. This is repeated as many time as needed until only one value
     remains in global memory.
 
+    If fused_unary_func is not None, it will be applied element-wise before summing.
+    It must be a function that will be interpreted as a dpex.func and is subject to the
+    same rules. It is expected to take one scalar argument and returning one scalar
+    value. lambda functions are advised against since the cache will not work with
+    lambda functions.
+
     Notes
     -----
     `work_group_size` is assumed to be a power of 2.
@@ -356,9 +353,12 @@ def make_sum_reduction_2d_axis1_kernel(
     n_rows = size0 if size1 is not None else None
     sum_axis_size = size0 if n_rows is None else size1
 
+    # fused_unary_func is applied elementwise during the first pass on data, in the
+    # first kernel execution only.
     fused_func_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
         n_rows, work_group_size, fused_unary_func, dtype
     )
+    # subsequent kernel calls only sum the data.
     nofunc_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
         n_rows, work_group_size, None, dtype
     )
