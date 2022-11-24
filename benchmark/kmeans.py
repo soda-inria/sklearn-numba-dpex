@@ -194,6 +194,7 @@ if __name__ == "__main__":
         # Change dataset dimensions
         # X = np.hstack([X for _ in range(5)])
         # X = np.vstack([X for _ in range(20)])
+        X = sklearn.utils.shuffle(X, random_state=random_state)
         rng = default_rng(random_state)
         if (init_ := init) == "random":
             init_ = np.array(rng.choice(X, n_clusters, replace=False), dtype=np.float32)
