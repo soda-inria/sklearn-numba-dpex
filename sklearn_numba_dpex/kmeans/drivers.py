@@ -35,6 +35,8 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_reduce_centroid_data_kernel,
 )
 
+from sklearn_numba_dpex.common._utils import _square, _plus, _minus
+
 
 def lloyd(
     X_t,
@@ -420,6 +422,10 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
     X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
 
     if (X_mean == 0).astype(int).sum() == len(X_mean):
+        # If the data is already centered, there's no need to perform shift/unshift
+        # steps. In this case, X_mean is set to None, thus carrying the information
+        # that the data was already centered, and the shift/unshift steps will be
+        # skipped.
         X_mean = None
     else:
         X_t = dpt.asarray(X_t, copy=copy_x)
@@ -443,9 +449,9 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
             broadcast_init_minus_X_mean(init, X_mean)
 
     variance_kernel = make_sum_reduction_2d_axis1_kernel(
-        n_features * n_samples,
-        None,
-        max_work_group_size,
+        size0=n_features * n_samples,
+        size1=None,
+        work_group_size=max_work_group_size,
         device=device,
         dtype=compute_dtype,
         fused_unary_func=_square,
@@ -454,10 +460,6 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
     tol = variance * tol
 
     return X_t, X_mean, init, tol
-
-
-def _square(x):
-    return x * x
 
 
 def restore_data_after_lloyd(X_t, X_mean):
@@ -474,14 +476,6 @@ def restore_data_after_lloyd(X_t, X_mean):
         work_group_size=max_work_group_size,
     )
     broadcast_X_plus_X_mean(X_t, X_mean)
-
-
-def _minus(x, y):
-    return x - y
-
-
-def _plus(x, y):
-    return x + y
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):

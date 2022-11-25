@@ -343,8 +343,8 @@ def test_kmeans_plusplus_same_quality(dtype):
         kmeans.set_params(random_state=random_state)
         engine = KMeansEngine(kmeans)
         X_prepared, *_ = engine.prepare_fit(X)
-        engine_kmeans_plusplus_centers = engine.init_centroids(X_prepared)
-        engine_kmeans_plusplus_centers = dpt.asnumpy(engine_kmeans_plusplus_centers.T)
+        engine_kmeans_plusplus_centers_t = engine.init_centroids(X_prepared)
+        engine_kmeans_plusplus_centers = dpt.asnumpy(engine_kmeans_plusplus_centers_t.T)
         engine.unshift_centers(X_prepared, engine_kmeans_plusplus_centers)
         scores_engine_kmeans_plusplus.append(
             _get_score_with_centers(engine_kmeans_plusplus_centers)
@@ -398,8 +398,8 @@ def test_kmeans_plusplus_output(array_constr, dtype):
     engine = KMeansEngine(estimator)
     X_prepared, *_ = engine.prepare_fit(X, sample_weight=sample_weight)
 
-    centers, indices = engine._kmeans_plusplus(X_prepared)
-    centers = dpt.asnumpy(centers.T)
+    centers_t, indices = engine._kmeans_plusplus(X_prepared)
+    centers = dpt.asnumpy(centers_t.T)
     engine.unshift_centers(X_prepared, centers)
     indices = dpt.asnumpy(indices)
 

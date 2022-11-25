@@ -81,7 +81,8 @@ def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dty
 def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
     global_size = math.ceil(size1 / work_group_size) * work_group_size
 
-    # NB: inplace. # Optimized for C-contiguous array and for
+    # NB: the left operand is modified inplace, the right operand is only read into.
+    # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
     @dpex.kernel
     def broadcast_division(dividend_array, divisor_vector):
@@ -106,12 +107,14 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size):
     ops must be a function that will be interpreted as a dpex.func and is subject to
     the same rules. It is expected to take two scalar arguments and return one scalar
     value. lambda functions are advised against since the cache will not work with lamda
-    functions."""
+    functions. sklearn_numba_dpex.common._utils expose some pre-defined `ops`.
+    """
 
     global_size = math.ceil(size1 / work_group_size) * work_group_size
     ops = dpex.func(ops)
 
-    # NB: inplace. # Optimized for C-contiguous array and for
+    # NB: the left operand is modified inplace, the right operand is only read into.
+    # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
     @dpex.kernel
     def broadcast_ops(left_operand_array, right_operand_vector):
@@ -336,7 +339,8 @@ def make_sum_reduction_2d_axis1_kernel(
     It must be a function that will be interpreted as a dpex.func and is subject to the
     same rules. It is expected to take one scalar argument and returning one scalar
     value. lambda functions are advised against since the cache will not work with
-    lambda functions.
+    lambda functions. sklearn_numba_dpex.common._utils expose some pre-defined
+    `fused_unary_funcs`.
 
     Notes
     -----
