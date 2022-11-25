@@ -3,6 +3,7 @@ import contextlib
 import importlib
 
 import numpy as np
+import dpnp
 import dpctl
 import dpctl.tensor as dpt
 
@@ -26,7 +27,7 @@ from .drivers import (
 )
 
 
-class _IgnoreSampleWeight:
+class _DeviceUnset:
     pass
 
 
@@ -70,7 +71,7 @@ class KMeansEngine(KMeansCythonEngine):
     _CONFIG = dict()
 
     def __init__(self, estimator):
-        self.device = dpctl.SyclDevice(self._CONFIG.get("device"))
+        self.device = self._CONFIG.get("device", _DeviceUnset)
 
         # NB: numba_dpex kernels only currently supports working with C memory layout
         # (see https://github.com/IntelPython/numba-dpex/issues/767) but our KMeans
@@ -256,15 +257,25 @@ class KMeansEngine(KMeansCythonEngine):
         return dpt.asnumpy(euclidean_distances)
 
     def _validate_data(self, X, reset=True):
+        if isinstance(X, dpnp.ndarray):
+            X = X.get_array()
+
+        if self.device is not _DeviceUnset:
+            device = dpctl.SyclDevice(self.device)
+        elif isinstance(X, dpt.usm_ndarray):
+            device = X.device.sycl_device
+        else:
+            device = dpctl.SyclDevice()
+
         accepted_dtypes = [np.float32]
         # NB: one could argue that `float32` is a better default, but sklearn defaults
         # to `np.float64` and we apply the same for consistency.
-        if self.device.has_aspect_fp64:
+        if device.has_aspect_fp64:
             accepted_dtypes = [np.float64, np.float32]
         else:
             accepted_dtypes = [np.float32]
 
-        with _validate_with_array_api(self.device):
+        with _validate_with_array_api(device):
             try:
                 X = self.estimator._validate_data(
                     X,
@@ -288,12 +299,13 @@ class KMeansEngine(KMeansCythonEngine):
         with Array API dispatch"""
         n_samples = X.shape[0]
         dtype = X.dtype
+        device = X.device.sycl_device
         if sample_weight is None:
-            sample_weight = dpt.ones(n_samples, dtype=dtype, device=self.device)
+            sample_weight = dpt.ones(n_samples, dtype=dtype, device=device)
         elif isinstance(sample_weight, numbers.Number):
-            sample_weight = dpt.full(n_samples, 1, dtype=dtype, device=self.device)
+            sample_weight = dpt.full(n_samples, 1, dtype=dtype, device=device)
         else:
-            with _validate_with_array_api(self.device):
+            with _validate_with_array_api(device):
                 sample_weight = check_array(
                     sample_weight,
                     accept_sparse=False,
@@ -319,7 +331,8 @@ class KMeansEngine(KMeansCythonEngine):
         return sample_weight
 
     def _check_init(self, init, X, copy=False):
-        with _validate_with_array_api(self.device):
+        device = X.device.sycl_device
+        with _validate_with_array_api(device):
             init = check_array(
                 init,
                 dtype=X.dtype,
@@ -332,7 +345,7 @@ class KMeansEngine(KMeansCythonEngine):
                 input_name="init",
             )
             self.estimator._validate_center_shape(X, init)
-            init_t = dpt.asarray(init.T, order="C", copy=False, device=self.device)
+            init_t = dpt.asarray(init.T, order="C", copy=False, device=device)
             return init_t
 
 
