@@ -239,3 +239,6 @@ X = my_data_loader()
 X_float32 = X.astype(float32)
 my_gpu_compute(X_float32)
 ```
+
+## Contributing:
+Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.
