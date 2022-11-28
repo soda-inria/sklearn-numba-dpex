@@ -1,14 +1,13 @@
 import warnings
+from typing import Any, Dict
 
-import numpy as np
 import dpctl
 import dpctl.tensor as dpt
-
+import numpy as np
 from sklearn.cluster._kmeans import KMeansCythonEngine
+from sklearn.exceptions import DataConversionWarning, NotSupportedByEngineError
 
-from sklearn.exceptions import NotSupportedByEngineError, DataConversionWarning
-
-from .drivers import lloyd, get_labels_inertia, get_euclidean_distances, kmeans_plusplus
+from .drivers import get_euclidean_distances, get_labels_inertia, kmeans_plusplus, lloyd
 
 
 class _IgnoreSampleWeight:
@@ -47,7 +46,7 @@ class KMeansEngine(KMeansCythonEngine):
 
     """
 
-    _CONFIG = dict()
+    _CONFIG: Dict[str, Any] = dict()
 
     def __init__(self, estimator):
         self.device = dpctl.SyclDevice(self._CONFIG.get("device"))
@@ -75,13 +74,15 @@ class KMeansEngine(KMeansCythonEngine):
             )
         except Exception as e:
             raise NotSupportedByEngineError(
-                "The sklearn_nunmba_dpex engine for KMeans does not support the format of the inputed data."
+                "The sklearn_nunmba_dpex engine for KMeans does not support the format"
+                " of the inputed data."
             ) from e
 
         algorithm = estimator.algorithm
         if algorithm not in ("lloyd", "auto", "full"):
             raise NotSupportedByEngineError(
-                f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
+                "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
+                f" algorithm, {algorithm} is not supported."
             )
 
         self.sample_weight = sample_weight
@@ -226,15 +227,15 @@ class KMeansEngine(KMeansCythonEngine):
         if (compute_dtype != np.float32) and (compute_dtype != np.float64):
             text = (
                 f"KMeans has been set to compute with type {compute_dtype} but only "
-                f"the types float32 and float64 are supported. The computations and "
-                f"outputs will default back to float32 type."
+                "the types float32 and float64 are supported. The computations and "
+                "outputs will default back to float32 type."
             )
             output_dtype = compute_dtype = np.float32
         elif (compute_dtype == np.float64) and not self.device.has_aspect_fp64:
             text = (
                 f"KMeans is set to compute with type {compute_dtype} but this type is "
                 f"not supported by the device {self.device.name}. The computations "
-                f"will default back to float32 type."
+                "will default back to float32 type."
             )
             compute_dtype = np.float32
 
@@ -244,8 +245,8 @@ class KMeansEngine(KMeansCythonEngine):
         if copy:
             text += (
                 f" A copy of the data casted to type {compute_dtype} will be created. "
-                f"To save memory and suppress this warning, ensure that the dtype of "
-                f"the input data matches the dtype required for computations."
+                "To save memory and suppress this warning, ensure that the dtype of "
+                "the input data matches the dtype required for computations."
             )
             warnings.warn(text, DataConversionWarning)
             # TODO: instead of triggering a copy on the host side, we could use the
@@ -262,7 +263,7 @@ class KMeansEngine(KMeansCythonEngine):
                 f"The centers have been passed with type {cluster_centers_dtype} but "
                 f"type {compute_dtype} is expected. A copy will be created with the "
                 f"correct type {compute_dtype}. Ensure that the centers are passed "
-                f"with the correct dtype to save memory and suppress this warning.",
+                "with the correct dtype to save memory and suppress this warning.",
                 DataConversionWarning,
             )
             cluster_centers = cluster_centers.astype(compute_dtype)
@@ -274,7 +275,7 @@ class KMeansEngine(KMeansCythonEngine):
                 f"sample_weight has been passed with type {sample_weight.dtype} but "
                 f"type {compute_dtype} is expected. A copy will be created with the "
                 f"correct type {compute_dtype}. Ensure that sample_weight is passed "
-                f"with the correct dtype to save memory and suppress this warning.",
+                "with the correct dtype to save memory and suppress this warning.",
                 DataConversionWarning,
             )
             sample_weight = sample_weight.astype(compute_dtype)

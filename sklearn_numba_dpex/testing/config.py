@@ -1,9 +1,8 @@
-import pytest
 from contextlib import contextmanager
 
-import numpy as np
-
 import dpctl
+import numpy as np
+import pytest
 
 _DEVICE = dpctl.SyclDevice()
 _DEVICE_NAME = _DEVICE.name
@@ -18,7 +17,10 @@ float_dtype_params = [
         dtype,
         marks=pytest.mark.skipif(
             dtype not in _SUPPORTED_DTYPE,
-            reason=f"The default device {_DEVICE_NAME} does not have support for {dtype} operations.",
+            reason=(
+                f"The default device {_DEVICE_NAME} does not have support for"
+                f" {dtype} operations."
+            ),
         ),
     )
     for dtype in [np.float32, np.float64]

@@ -1,20 +1,19 @@
-import warnings
 import random
+import warnings
 from functools import lru_cache
-
-from numba import float32, float64, uint32, int64, uint64
-import numpy as np
 
 import dpctl
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numpy as np
+from numba import float32, float64, int64, uint32, uint64
 
 # This code is largely inspired from the numba.cuda.random module and the
 # numba/cuda/random.py where it's defined (v<0.57), and by the implementation of the
 # same algorithm in the package `randomgen`.
 
 # numba.cuda.random: https://github.com/numba/numba/blob/0.56.3/numba/cuda/random.py
-# randomgen: https://github.com/bashtage/randomgen/blob/v1.23.1/randomgen/xoroshiro128.pyx
+# randomgen: https://github.com/bashtage/randomgen/blob/v1.23.1/randomgen/xoroshiro128.pyx  # noqa
 
 # NB1: we implement xoroshiro128++ rather than just xoroshiro128+, which is preferred.
 # Reference resource about PRNG: https://prng.di.unimi.it/
@@ -284,7 +283,7 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     #     result = s0 + s1
 
     #     s1 ^= s0
-    #     states[state_idx, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)
+    #     states[state_idx, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)  # noqa
     #     states[state_idx, one_idx] = _rotl(s1, next_rot_p_3)
 
     #     return result
@@ -300,8 +299,7 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
             from_cpu_to_device = True
         except dpctl.SyclDeviceCreationError:
             warnings.warn(
-                "No CPU found, falling back random initiatlization to default "
-                "device."
+                "No CPU found, falling back random initiatlization to default device."
             )
 
     states = dpt.empty(

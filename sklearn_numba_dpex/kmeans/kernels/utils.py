@@ -1,9 +1,8 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
-
+import numpy as np
 
 zero_idx = np.int64(0)
 
@@ -30,8 +29,8 @@ def make_relocate_empty_clusters_kernel(
         per_sample_inertia,         # INOUT          (n_samples,)
         centroids_t,                # INOUT          (n_features, n_clusters)
         cluster_sizes               # INOUT          (n_clusters,)
-        ):
-    # fmt: on
+    ):
+        # fmt: on
         """NB: because of how the array was created, samples_far_from_center values
         are located between (n_selected_gt_threshold - relocated_idx) and
         (relocated_idx) indices.
@@ -39,22 +38,25 @@ def make_relocate_empty_clusters_kernel(
         group_idx = dpex.get_group_id(zero_idx)
         item_idx = dpex.get_local_id(zero_idx)
         relocated_idx = group_idx // n_work_groups_for_cluster
-        feature_idx = ((group_idx % n_work_groups_for_cluster) * work_group_size) + item_idx
+        feature_idx = (
+            ((group_idx % n_work_groups_for_cluster) * work_group_size) + item_idx
+        )
 
         if feature_idx >= n_features:
             return
 
         relocated_cluster_idx = empty_clusters_list[relocated_idx]
-        new_location_X_idx = samples_far_from_center[n_selected_gt_threshold - relocated_idx]
+        new_location_X_idx = (
+            samples_far_from_center[n_selected_gt_threshold - relocated_idx]
+        )
         new_location_previous_assignment = assignments_idx[new_location_X_idx]
 
         new_centroid_value = X_t[feature_idx, new_location_X_idx]
         new_location_weight = sample_weight[new_location_X_idx]
         X_centroid_addend = new_centroid_value * new_location_weight
 
-
-        # Cancel the contribution to new_location_previous_assignment, the previously 
-        # updated centroids of the sample. This contribution will be assigned to the 
+        # Cancel the contribution to new_location_previous_assignment, the previously
+        # updated centroids of the sample. This contribution will be assigned to the
         # centroid of the clusters that relocates to this sample.
         dpex.atomic.sub(
             centroids_t,
@@ -66,7 +68,7 @@ def make_relocate_empty_clusters_kernel(
         # sample the cluster has been relocated to.
         centroids_t[feature_idx, relocated_cluster_idx] = X_centroid_addend
 
-        # Likewise, we update the weights in the clusters. This is done once using 
+        # Likewise, we update the weights in the clusters. This is done once using
         # `feature_idx`'s value.
         if feature_idx == zero_idx:
             per_sample_inertia[new_location_X_idx] = zero
@@ -98,8 +100,8 @@ def make_select_samples_far_from_centroid_kernel(
             selected_samples_idx,           # OUT      (n_samples,)
             n_selected_gt_threshold,        # OUT      (1,)
             n_selected_eq_threshold,        # OUT      (1,)
-        ):
-    # fmt: on
+    ):
+        # fmt: on
         """This kernel writes in selected_samples_idx the idx of the top n_selected
         items in distance_to_centroid with highest values.
 
@@ -122,8 +124,10 @@ def make_select_samples_far_from_centroid_kernel(
 
         n_selected_gt_threshold_ = n_selected_gt_threshold[zero_idx]
         n_selected_eq_threshold_ = n_selected_eq_threshold[zero_idx]
-        if ((n_selected_gt_threshold_ == max_n_selected_gt_threshold)
-            and (n_selected_eq_threshold_ >= min_n_selected_eq_threshold)):
+        if (
+            (n_selected_gt_threshold_ == max_n_selected_gt_threshold) and
+            (n_selected_eq_threshold_ >= min_n_selected_eq_threshold)
+        ):
             return
 
         distance_to_centroid_ = distance_to_centroid[sample_idx]
@@ -166,7 +170,7 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
         new_centroids_t,    # IN    (n_features, n_clusters)
         centroid_shifts,    # OUT   (n_clusters,)
     ):
-    # fmt: on
+        # fmt: on
         sample_idx = dpex.get_global_id(zero_idx)
 
         if sample_idx >= n_clusters:
@@ -213,7 +217,7 @@ def make_reduce_centroid_data_kernel(
         empty_clusters_list,           # OUT     (n_clusters,)
         n_empty_clusters,              # OUT     (1,)
     ):
-    # fmt: on
+        # fmt: on
 
         group_idx = dpex.get_group_id(zero_idx)
         item_idx = dpex.get_local_id(zero_idx)

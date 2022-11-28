@@ -9,13 +9,13 @@ workable state at the moment.
 This requires working with the following branch of scikit-learn which is itself
 not yet in a working state at the moment:
 
-- `wip-engines` branch on https://github.com/ogrisel/scikit-learn 
+- `wip-engines` branch on https://github.com/ogrisel/scikit-learn
 
 ## List of Included Engines
 
 - `sklearn.cluster.KMeans` for the standard LLoyd's algorithm on dense data arrays.
   The k-means++ initialization scheme is not implemented yet but this is planned.
-  
+
   No implementation of k-means for sparse input data or for the "Elkan" algorithm is
   included at the moment.
 
@@ -201,7 +201,7 @@ To run the `scikit-learn` tests with the `sklearn_numba_dpex` engine you can run
 pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
 ```
 
-(change the `--pyargs` option accordingly to select other test suites). 
+(change the `--pyargs` option accordingly to select other test suites).
 
 The `--sklearn-engine-provider sklearn_numba_dpex` option offered by the sklearn pytest plugin will automatically activate the `sklearn_numba_dpex` engine for all tests.
 

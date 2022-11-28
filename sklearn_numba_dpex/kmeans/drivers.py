@@ -1,37 +1,35 @@
-import warnings
 import math
+import warnings
 
-import numpy as np
 import dpctl
 import dpctl.tensor as dpt
 import dpnp
-
-from sklearn_numba_dpex.common.random import (
-    get_random_raw,
-    create_xoroshiro128pp_states,
-)
+import numpy as np
 
 from sklearn_numba_dpex.common.kernels import (
-    make_initialize_to_zeros_2d_kernel,
-    make_initialize_to_zeros_3d_kernel,
+    make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
+    make_initialize_to_zeros_2d_kernel,
+    make_initialize_to_zeros_3d_kernel,
     make_sum_reduction_2d_axis1_kernel,
-    make_argmin_reduction_1d_kernel,
 )
-
+from sklearn_numba_dpex.common.random import (
+    create_xoroshiro128pp_states,
+    get_random_raw,
+)
 from sklearn_numba_dpex.kmeans.kernels import (
-    make_lloyd_single_step_fixed_window_kernel,
+    make_centroid_shifts_kernel,
     make_compute_euclidean_distances_fixed_window_kernel,
-    make_label_assignment_fixed_window_kernel,
     make_compute_inertia_kernel,
     make_kmeansplusplus_init_kernel,
-    make_sample_center_candidates_kernel,
     make_kmeansplusplus_single_step_fixed_window_kernel,
-    make_relocate_empty_clusters_kernel,
-    make_select_samples_far_from_centroid_kernel,
-    make_centroid_shifts_kernel,
+    make_label_assignment_fixed_window_kernel,
+    make_lloyd_single_step_fixed_window_kernel,
     make_reduce_centroid_data_kernel,
+    make_relocate_empty_clusters_kernel,
+    make_sample_center_candidates_kernel,
+    make_select_samples_far_from_centroid_kernel,
 )
 
 
@@ -67,7 +65,7 @@ def lloyd(
         return_assignments=bool(verbose),
         sub_group_size=sub_group_size,
         global_mem_cache_size=global_mem_cache_size,
-        centroids_private_copies_max_cache_occupancy=centroids_private_copies_max_cache_occupancy,
+        centroids_private_copies_max_cache_occupancy=centroids_private_copies_max_cache_occupancy,  # noqa
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )

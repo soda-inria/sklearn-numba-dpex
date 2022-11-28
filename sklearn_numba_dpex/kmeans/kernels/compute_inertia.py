@@ -1,8 +1,8 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
+import numpy as np
 
 
 @lru_cache
@@ -20,7 +20,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
         assignments_idx,              # IN READ-ONLY   (n_samples,)
         per_sample_inertia,           # OUT            (n_samples,)
     ):
-    # fmt: on
+        # fmt: on
 
         sample_idx = dpex.get_global_id(zero_idx)
 
