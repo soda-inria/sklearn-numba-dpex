@@ -405,6 +405,13 @@ def _relocate_empty_clusters(
 
 
 def prepare_data_for_lloyd(X_t, init, tol, copy_x):
+    """It can be more numerically accurate to center the data first. If copy_x is True,
+    then the original data is not modified. If False, the original data is modified,
+    and put back later on (see `restore_data_after_lloyd`), but small numerical
+    differences may be introduced by subtracting and then adding the data mean. Note
+    that if the original data is not C-contiguous, a copy will be made even if copy_x
+    is False."""
+
     n_features, n_samples = X_t.shape
     compute_dtype = X_t.dtype.type
 
@@ -420,14 +427,15 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
     )
 
     X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
-
-    if (X_mean == 0).astype(int).sum() == len(X_mean):
+    X_mean_is_zeroed = (X_mean == 0).astype(int).sum() == len(X_mean)
+    if X_mean_is_zeroed:
         # If the data is already centered, there's no need to perform shift/unshift
         # steps. In this case, X_mean is set to None, thus carrying the information
         # that the data was already centered, and the shift/unshift steps will be
         # skipped.
         X_mean = None
     else:
+        # subtract the mean of x for more accurate distance computations
         X_t = dpt.asarray(X_t, copy=copy_x)
         broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
             n_features,
@@ -475,6 +483,8 @@ def restore_data_after_lloyd(X_t, X_mean):
         ops=_plus,
         work_group_size=max_work_group_size,
     )
+    # The feature wise mean of X X_mean that had been substracted in
+    # `prepare_data_for_lloyd` is re-added.
     broadcast_X_plus_X_mean(X_t, X_mean)
 
 

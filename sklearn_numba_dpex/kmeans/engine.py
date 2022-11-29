@@ -67,7 +67,7 @@ class KMeansEngine(KMeansCythonEngine):
     # future instances. It is only used for testing purposes, using
     # `sklearn_numba_dpex.testing.config.override_attr_context` context, for instance
     # in the benchmark script.
-    # For normal usage, the compute will follow the __compute_follow_data__ principle.
+    # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG = dict()
 
     def __init__(self, estimator):
@@ -164,6 +164,7 @@ class KMeansEngine(KMeansCythonEngine):
             )
             # Poor man's fancy indexing
             # TODO: write a kernel ? or replace with better equivalent when available ?
+            # Relevant issue: https://github.com/IntelPython/dpctl/issues/1003
             centers_t = dpt.concat(
                 [dpt.expand_dims(X[center_idx], axes=1) for center_idx in centers_idx],
                 axis=1,
@@ -183,9 +184,9 @@ class KMeansEngine(KMeansCythonEngine):
         # ???: using `.all()` often segfaults
         # TODO: minimal reproducer and issue at dpnp
         # or write a kernel ?
-        use_uniform_weights = (sample_weight == sample_weight[0]).astype(
-            int
-        ).sum() == len(sample_weight)
+        use_uniform_weights = (
+            (sample_weight == sample_weight[0]).astype(int).sum()
+        ) == len(sample_weight)
 
         assignments_idx, inertia, best_centroids, n_iteration = lloyd(
             X.T,
@@ -221,6 +222,7 @@ class KMeansEngine(KMeansCythonEngine):
 
     def get_labels(self, X, sample_weight):
         # TODO: sample_weight actually not used for get_labels. Fix in sklearn ?
+        # Relevant issue: https://github.com/scikit-learn/scikit-learn/issues/25066
         labels, _ = self._get_labels_inertia(X, sample_weight, with_inertia=False)
         return dpt.asnumpy(labels).astype(np.int32, copy=False)
 
@@ -303,7 +305,9 @@ class KMeansEngine(KMeansCythonEngine):
         if sample_weight is None:
             sample_weight = dpt.ones(n_samples, dtype=dtype, device=device)
         elif isinstance(sample_weight, numbers.Number):
-            sample_weight = dpt.full(n_samples, 1, dtype=dtype, device=device)
+            sample_weight = dpt.full(
+                n_samples, sample_weight, dtype=dtype, device=device
+            )
         else:
             with _validate_with_array_api(device):
                 sample_weight = check_array(
