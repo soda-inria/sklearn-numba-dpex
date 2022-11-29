@@ -29,6 +29,7 @@ finally:
 from sklearn.exceptions import NotSupportedByEngineError
 from sklearn.cluster._kmeans import KMeansCythonEngine
 
+
 # TODO: instead of relying on monkey patching the default engine, find a way to
 # register a distinct entry point that can load a distinct engine outside of setup.py
 # (impossible ?)
