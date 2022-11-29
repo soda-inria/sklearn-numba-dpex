@@ -1,8 +1,8 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
+import numpy as np
 
 from ._base_kmeans_kernel_funcs import (
     make_pairwise_ops_base_kernel_funcs,
@@ -68,7 +68,7 @@ def make_label_assignment_fixed_window_kernel(
         centroids_half_l2_norm,   # IN             (n_clusters,)
         assignments_idx,          # OUT            (n_samples,)
     ):
-    # fmt: on
+        # fmt: on
 
         sample_idx = dpex.get_global_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
@@ -125,7 +125,7 @@ def make_label_assignment_fixed_window_kernel(
                     is_last_feature_window,
                     is_last_centroid_window
                 )
-                
+
                 first_feature_idx += centroids_window_height
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -140,7 +140,7 @@ def make_label_assignment_fixed_window_kernel(
             )
 
             first_centroid_idx += window_n_centroids
-            
+
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # No update step, only store min_idx in the output array

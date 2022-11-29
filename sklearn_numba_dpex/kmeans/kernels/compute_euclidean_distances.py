@@ -1,8 +1,8 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
+import numpy as np
 
 from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
@@ -60,7 +60,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         current_centroids_t,      # IN READ-ONLY   (n_features, n_clusters)
         euclidean_distances_t,    # OUT            (n_clusters, n_samples)
     ):
-    # fmt: on
+        # fmt: on
 
         sample_idx = dpex.get_global_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
@@ -112,10 +112,12 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                 for i in range(window_n_centroids):
                     centroid_idx = first_centroid_idx + i
                     if centroid_idx < n_clusters:
-                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = math.sqrt(sq_distances[i])
+                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = (
+                            math.sqrt(sq_distances[i])
+                        )
 
             first_centroid_idx += window_n_centroids
-            
+
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)

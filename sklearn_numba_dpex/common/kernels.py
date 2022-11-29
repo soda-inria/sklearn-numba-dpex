@@ -20,12 +20,11 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numpy as np
 
 from sklearn_numba_dpex.common._utils import check_power_of_2
-
 
 zero_idx = np.int64(0)
 
@@ -114,7 +113,7 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         data,    # IN        (size0, size1)
         result,  # OUT       (size1,)
     ):
-    # fmt: on
+        # fmt: on
         col_idx = dpex.get_global_id(zero_idx)
 
         if col_idx >= size1:
@@ -265,7 +264,7 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
         summands,    # IN        (n_rows, sum_axis_size)
         result,      # OUT       (n_rows, math.ceil(size / (2 * work_group_size),)
     ):
-    # fmt: on
+        # fmt: on
         # NB: This kernel only perform a partial reduction
         group_id = dpex.get_group_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
@@ -294,7 +293,11 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
             # We discard half of the remaining active work items at each iteration
             current_n_work_items = current_n_work_items // two_as_a_long
             if local_work_id < current_n_work_items:
-                add_cols_inplace(local_values, local_work_id + current_n_work_items, local_work_id)
+                add_cols_inplace(
+                    local_values,
+                    local_work_id + current_n_work_items,
+                    local_work_id,
+                )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -320,8 +323,8 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
         # NB: here memory for partial results is allocated ahead of time and will only
         # be garbage collected when the instance of `sum_reduction` is garbage
         # collected. Thus it can be more efficient to re-use a same instance of
-        # `sum_reduction` (e.g within iterations of a loop) since it avoid deallocation
-        # and reallocation every time.
+        # `sum_reduction` (e.g within iterations of a loop) since it avoid
+        # deallocation and reallocation every time.
         result = dpt.empty(result_shape, dtype=dtype, device=device)
         kernels_and_empty_tensors_pairs.append((kernel, result))
 
@@ -337,7 +340,8 @@ def make_sum_reduction_2d_axis1_kernel(size0, size1, work_group_size, device, dt
 
 @lru_cache
 def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
-    """Implement 1d argmin with the same strategy than for make_sum_reduction_2d_axis1_kernel."""
+    """Implement 1d argmin with the same strategy than for
+    make_sum_reduction_2d_axis1_kernel."""
     check_power_of_2(work_group_size)
 
     # Number of iteration in each execution of the kernel:
@@ -361,14 +365,16 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
                             #                / (2 * work_group_size),)
                             #            ))
     ):
-    # fmt: on
+        # fmt: on
         group_id = dpex.get_group_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
         first_work_id = local_work_id == zero_idx
 
         previous_result_size = previous_result.shape[zero_idx]
         has_previous_result = previous_result_size > one_idx
-        current_size = previous_result_size if has_previous_result else values.shape[zero_idx]
+        current_size = (
+            previous_result_size if has_previous_result else values.shape[zero_idx]
+        )
 
         local_argmin = dpex.local.array(work_group_size, dtype=np.int32)
         local_values = dpex.local.array(work_group_size, dtype=dtype)
@@ -395,7 +401,7 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
                 y = values[y_idx]
                 if x < y or (x == y and x_idx < y_idx):
                     local_argmin[local_work_id] = x_idx
-                    local_values[local_work_id] = x 
+                    local_values[local_work_id] = x
                 else:
                     local_argmin[local_work_id] = y_idx
                     local_values[local_work_id] = y
@@ -408,10 +414,10 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
                 local_x_idx = local_work_id
                 local_y_idx = local_work_id + current_n_work_items
 
-                x= local_values[local_x_idx]
-                y= local_values[local_y_idx]
+                x = local_values[local_x_idx]
+                y = local_values[local_y_idx]
 
-                if x> y:
+                if x > y:
                     local_values[local_x_idx] = y
                     local_argmin[local_x_idx] = local_argmin[local_y_idx]
 

@@ -1,11 +1,10 @@
 import math
-import pytest
 from functools import lru_cache
 
-import numpy as np
 import dpctl.tensor as dpt
 import numba_dpex as dpex
-
+import numpy as np
+import pytest
 from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.common.random import (
@@ -13,7 +12,6 @@ from sklearn_numba_dpex.common.random import (
     get_random_raw,
     make_rand_uniform_kernel_func,
 )
-
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
@@ -188,7 +186,7 @@ def _make_get_single_rand_value_kernel(dtype):
         random_state,                     # IN             (1, 2)
         single_rand_value,                # OUT            (1,)
     ):
-    #fmt: on
+        # fmt: on
         single_rand_value[0] = rand_uniform_kernel_func(random_state, zero_idx)
 
     return get_single_rand_value
@@ -205,7 +203,7 @@ def _make_rand_uniform_kernel(size, dtype, size_per_work_item):
         states,                           # IN               (global_size, 2)
         out,                              # OUT              (size,)
     ):
-    # fmt: on
+        # fmt: on
         item_idx = dpex.get_global_id(0)
         out_idx = item_idx * size_per_work_item
 

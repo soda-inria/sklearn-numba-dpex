@@ -210,7 +210,7 @@ class _KMeansKernelFuncFactory:
             window_of_centroids_half_l2_norms,  # OUT
             results,                            # OUT
         ):
-        # fmt: on
+            # fmt: on
             _initialize_results(results)
 
             # The first `window_n_centroids` work items cooperate on loading the
@@ -240,18 +240,18 @@ class _KMeansKernelFuncFactory:
             current_centroids_t,            # IN
             centroids_window,               # OUT
         ):
-        # fmt: on
+            # fmt: on
             # The work items in the work group cooperatively load the values in shared
             # memory. At each iteration, the work item loads one value and adjacent work
             # items load adjacent values.
             loading_feature_idx = first_feature_idx + window_loading_feature_offset
-            
+
             if (loading_feature_idx < n_features) and (
                 loading_centroid_idx < n_clusters
              ):
-                 value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
+                value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
             else:
-                 value = zero
+                value = zero
 
             centroids_window[
                 window_loading_feature_offset, window_loading_centroid_idx
@@ -276,7 +276,7 @@ class _KMeansKernelFuncFactory:
             centroids_window,    # IN
             result,              # OUT
         ):
-        # fmt: on
+            # fmt: on
             for window_feature_idx in range(window_n_features):
 
                 feature_idx = window_feature_idx + first_feature_idx
@@ -289,7 +289,9 @@ class _KMeansKernelFuncFactory:
                 # For this given feature, loop on all centroids in the current
                 # window and accumulate the partial results
                 for window_centroid_idx in range(window_n_centroids):
-                    centroid_value = centroids_window[window_feature_idx, window_centroid_idx]
+                    centroid_value = (
+                        centroids_window[window_feature_idx, window_centroid_idx]
+                    )
                     if accumulate_dot_product:
                         result[window_centroid_idx] += centroid_value * X_value
                     else:
@@ -351,7 +353,7 @@ def _make_update_closest_centroid_kernel_func(window_n_centroids):
         window_of_centroids_half_l2_norms,   # IN
         dot_products,                        # IN
     ):
-    # fmt: on
+        # fmt: on
         for i in range(window_n_centroids):
             current_sample_pseudo_inertia = (
                 window_of_centroids_half_l2_norms[i] - dot_products[i]
