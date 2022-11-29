@@ -27,13 +27,13 @@ finally:
 
 
 from sklearn.exceptions import NotSupportedByEngineError
-from sklearn_numba_dpex.kmeans.engine import KMeansEngine
+from sklearn.cluster._kmeans import KMeansCythonEngine
 
 
 # TODO: instead of relying on monkey patching the default engine, find a way to
 # register a distinct entry point that can load a distinct engine outside of setup.py
 # (impossible ?)
-class DAAL4PYEngine(KMeansEngine):
+class DAAL4PYEngine(KMeansCythonEngine):
     def prepare_fit(self, X, y=None, sample_weight=None):
         if sample_weight is not None and any(sample_weight != sample_weight[0]):
             raise NotSupportedByEngineError(

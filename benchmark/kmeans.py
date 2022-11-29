@@ -98,8 +98,7 @@ class KMeansLloydTimeit:
 
         print(
             f"Running {name} with parameters sample_weight={self.sample_weight} "
-            f"n_clusters={n_clusters} data_shape={X.shape} max_iter={max_iter} "
-            f"tol={tol} ..."
+            f"n_clusters={n_clusters} data_shape={X.shape} max_iter={max_iter}..."
         )
 
         with sklearn.config_context(engine_provider=engine_provider):
@@ -179,7 +178,6 @@ if __name__ == "__main__":
     init = "k-means++"  # "k-means++" or "random"
     n_clusters = 127
     max_iter = 100
-    tol = 0
     skip_slow = True
     dtype = np.float32
     # NB: it seems that currently the estimators in the benchmark always return

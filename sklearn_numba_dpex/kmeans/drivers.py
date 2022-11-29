@@ -6,9 +6,11 @@ import dpctl.tensor as dpt
 import dpnp
 import numpy as np
 
+from sklearn_numba_dpex.common._utils import _minus, _plus, _square
 from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
-    make_broadcast_division_1d_2d_kernel,
+    make_broadcast_division_1d_2d_axis0_kernel,
+    make_broadcast_ops_1d_2d_axis1_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
@@ -98,7 +100,7 @@ def lloyd(
         dtype=compute_dtype,
     )
 
-    broadcast_division_kernel = make_broadcast_division_1d_2d_kernel(
+    broadcast_division_kernel = make_broadcast_division_1d_2d_axis0_kernel(
         size0=n_features,
         size1=n_clusters,
         work_group_size=max_work_group_size,
@@ -322,7 +324,7 @@ def lloyd(
     # inertia is now a 1-sized numpy array, we transform it into a scalar:
     inertia = inertia[0]
 
-    return assignments_idx, inertia, centroids_t.T, n_iteration
+    return assignments_idx, inertia, centroids_t, n_iteration
 
 
 def _relocate_empty_clusters(
@@ -397,6 +399,90 @@ def _relocate_empty_clusters(
         centroids_t,
         cluster_sizes,
     )
+
+
+def prepare_data_for_lloyd(X_t, init, tol, copy_x):
+    """It can be more numerically accurate to center the data first. If copy_x is True,
+    then the original data is not modified. If False, the original data is modified,
+    and put back later on (see `restore_data_after_lloyd`), but small numerical
+    differences may be introduced by subtracting and then adding the data mean. Note
+    that if the original data is not C-contiguous, a copy will be made even if copy_x
+    is False."""
+
+    n_features, n_samples = X_t.shape
+    compute_dtype = X_t.dtype.type
+
+    device = X_t.device.sycl_device
+    max_work_group_size = device.max_work_group_size
+
+    sum_axis1_kernel = make_sum_reduction_2d_axis1_kernel(
+        X_t.shape[0],
+        X_t.shape[1],
+        device.max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+    )
+
+    X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
+    X_mean_is_zeroed = (X_mean == 0).astype(int).sum() == len(X_mean)
+    if X_mean_is_zeroed:
+        # If the data is already centered, there's no need to perform shift/unshift
+        # steps. In this case, X_mean is set to None, thus carrying the information
+        # that the data was already centered, and the shift/unshift steps will be
+        # skipped.
+        X_mean = None
+    else:
+        # subtract the mean of x for more accurate distance computations
+        X_t = dpt.asarray(X_t, copy=copy_x)
+        broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+            n_features,
+            n_samples,
+            ops=_minus,
+            work_group_size=max_work_group_size,
+        )
+
+        broadcast_X_minus_X_mean(X_t, X_mean)
+
+        if isinstance(init, dpt.usm_ndarray):
+            n_clusters = init.shape[1]
+            broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+                n_features,
+                n_clusters,
+                ops=_minus,
+                work_group_size=max_work_group_size,
+            )
+            broadcast_init_minus_X_mean(init, X_mean)
+
+    variance_kernel = make_sum_reduction_2d_axis1_kernel(
+        size0=n_features * n_samples,
+        size1=None,
+        work_group_size=max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+        fused_unary_func=_square,
+    )
+    variance = variance_kernel(dpt.reshape(X_t, -1)) / n_features
+    tol = variance * tol
+
+    return X_t, X_mean, init, tol
+
+
+def restore_data_after_lloyd(X_t, X_mean):
+    n_features, n_samples = X_t.shape
+
+    device = X_t.device.sycl_device
+    max_work_group_size = device.max_work_group_size
+
+    X_t = dpt.asarray(X_t, copy=False)
+    broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+        n_features,
+        n_samples,
+        ops=_plus,
+        work_group_size=max_work_group_size,
+    )
+    # The feature wise mean of X X_mean that had been substracted in
+    # `prepare_data_for_lloyd` is re-added.
+    broadcast_X_plus_X_mean(X_t, X_mean)
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
@@ -661,4 +747,4 @@ def kmeans_plusplus(
         centers_t[:, c] = X_t[:, center_index]
         center_indices[c] = center_index
 
-    return centers_t.T, center_indices
+    return centers_t, center_indices
