@@ -130,7 +130,8 @@ class KMeansLloydTimeit:
         if n_iter != max_iter:
             raise RuntimeError(
                 f"The estimator {name} only ran {n_iter} iterations instead of "
-                f"max_iter={max_iter} iterations. " + runtime_error_message
+                f"max_iter={max_iter} iterations. "
+                + runtime_error_message
             )
 
         if not assert_allclose:

@@ -1,12 +1,12 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
-
-from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
+import numpy as np
 
 from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
+
+from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
 # inline commenting of the kernel.
@@ -32,7 +32,7 @@ def make_kmeansplusplus_init_kernel(
         center_indices,           # OUT            (n_clusters,)
         closest_dist_sq,          # OUT            (n_samples,)
     ):
-    # fmt: on
+        # fmt: on
         sample_idx = dpex.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
@@ -81,7 +81,7 @@ def make_sample_center_candidates_kernel(
         random_state,             # INOUT          (n_local_trials, 2)
         candidates_id,            # OUT            (n_local_trials,)
     ):
-    # fmt: on
+        # fmt: on
         local_trial_idx = dpex.get_global_id(zero_idx)
         if local_trial_idx >= n_local_trials:
             return
@@ -90,12 +90,15 @@ def make_sample_center_candidates_kernel(
 
         cumulative_potential = zero_init
         candidate_id = one_decr
-        while (random_value > cumulative_potential) and (candidate_id < max_candidate_id):
+        while (
+                (random_value > cumulative_potential) and
+                (candidate_id < max_candidate_id)
+        ):
             candidate_id += one_incr
             cumulative_potential += closest_dist_sq[candidate_id]
         candidates_id[local_trial_idx] = candidate_id
 
-    global_size = (math.ceil(n_local_trials / work_group_size)) * (work_group_size)
+    global_size = (math.ceil(n_local_trials / work_group_size)) * work_group_size
     return sample_center_candidates[global_size, work_group_size]
 
 
@@ -151,7 +154,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         closest_dist_sq,                   # IN             (n_samples,)
         sq_distances_t,                    # OUT            (n_candidates, n_samples)
     ):
-    # fmt: on
+        # fmt: on
         sample_idx = dpex.get_global_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
 
@@ -211,8 +214,11 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     if candidate_idx < n_candidates:
                         sq_distance_i = min(
                             sq_distances[i] * sample_weight_,
-                            closest_dist_sq_)
-                        sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
+                            closest_dist_sq_
+                        )
+                        sq_distances_t[first_candidate_idx + i, sample_idx] = (
+                            sq_distance_i
+                        )
 
             first_candidate_idx += window_n_candidates
 

@@ -1,29 +1,27 @@
-import numbers
 import contextlib
-import importlib
+import numbers
+from typing import Any, Dict
 
-import numpy as np
-import dpnp
 import dpctl
 import dpctl.tensor as dpt
-
+import dpnp
+import numpy as np
 import sklearn
 import sklearn.utils.validation as sklearn_validation
 from sklearn.cluster._kmeans import KMeansCythonEngine
-from sklearn.utils import check_random_state, check_array
-from sklearn.utils.validation import _is_arraylike_not_scalar
-
 from sklearn.exceptions import NotSupportedByEngineError
+from sklearn.utils import check_array, check_random_state
+from sklearn.utils.validation import _is_arraylike_not_scalar
 
 from sklearn_numba_dpex.testing.config import override_attr_context
 
 from .drivers import (
-    prepare_data_for_lloyd,
-    lloyd,
-    restore_data_after_lloyd,
-    get_labels_inertia,
     get_euclidean_distances,
+    get_labels_inertia,
     kmeans_plusplus,
+    lloyd,
+    prepare_data_for_lloyd,
+    restore_data_after_lloyd,
 )
 
 
@@ -68,7 +66,7 @@ class KMeansEngine(KMeansCythonEngine):
     # `sklearn_numba_dpex.testing.config.override_attr_context` context, for instance
     # in the benchmark script.
     # For normal usage, the compute will follow the *compute follows data* principle.
-    _CONFIG = dict()
+    _CONFIG: Dict[str, Any] = dict()
 
     def __init__(self, estimator):
         self.device = self._CONFIG.get("device", _DeviceUnset)
@@ -99,7 +97,8 @@ class KMeansEngine(KMeansCythonEngine):
         algorithm = estimator.algorithm
         if algorithm not in ("lloyd", "auto", "full"):
             raise NotSupportedByEngineError(
-                f"The sklearn_nunmba_dpex engine for KMeans only support the Lloyd algorithm, {algorithm} is not supported."
+                "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
+                f" algorithm, {algorithm} is not supported."
             )
 
         X = self._validate_data(X)

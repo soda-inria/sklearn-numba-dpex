@@ -1,32 +1,27 @@
-import pytest
-
-import numpy as np
-from numpy.random import default_rng
 import dpctl.tensor as dpt
 import dpnp
+import numpy as np
+import pytest
+from numpy.random import default_rng
 from numpy.testing import assert_array_equal
-
 from sklearn import config_context
 from sklearn.base import clone
 from sklearn.cluster import KMeans, kmeans_plusplus
+from sklearn.cluster.tests.test_k_means import X as X_sklearn_test
+from sklearn.cluster.tests.test_k_means import n_clusters as n_clusters_sklearn_test
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
-from sklearn.cluster.tests.test_k_means import (
-    X as X_sklearn_test,
-    n_clusters as n_clusters_sklearn_test,
-)
 
-from sklearn_numba_dpex.kmeans.kernels.utils import (
-    make_select_samples_far_from_centroid_kernel,
-)
 from sklearn_numba_dpex.kmeans.engine import KMeansEngine
-from sklearn_numba_dpex.testing.config import float_dtype_params
-
 from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
     make_lloyd_single_step_fixed_window_kernel,
 )
+from sklearn_numba_dpex.kmeans.kernels.utils import (
+    make_select_samples_far_from_centroid_kernel,
+)
+from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 def test_dpnp_implements_argpartition():

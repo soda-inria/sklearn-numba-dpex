@@ -1,8 +1,8 @@
 import math
 from functools import lru_cache
 
-import numpy as np
 import numba_dpex as dpex
+import numpy as np
 
 from ._base_kmeans_kernel_funcs import (
     make_pairwise_ops_base_kernel_funcs,
@@ -129,7 +129,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
-    # fmt: on
+        # fmt: on
         """One full iteration of LLoyd's k-means.
 
         The kernel is meant to be invoked on a 1D grid spanning the data samples of
@@ -252,7 +252,6 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # operations in the current iteration to be over for all work items.
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
             # inertia for the current sample.
@@ -267,12 +266,10 @@ def make_lloyd_single_step_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
@@ -300,7 +297,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # which we mitigate with a strategy of "privatization" for reducing the
         # probability of collisions. The array of centroids is duplicated in global
         # memory as many time as possible and each sub-group of work items of size
-        # `sub_group_size` is assigned to a different duplicata and update the values 
+        # `sub_group_size` is assigned to a different duplicata and update the values
         # of this single duplicata.
 
         # The resulting copies of centroids updates will then need to be reduced to a

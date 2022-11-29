@@ -1,22 +1,19 @@
-import pytest
-
 import dpctl
 import dpctl.tensor as dpt
-
 import numpy as np
-
+import pytest
 from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.common.kernels import (
-    make_sum_reduction_2d_axis1_kernel,
     make_argmin_reduction_1d_kernel,
+    make_sum_reduction_2d_axis1_kernel,
 )
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 @pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
 @pytest.mark.parametrize(
-    ("array_in, expected_result"),
+    "array_in, expected_result",
     [
         (
             # [[0.0, 1.0, 2.0, 3.0],
@@ -80,7 +77,7 @@ def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
 
 @pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
 @pytest.mark.parametrize(
-    ("array_in, expected_result"),
+    "array_in, expected_result",
     [
         (dpt.asarray([3.0, 1.0, 0.0, 2.0]), 2),
         (dpt.asarray([0.0, 1.0, 3.0, 2.0]), 0),
