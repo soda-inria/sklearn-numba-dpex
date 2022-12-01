@@ -13,6 +13,7 @@ from sklearn.cluster.tests.test_k_means import n_clusters as n_clusters_sklearn_
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
+from sklearn_numba_dpex.kmeans.drivers import get_nb_distinct_clusters
 from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
@@ -490,3 +491,15 @@ def test_error_raised_on_invalid_group_sizes():
             work_group_size,
             dtype,
         )
+
+
+def test_get_nb_distinct_clusters_kernel():
+    labels = [0, 1, 0, 2, 2, 7, 6, 5, 3, 3]  # NB: all values up to 7 except 4
+    expected_nb_distinct_clusters = 6
+
+    n_clusters = max(labels)
+    labels = dpt.asarray(labels, dtype=np.int32)
+
+    actual_nb_distinct_clusters = int(get_nb_distinct_clusters(labels, n_clusters))
+
+    assert actual_nb_distinct_clusters == expected_nb_distinct_clusters

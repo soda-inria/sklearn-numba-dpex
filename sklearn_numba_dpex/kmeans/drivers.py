@@ -470,10 +470,11 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
 
 
 def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
-    """The feature wise mean of X X_mean that had been substracted from X and initial
-    centers in `prepare_data_for_lloyd` is re-added to X and centers.
+    """X_mean, the feature wise mean of X prior to the centerings of X and centers in
+    `prepare_data_for_lloyd`, is re-added to X and centers.
     """
     if X_mean is None:
+        # X and best_centers_t aren't translated back.
         return
 
     n_features, n_samples = X_t.shape

@@ -27,5 +27,14 @@ jobs:
       run: pytest sklearn_numba_dpex/
 
       # TODO: run those tests in a separate pipeline
+      # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type
+      # `dpctl.tensor.usm_ndarray` and store fitted attributes with this same type.
+      # This behavior is not compatible with sklearn unit tests, that expects numpy
+      # arrays or at least arrays that would closely mimic the numpy api. To keep
+      # compatibility with sklearn unit tests the engine must be set to a different
+      # behavior where its methods are wrapped in data conversion steps so that
+      # fitted attributes and outputs are numpy arrays. Currently this behavior is
+      # activated when the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is set
+      # to 1.
     - name: Run sklearn test suites with sklearn_numba_dpex engines
       run: SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means

@@ -255,7 +255,10 @@ def make_reduce_centroid_data_kernel(
 @lru_cache
 def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, device):
     # TODO: are there possible optimizations for this kernel ?
-    # - fusing the two kernels (requires a lock ?)
+    # - fusing the two kernels (It would require a lock ? There's a risk of concurrency
+    # issues among threads that try to write different values into `mapping` and
+    # threads that read `mapping`, all this at the same time. Tools in `dpex.atomic`
+    # seems to not be enough to overcome that at the moment.)
     # - early stop
 
     def is_same_clustering(labels1, labels2):
@@ -314,7 +317,7 @@ def make_get_nb_distinct_clusters_kernel(
     one_incr = np.int32(1)
 
     @dpex.kernel
-    def _get_nb_distinct_clusters(labels, clusters_seen, nb_distinct_clusters):
+    def get_nb_distinct_clusters(labels, clusters_seen, nb_distinct_clusters):
         sample_idx = dpex.get_global_id(zero_idx)
 
         if sample_idx >= n_samples:
@@ -325,9 +328,9 @@ def make_get_nb_distinct_clusters_kernel(
         if clusters_seen[label] > zero_idx:
             return
 
-        is_new = dpex.atomic.add(clusters_seen, zero_idx, one_incr)
-        if is_new == one_incr:
+        previous_value = dpex.atomic.add(clusters_seen, label, one_incr)
+        if previous_value == zero_idx:
             dpex.atomic.add(nb_distinct_clusters, zero_idx, one_incr)
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
-    return _get_nb_distinct_clusters[global_size, work_group_size]
+    return get_nb_distinct_clusters[global_size, work_group_size]
