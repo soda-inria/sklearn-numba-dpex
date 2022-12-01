@@ -61,11 +61,10 @@ class KMeansEngine(KMeansCythonEngine):
 
     """
 
-    # NB: by convention, all methods that are not prefixed with an underscore `_` in
-    # this class (let's call it *public methods*) override the corresponding method
-    # from sklearn.cluster._kmeans.KMeansCythonEngine. All methods that do not override
-    # a method in sklearn.cluster._kmeans.KMeansCythonEngine are considered private to
-    # this implementation and prefixed with `_`.
+    # NB: by convention, all public methods override the corresponding method from
+    # `sklearn.cluster._kmeans.KMeansCythonEngine`. All methods that do not override a
+    # method in `sklearn.cluster._kmeans.KMeansCythonEngine` are considered private to
+    # this implementation.
 
     # This class attribute can alter globally the attributes `device` and `order` of
     # future instances. It is only used for testing purposes, using
@@ -97,14 +96,14 @@ class KMeansEngine(KMeansCythonEngine):
         self.order = order
         self.estimator = estimator
 
-        _is_testing_mode = os.getenv("SKLEARN_NUMBA_DPEX_is_testing_mode", "0")
-        if _is_testing_mode not in {"0", "1"}:
+        _is_in_testing_mode = os.getenv("SKLEARN_NUMBA_DPEX_TESTING_MODE", "0")
+        if _is_in_testing_mode not in {"0", "1"}:
             raise ValueError(
-                "If the environment variable SKLEARN_NUMBA_DPEX_is_testing_mode is"
+                "If the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is"
                 f' set, it is expected to take values in {"0", "1"}, but got'
-                f" {_is_testing_mode} instead."
+                f" {_is_in_testing_mode} instead."
             )
-        self._is_testing_mode = _is_testing_mode == "1"
+        self._is_in_testing_mode = _is_in_testing_mode == "1"
 
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
@@ -130,7 +129,7 @@ class KMeansEngine(KMeansCythonEngine):
             X.T, init, estimator.tol, estimator.copy_x
         )
 
-        if self._is_testing_mode and X_mean is not None:
+        if self._is_in_testing_mode and X_mean is not None:
             X_mean = dpt.asnumpy(X_mean.get_array())
 
         self.X_mean = X_mean
@@ -143,7 +142,7 @@ class KMeansEngine(KMeansCythonEngine):
         if (X_mean := self.X_mean) is None:
             return
 
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             return super().unshift_centers(dpt.asnumpy(X), best_centers)
 
         restore_data_after_lloyd(X.T, best_centers.T, X_mean, self.estimator.copy_x)
@@ -204,7 +203,7 @@ class KMeansEngine(KMeansCythonEngine):
             self.tol,
         )
 
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
             assignments_idx = dpt.asnumpy(assignments_idx).astype(np.int32)
@@ -218,12 +217,12 @@ class KMeansEngine(KMeansCythonEngine):
         return assignments_idx, inertia, best_centroids_t.T, n_iteration
 
     def is_same_clustering(self, labels, best_labels, n_clusters):
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             return super().is_same_clustering(labels, best_labels, n_clusters)
         return is_same_clustering(labels, best_labels, n_clusters)
 
     def get_nb_distinct_clusters(self, best_labels):
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             return super().get_nb_distinct_clusters(best_labels)
         return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
@@ -236,7 +235,7 @@ class KMeansEngine(KMeansCythonEngine):
         # TODO: sample_weight actually not used for get_labels. Fix in sklearn ?
         # Relevant issue: https://github.com/scikit-learn/scikit-learn/issues/25066
         labels, _ = self._get_labels_inertia(X, sample_weight, with_inertia=False)
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             labels = dpt.asnumpy(labels).astype(np.int32)
         return labels
 
@@ -270,7 +269,7 @@ class KMeansEngine(KMeansCythonEngine):
             self.estimator.cluster_centers_, X, copy=False
         )
         euclidean_distances = get_euclidean_distances(X.T, cluster_centers)
-        if self._is_testing_mode:
+        if self._is_in_testing_mode:
             euclidean_distances = dpt.asnumpy(euclidean_distances)
         return euclidean_distances
 
