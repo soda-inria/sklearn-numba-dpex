@@ -125,12 +125,18 @@ class KMeansEngine(KMeansCythonEngine):
         if init_is_array_like:
             init = self._check_init(init, X)
 
-        X_t, X_mean, self.init, self.tol = prepare_data_for_lloyd(
-            X.T, init, estimator.tol, estimator.copy_x
+        (
+            X_t,
+            X_mean,
+            self.init,
+            self.tol,
+            self.sample_weight_is_uniform,
+        ) = prepare_data_for_lloyd(
+            X.T, init, estimator.tol, self.sample_weight, estimator.copy_x
         )
 
         if self._is_in_testing_mode and X_mean is not None:
-            X_mean = dpt.asnumpy(X_mean.get_array())
+            X_mean = dpt.asnumpy(X_mean)
 
         self.X_mean = X_mean
 
@@ -186,18 +192,11 @@ class KMeansEngine(KMeansCythonEngine):
         return centers_t, center_indices
 
     def kmeans_single(self, X, sample_weight, centers_init_t):
-        # ???: using `.all()` often segfaults
-        # TODO: minimal reproducer and issue at dpnp
-        # or write a kernel ?
-        use_uniform_weights = (
-            (sample_weight == sample_weight[0]).astype(int).sum()
-        ) == len(sample_weight)
-
         assignments_idx, inertia, best_centroids_t, n_iteration = lloyd(
             X.T,
             sample_weight,
             centers_init_t,
-            use_uniform_weights,
+            self.sample_weight_is_uniform,
             self.estimator.max_iter,
             self.estimator.verbose,
             self.tol,
