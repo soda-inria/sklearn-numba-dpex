@@ -495,9 +495,9 @@ def test_error_raised_on_invalid_group_sizes():
 
 def test_get_nb_distinct_clusters_kernel():
     labels = [0, 1, 0, 2, 2, 7, 6, 5, 3, 3]  # NB: all values up to 7 except 4
-    expected_nb_distinct_clusters = 6
+    expected_nb_distinct_clusters = 7
 
-    n_clusters = max(labels)
+    n_clusters = max(labels) + 1
     labels = dpt.asarray(labels, dtype=np.int32)
 
     actual_nb_distinct_clusters = int(get_nb_distinct_clusters(labels, n_clusters))
