@@ -2,6 +2,7 @@ import dpctl.tensor as dpt
 import dpnp
 import numpy as np
 import pytest
+from dpctl.tensor import asnumpy
 from numpy.random import default_rng
 from numpy.testing import assert_array_equal
 from sklearn import config_context
@@ -12,6 +13,7 @@ from sklearn.cluster.tests.test_k_means import n_clusters as n_clusters_sklearn_
 from sklearn.datasets import make_blobs
 from sklearn.utils._testing import assert_allclose
 
+from sklearn_numba_dpex.kmeans.drivers import get_nb_distinct_clusters
 from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
@@ -46,7 +48,7 @@ def test_kmeans_same_results(dtype, array_constr):
     X_array = array_constr(X, dtype=dtype)
 
     kmeans_vanilla = KMeans(
-        random_state=random_seed, algorithm="lloyd", max_iter=1, init="random"
+        random_state=random_seed, algorithm="lloyd", max_iter=2, n_init=2, init="random"
     )
     kmeans_engine = clone(kmeans_vanilla)
 
@@ -57,8 +59,10 @@ def test_kmeans_same_results(dtype, array_constr):
         kmeans_engine.fit(X_array)
 
     # ensure same results
-    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
-    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_allclose(
+        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+    )
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
     # test fit_predict
@@ -66,24 +70,28 @@ def test_kmeans_same_results(dtype, array_constr):
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.fit_predict(X_array)
     assert_array_equal(y_labels, y_labels_engine)
-    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
-    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_allclose(
+        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+    )
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
     # test fit_transform
     y_transform = kmeans_vanilla.fit_transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.fit_transform(X_array)
-    assert_allclose(y_transform, y_transform_engine)
-    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
-    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_allclose(y_transform, asnumpy(y_transform_engine))
+    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_allclose(
+        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+    )
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
     # # test predict method (returns labels)
     y_labels = kmeans_vanilla.predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.predict(X_array)
-    assert_array_equal(y_labels, y_labels_engine)
+    assert_array_equal(y_labels, asnumpy(y_labels_engine))
 
     # test score method (returns negative inertia for each sample)
     y_scores = kmeans_vanilla.score(X)
@@ -95,7 +103,7 @@ def test_kmeans_same_results(dtype, array_constr):
     y_transform = kmeans_vanilla.transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.transform(X_array)
-    assert_allclose(y_transform, y_transform_engine)
+    assert_allclose(y_transform, asnumpy(y_transform_engine))
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
@@ -117,19 +125,21 @@ def test_kmeans_relocated_clusters(dtype):
     assert_allclose(kmeans.inertia_, expected_inertia)
     assert kmeans.n_iter_ == expected_n_iter
 
+    labels = asnumpy(kmeans.labels_)
+    cluster_centers = asnumpy(kmeans.cluster_centers_)
     # There are two acceptable ways of relocating clusters in this example, the output
     # depends on how the argpartition strategy break ties. It might not be deterministic
     # (might depend on thread concurrency) so we accept both outputs.
     try:
         expected_labels = [0, 0, 1, 1]
         expected_centers = [[0.25, 0], [0.75, 1]]
-        assert_array_equal(kmeans.labels_, expected_labels)
-        assert_allclose(kmeans.cluster_centers_, expected_centers)
+        assert_array_equal(labels, expected_labels)
+        assert_allclose(cluster_centers, expected_centers)
     except AssertionError:
         expected_labels = [1, 1, 0, 0]
         expected_centers = [[0.75, 1.0], [0.25, 0.0]]
-        assert_array_equal(kmeans.labels_, expected_labels)
-        assert_allclose(kmeans.cluster_centers_, expected_centers)
+        assert_array_equal(labels, expected_labels)
+        assert_allclose(cluster_centers, expected_centers)
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
@@ -150,7 +160,7 @@ def test_euclidean_distance(dtype):
     result = engine.get_euclidean_distances(a)
 
     rtol = 1e-4 if dtype == np.float32 else 1e-7
-    assert_allclose(result, expected, rtol=rtol)
+    assert_allclose(asnumpy(result), expected, rtol=rtol)
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
@@ -161,7 +171,7 @@ def test_inertia(dtype):
     rng = default_rng(random_seed)
     X = rng.random((100, 10), dtype=dtype)
     sample_weight = rng.standard_normal(100, dtype=dtype)
-    centers = rng.standard_normal((5, 10), dtype=dtype)
+    centers = dpnp.asarray(rng.standard_normal((5, 10), dtype=dtype))
 
     estimator = KMeans(n_clusters=len(centers))
     estimator.cluster_centers_ = centers
@@ -169,8 +179,9 @@ def test_inertia(dtype):
     X_prepared, sample_weight_prepared = engine.prepare_prediction(X, sample_weight)
     labels = engine.get_labels(X_prepared, sample_weight_prepared)
 
-    distances = ((X - centers[labels]) ** 2).sum(axis=1)
-    expected = np.sum(distances * sample_weight)
+    closest_centers = centers.take(dpnp.asarray(labels, dtype=np.int32), axis=0)
+    distances = ((X_prepared - closest_centers) ** 2).sum(axis=1)
+    expected = float(np.sum(distances * sample_weight_prepared))
 
     inertia = engine.get_score(X_prepared, sample_weight_prepared)
 
@@ -204,9 +215,11 @@ def test_relocate_empty_clusters(dtype):
     expected_labels = [0, 0, 0, 0, 0, 0, 0, 2, 2, 1]
     assert kmeans_vanilla.n_iter_ == expected_n_iter
     assert kmeans_engine.n_iter_ == expected_n_iter
-    assert_array_equal(kmeans_vanilla.labels_, kmeans_engine.labels_)
+    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
     assert_array_equal(kmeans_vanilla.labels_, expected_labels)
-    assert_allclose(kmeans_vanilla.cluster_centers_, kmeans_engine.cluster_centers_)
+    assert_allclose(
+        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+    )
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
 
 
@@ -271,7 +284,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     # otherwise.
     n_selected_eq_threshold = int(n_selected_eq_threshold[0] - 1)
     n_selected_gt_threshold = int(n_selected_gt_threshold[0])
-    selected_samples_idx = dpt.asnumpy(selected_samples_idx)
+    selected_samples_idx = asnumpy(selected_samples_idx)
 
     # NB: the exact number of selected values equal to the threshold and the
     # corresponding selected indexes in the input array can change depending on
@@ -339,10 +352,10 @@ def test_kmeans_plusplus_same_quality(dtype):
         engine = KMeansEngine(kmeans)
         X_prepared, *_ = engine.prepare_fit(X)
         engine_kmeans_plusplus_centers_t = engine.init_centroids(X_prepared)
-        engine_kmeans_plusplus_centers = dpt.asnumpy(engine_kmeans_plusplus_centers_t.T)
+        engine_kmeans_plusplus_centers = engine_kmeans_plusplus_centers_t.T
         engine.unshift_centers(X_prepared, engine_kmeans_plusplus_centers)
         scores_engine_kmeans_plusplus.append(
-            _get_score_with_centers(engine_kmeans_plusplus_centers)
+            _get_score_with_centers(asnumpy(engine_kmeans_plusplus_centers))
         )
 
     # Those results confirm that both sklearn KMeans++ and ours have similar quality,
@@ -394,9 +407,10 @@ def test_kmeans_plusplus_output(array_constr, dtype):
     X_prepared, *_ = engine.prepare_fit(X, sample_weight=sample_weight)
 
     centers_t, indices = engine._kmeans_plusplus(X_prepared)
-    centers = dpt.asnumpy(centers_t.T)
+    centers = centers_t.T
     engine.unshift_centers(X_prepared, centers)
-    indices = dpt.asnumpy(indices)
+    centers = asnumpy(centers)
+    indices = asnumpy(indices)
 
     # Check there are the correct number of indices and that all indices are
     # positive and within the number of samples
@@ -426,14 +440,14 @@ def test_kmeans_plusplus_dataorder():
     engine = KMeansEngine(estimator)
     X_sklearn_test_prepared, *_ = engine.prepare_fit(X_sklearn_test)
     centers_c = engine.init_centroids(X_sklearn_test_prepared)
-    centers_c = dpt.asnumpy(centers_c.T)
+    centers_c = asnumpy(centers_c.T)
 
     X_fortran = np.asfortranarray(X_sklearn_test)
     # The engine is re-created to reset random state
     engine = KMeansEngine(estimator)
     X_fortran_prepared, *_ = engine.prepare_fit(X_fortran)
     centers_fortran = engine.init_centroids(X_fortran_prepared)
-    centers_fortran = dpt.asnumpy(centers_fortran.T)
+    centers_fortran = asnumpy(centers_fortran.T)
 
     assert_allclose(centers_c, centers_fortran)
 
@@ -477,3 +491,15 @@ def test_error_raised_on_invalid_group_sizes():
             work_group_size,
             dtype,
         )
+
+
+def test_get_nb_distinct_clusters_kernel():
+    labels = [0, 1, 0, 2, 2, 7, 6, 5, 3, 3]  # NB: all values up to 7 except 4
+    expected_nb_distinct_clusters = 7
+
+    n_clusters = max(labels) + 1
+    labels = dpt.asarray(labels, dtype=np.int32)
+
+    actual_nb_distinct_clusters = int(get_nb_distinct_clusters(labels, n_clusters))
+
+    assert actual_nb_distinct_clusters == expected_nb_distinct_clusters

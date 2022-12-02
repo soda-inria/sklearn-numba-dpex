@@ -1,5 +1,6 @@
 import contextlib
 import numbers
+import os
 from typing import Any, Dict
 
 import dpctl
@@ -18,6 +19,8 @@ from sklearn_numba_dpex.testing.config import override_attr_context
 from .drivers import (
     get_euclidean_distances,
     get_labels_inertia,
+    get_nb_distinct_clusters,
+    is_same_clustering,
     kmeans_plusplus,
     lloyd,
     prepare_data_for_lloyd,
@@ -29,9 +32,6 @@ class _DeviceUnset:
     pass
 
 
-# At the moment not all steps are implemented with numba_dpex, we inherit missing steps
-# from the default sklearn KMeansCythonEngine for convenience, this inheritance will be
-# removed later on when the other parts have been implemented.
 class KMeansEngine(KMeansCythonEngine):
     """GPU optimized implementation of Lloyd's k-means.
 
@@ -61,6 +61,11 @@ class KMeansEngine(KMeansCythonEngine):
 
     """
 
+    # NB: by convention, all public methods override the corresponding method from
+    # `sklearn.cluster._kmeans.KMeansCythonEngine`. All methods that do not override a
+    # method in `sklearn.cluster._kmeans.KMeansCythonEngine` are considered private to
+    # this implementation.
+
     # This class attribute can alter globally the attributes `device` and `order` of
     # future instances. It is only used for testing purposes, using
     # `sklearn_numba_dpex.testing.config.override_attr_context` context, for instance
@@ -89,7 +94,16 @@ class KMeansEngine(KMeansCythonEngine):
                 "https://github.com/IntelPython/numba-dpex/issues/767"
             )
         self.order = order
-        super().__init__(estimator)
+        self.estimator = estimator
+
+        _is_in_testing_mode = os.getenv("SKLEARN_NUMBA_DPEX_TESTING_MODE", "0")
+        if _is_in_testing_mode not in {"0", "1"}:
+            raise ValueError(
+                "If the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is"
+                f' set, it is expected to take values in {"0", "1"}, but got'
+                f" {_is_in_testing_mode} instead."
+            )
+        self._is_in_testing_mode = _is_in_testing_mode == "1"
 
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
@@ -115,6 +129,9 @@ class KMeansEngine(KMeansCythonEngine):
             X.T, init, estimator.tol, estimator.copy_x
         )
 
+        if self._is_in_testing_mode and X_mean is not None:
+            X_mean = dpt.asnumpy(X_mean.get_array())
+
         self.X_mean = X_mean
 
         self.random_state = check_random_state(estimator.random_state)
@@ -125,21 +142,10 @@ class KMeansEngine(KMeansCythonEngine):
         if (X_mean := self.X_mean) is None:
             return
 
-        best_centers += dpt.asnumpy(X_mean.get_array())
+        if self._is_in_testing_mode:
+            return super().unshift_centers(dpt.asnumpy(X), best_centers)
 
-        # NB: self.estimator.copy_x being set to False does not mean that no copy
-        # actually happened, only that no copy was forced if it was not necessary
-        # with respect to what device, dtype and order that are required at compute
-        # time. Nevertheless, there's no simple way to check if a copy happened
-        # without assumptions on the type of the raw input submitted by the user,
-        # but at the moment it is unknown what those assumptions could be.
-        # As a result, the following instructions are ran every time, even if it
-        # isn't useful when a copy has been made.
-        # TODO: is there a set of assumptions that exhaustively describes the set
-        # of accepted inputs, and also enables checking if a copy happened or not
-        # in a simple way ?
-        if not self.estimator.copy_x:
-            restore_data_after_lloyd(X.T, X_mean)
+        restore_data_after_lloyd(X.T, best_centers.T, X_mean, self.estimator.copy_x)
 
     def init_centroids(self, X):
         init = self.init
@@ -187,7 +193,7 @@ class KMeansEngine(KMeansCythonEngine):
             (sample_weight == sample_weight[0]).astype(int).sum()
         ) == len(sample_weight)
 
-        assignments_idx, inertia, best_centroids, n_iteration = lloyd(
+        assignments_idx, inertia, best_centroids_t, n_iteration = lloyd(
             X.T,
             sample_weight,
             centers_init_t,
@@ -197,22 +203,28 @@ class KMeansEngine(KMeansCythonEngine):
             self.tol,
         )
 
-        # TODO: explore leveraging dpnp to benefit from USM to avoid moving centroids
-        # back and forth between device and host memory in case a subsequent `.predict`
-        # call is requested on the same GPU later.
-        return (
-            dpt.asnumpy(assignments_idx).astype(np.int32, copy=False),
-            inertia,
+        if self._is_in_testing_mode:
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
-            # ???: rather that returning whatever dtype the driver returns (which might
-            # depends on device support for float64), shouldn't we cast to a dtype that
-            # is always consistent with the input ? (e.g. cast to float64 if the input
-            # was given as float64 ?) But what assumptions can we make on the input
-            # so we can infer its input dtype without risking triggering a copy of it ?
-            np.ascontiguousarray(dpt.asnumpy(best_centroids.T)),
-            n_iteration,
-        )
+            assignments_idx = dpt.asnumpy(assignments_idx).astype(np.int32)
+            best_centroids_t = np.asfortranarray(dpt.asnumpy(best_centroids_t))
+
+        # ???: rather that returning whatever dtype the driver returns (which might
+        # depends on device support for float64), shouldn't we cast to a dtype that
+        # is always consistent with the input ? (e.g. cast to float64 if the input
+        # was given as float64 ?) But what assumptions can we make on the input
+        # so we can infer its input dtype without risking triggering a copy of it ?
+        return assignments_idx, inertia, best_centroids_t.T, n_iteration
+
+    def is_same_clustering(self, labels, best_labels, n_clusters):
+        if self._is_in_testing_mode:
+            return super().is_same_clustering(labels, best_labels, n_clusters)
+        return is_same_clustering(labels, best_labels, n_clusters)
+
+    def get_nb_distinct_clusters(self, best_labels):
+        if self._is_in_testing_mode:
+            return super().get_nb_distinct_clusters(best_labels)
+        return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
     def prepare_prediction(self, X, sample_weight):
         X = self._validate_data(X, reset=False)
@@ -223,7 +235,9 @@ class KMeansEngine(KMeansCythonEngine):
         # TODO: sample_weight actually not used for get_labels. Fix in sklearn ?
         # Relevant issue: https://github.com/scikit-learn/scikit-learn/issues/25066
         labels, _ = self._get_labels_inertia(X, sample_weight, with_inertia=False)
-        return dpt.asnumpy(labels).astype(np.int32, copy=False)
+        if self._is_in_testing_mode:
+            labels = dpt.asnumpy(labels).astype(np.int32)
+        return labels
 
     def get_score(self, X, sample_weight):
         _, inertia = self._get_labels_inertia(X, sample_weight, with_inertia=True)
@@ -255,7 +269,9 @@ class KMeansEngine(KMeansCythonEngine):
             self.estimator.cluster_centers_, X, copy=False
         )
         euclidean_distances = get_euclidean_distances(X.T, cluster_centers)
-        return dpt.asnumpy(euclidean_distances)
+        if self._is_in_testing_mode:
+            euclidean_distances = dpt.asnumpy(euclidean_distances)
+        return euclidean_distances
 
     def _validate_data(self, X, reset=True):
         if isinstance(X, dpnp.ndarray):

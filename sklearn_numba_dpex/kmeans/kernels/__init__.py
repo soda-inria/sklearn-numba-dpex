@@ -11,6 +11,8 @@ from .kmeans_plusplus import (
 from .lloyd_single_step import make_lloyd_single_step_fixed_window_kernel
 from .utils import (
     make_centroid_shifts_kernel,
+    make_get_nb_distinct_clusters_kernel,
+    make_is_same_clustering_kernel,
     make_reduce_centroid_data_kernel,
     make_relocate_empty_clusters_kernel,
     make_select_samples_far_from_centroid_kernel,
@@ -28,4 +30,6 @@ __all__ = (
     "make_select_samples_far_from_centroid_kernel",
     "make_centroid_shifts_kernel",
     "make_reduce_centroid_data_kernel",
+    "make_is_same_clustering_kernel",
+    "make_get_nb_distinct_clusters_kernel",
 )

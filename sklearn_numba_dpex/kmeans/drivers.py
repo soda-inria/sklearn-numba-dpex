@@ -24,6 +24,8 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_centroid_shifts_kernel,
     make_compute_euclidean_distances_fixed_window_kernel,
     make_compute_inertia_kernel,
+    make_get_nb_distinct_clusters_kernel,
+    make_is_same_clustering_kernel,
     make_kmeansplusplus_init_kernel,
     make_kmeansplusplus_single_step_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
@@ -467,22 +469,74 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
     return X_t, X_mean, init, tol
 
 
-def restore_data_after_lloyd(X_t, X_mean):
+def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
+    """X_mean, the feature wise mean of X prior to the centerings of X and centers in
+    `prepare_data_for_lloyd`, is re-added to X and centers.
+    """
+    if X_mean is None:
+        # X and best_centers_t aren't translated back.
+        return
+
     n_features, n_samples = X_t.shape
+    n_clusters = best_centers_t.shape[1]
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
 
-    X_t = dpt.asarray(X_t, copy=False)
-    broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-        n_features,
-        n_samples,
-        ops=_plus,
-        work_group_size=max_work_group_size,
+    best_centers_t = dpt.asarray(best_centers_t, copy=False)
+    broadcast_init_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+        n_features, n_clusters, ops=_plus, work_group_size=max_work_group_size
     )
-    # The feature wise mean of X X_mean that had been substracted in
-    # `prepare_data_for_lloyd` is re-added.
-    broadcast_X_plus_X_mean(X_t, X_mean)
+    broadcast_init_plus_X_mean(best_centers_t, X_mean)
+
+    # NB: copy_x being set to False does not mean that no copy actually happened, only
+    # that no copy was forced if it was not necessary with respect to what device,
+    # dtype and order that are required at compute time. Nevertheless, there's no
+    # simple way to check if a copy happened without assumptions on the type of the raw
+    # input submitted by the user, but at the moment it is unknown what those
+    # assumptions could be. As a result, the following instructions are ran every time,
+    # even if it isn't useful when a copy has been made.
+    # TODO: is there a set of assumptions that exhaustively describes the set of
+    # accepted inputs, and also enables checking if a copy happened or not in a simple
+    # way ?
+    if not copy_x:
+        X_t = dpt.asarray(X_t, copy=False)
+        broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
+            n_features, n_samples, ops=_plus, work_group_size=max_work_group_size
+        )
+        broadcast_X_plus_X_mean(X_t, X_mean)
+
+
+def is_same_clustering(labels1, labels2, n_clusters):
+    """Check if two arrays of labels are the same up to a permutation of the labels"""
+    device = labels1.device.sycl_device
+
+    is_same_clustering_kernel = make_is_same_clustering_kernel(
+        n_samples=labels1.shape[0],
+        n_clusters=n_clusters,
+        work_group_size=device.max_work_group_size,
+        device=device,
+    )
+    return is_same_clustering_kernel(labels1, labels2)
+
+
+def get_nb_distinct_clusters(labels, n_clusters):
+    device = labels.device.sycl_device
+
+    get_nb_distinct_clusters_kernel = make_get_nb_distinct_clusters_kernel(
+        n_samples=labels.shape[0],
+        n_clusters=n_clusters,
+        work_group_size=device.max_work_group_size,
+        device=device,
+    )
+
+    clusters_seen = dpt.zeros(sh=(n_clusters,), dtype=np.int32, device=device)
+
+    nb_distinct_clusters = dpt.zeros(sh=(1,), dtype=np.int32, device=device)
+
+    get_nb_distinct_clusters_kernel(labels, clusters_seen, nb_distinct_clusters)
+
+    return nb_distinct_clusters[0]
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):

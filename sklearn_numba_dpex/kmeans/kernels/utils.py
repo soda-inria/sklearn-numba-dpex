@@ -1,6 +1,7 @@
 import math
 from functools import lru_cache
 
+import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 
@@ -249,3 +250,87 @@ def make_reduce_centroid_data_kernel(
                 empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
     return reduce_centroid_data[global_size, work_group_size]
+
+
+@lru_cache
+def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, device):
+    # TODO: are there possible optimizations for this kernel ?
+    # - fusing the two kernels (It would require a lock ? There's a risk of concurrency
+    # issues among threads that try to write different values into `mapping` and
+    # threads that read `mapping`, all this at the same time. Tools in `dpex.atomic`
+    # seems to not be enough to overcome that at the moment.)
+    # - early stop
+
+    def is_same_clustering(labels1, labels2):
+        mapping = dpt.empty(sh=(n_clusters,), dtype=np.int32, device=device)
+        result = dpt.asarray([1], dtype=np.int32, device=device)
+        _build_mapping[global_size, work_group_size](labels1, labels2, mapping)
+        _is_same_clustering[global_size, work_group_size](
+            labels1, labels2, mapping, result
+        )
+        return bool(result[0])
+
+    @dpex.kernel
+    # fmt: off
+    def _build_mapping(
+        labels1,            # IN      (n_samples,)
+        labels2,            # IN      (n_samples,)
+        mapping,            # BUFFER  (n_clusters,)
+    ):
+        # fmt: on
+        sample_idx = dpex.get_global_id(zero_idx)
+        if sample_idx >= n_samples:
+            return
+
+        label1 = labels1[sample_idx]
+        label2 = labels2[sample_idx]
+        mapping[label1] = label2
+
+    @dpex.kernel
+    # fmt: off
+    def _is_same_clustering(
+        labels1,
+        labels2,
+        mapping,
+        result
+    ):
+        # fmt: on
+        """`result` is expected to be an empty array with dtype int32 of size (1,)
+        initialized with value 1.
+        """
+        sample_idx = dpex.get_global_id(zero_idx)
+        if sample_idx >= n_samples:
+            return
+
+        if mapping[labels1[sample_idx]] != labels2[sample_idx]:
+            result[zero_idx] = zero_idx
+
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
+
+    return is_same_clustering
+
+
+@lru_cache
+def make_get_nb_distinct_clusters_kernel(
+    n_samples, n_clusters, work_group_size, device
+):
+    one_incr = np.int32(1)
+
+    @dpex.kernel
+    def get_nb_distinct_clusters(labels, clusters_seen, nb_distinct_clusters):
+        sample_idx = dpex.get_global_id(zero_idx)
+
+        if sample_idx >= n_samples:
+            return
+
+        label = labels[sample_idx]
+
+        if clusters_seen[label] > zero_idx:
+            return
+
+        previous_value = dpex.atomic.add(clusters_seen, label, one_incr)
+        if previous_value == zero_idx:
+            dpex.atomic.add(nb_distinct_clusters, zero_idx, one_incr)
+
+    global_size = math.ceil(n_samples / work_group_size) * work_group_size
+    return get_nb_distinct_clusters[global_size, work_group_size]
