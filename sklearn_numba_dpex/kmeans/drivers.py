@@ -204,7 +204,7 @@ def lloyd(
             empty_clusters_list,
             n_empty_clusters,
         )
-        
+
         if verbose:
             # ???: verbosity comes at the cost of performance since it triggers
             # computing exact inertia at each iteration. Shouldn't this be
