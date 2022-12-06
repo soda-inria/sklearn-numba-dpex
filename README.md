@@ -166,9 +166,10 @@ will introspect the available hardware, and should display working `opencl` cpu 
 Once you have loaded into a `numba_dpex` development environment, following one of the two previous guides, follow those instructions:
 
 ```
-git clone https://github.com/ogrisel/scikit-learn
+git clone https://github.com/ogrisel/scikit-learn -b wip-engines
 cd scikit-learn
-git checkout wip-engines
+# NB: recommended commit is subject to change without notice
+git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
 pip install -e . --no-build-isolation
 cd ..
 ```
