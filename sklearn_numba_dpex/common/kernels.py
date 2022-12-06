@@ -30,19 +30,25 @@ zero_idx = np.int64(0)
 
 
 @lru_cache
-def make_elementwise_binary_ops_1d_kernel(size, ops, work_group_size):
-
-    ops = dpex.func(ops)
+def make_elementwise_binary_op_1d_kernel(size, op, work_group_size):
+    """This kernel is mostly necessary to work around lack of support for this
+    operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
+    op = dpex.func(op)
 
     @dpex.kernel
-    def elementwise_ops(data, operand_right):
+    # fmt: off
+    def elementwise_ops(
+        data,                    # INOUT    (size,)
+        operand_right            # IN       (1,)
+    ):
+        # fmt: on
 
         item_idx = dpex.get_global_id(zero_idx)
         if item_idx >= size:
             return
 
         operand_left = data[item_idx]
-        data[item_idx] = ops(operand_left, operand_right[0])
+        data[item_idx] = op(operand_left, operand_right[0])
 
     global_size = math.ceil(size / work_group_size) * work_group_size
     return elementwise_ops[global_size, work_group_size]
@@ -260,7 +266,12 @@ def make_sum_reduction_2d_axis1_kernel(
     def sum_reduction(summands):
         # TODO: manually dispatch the kernels with a SyclQueue
         if not kernels_and_empty_tensors_pairs:
-            return dpt.zeros(sh=(1,), device=device, dtype=dtype)
+            # By convention the sum of all elements of an empty array is equal to 0. (
+            # likewise with numpy np.sum([]) returns 0).
+            if size1 is None:
+                return dpt.zeros(sh=(1,), device=device, dtype=dtype)
+            else:
+                return dpt.zeros(sh=(size0, 1))
 
         for kernel, result in kernels_and_empty_tensors_pairs:
             kernel(summands, result)

@@ -11,7 +11,7 @@ from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
-    make_elementwise_binary_ops_1d_kernel,
+    make_elementwise_binary_op_1d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
@@ -267,6 +267,7 @@ def lloyd(
         compute_centroid_shifts_kernel(centroids_t, new_centroids_t, centroid_shifts)
 
         centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
         centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
 
         # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
@@ -427,16 +428,21 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         dtype=compute_dtype,
     )
 
-    elementwise_binary_divide_kernel = make_elementwise_binary_ops_1d_kernel(
+    elementwise_binary_divide_kernel = make_elementwise_binary_op_1d_kernel(
         n_features, _divide, max_work_group_size
     )
 
+    # At the time of writing this code, dpnp does not support functions (like `==`
+    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # manner.
+    # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_of_squares_kernel = make_sum_reduction_2d_axis1_kernel(
         size0=n_features,
         size1=None,
         work_group_size=max_work_group_size,
         device=device,
         dtype=compute_dtype,
+        fused_unary_func=_square,
     )
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
@@ -446,7 +452,8 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     )
     elementwise_binary_divide_kernel(X_mean, divisor)
 
-    X_mean_is_zeroed = float(sum_of_squares_kernel(X_mean)[0]) == 0.0
+    X_sum_squared = sum_of_squares_kernel(X_mean)[0]
+    X_mean_is_zeroed = float(X_sum_squared) == 0.0
 
     if X_mean_is_zeroed:
         # If the data is already centered, there's no need to perform shift/unshift
@@ -488,10 +495,14 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     )
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
-
-    tol = (float(variance[0]) / n_features) * tol
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    tol = (dpt.asnumpy(variance)[0] / n_features) * tol
 
     # check if sample_weight is uniform
+    # At the time of writing this code, dpnp does not support functions (like `==`
+    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # manner.
+    # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_sample_weight_kernel = make_sum_reduction_2d_axis1_kernel(
         size0=n_samples,
         size1=None,
@@ -575,7 +586,8 @@ def get_nb_distinct_clusters(labels, n_clusters):
 
     get_nb_distinct_clusters_kernel(labels, clusters_seen, nb_distinct_clusters)
 
-    return nb_distinct_clusters.dtype.type(nb_distinct_clusters[0])
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    return dpt.asnumpy(nb_distinct_clusters[0])
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
@@ -779,9 +791,9 @@ def kmeans_plusplus(
     candidate_ids = dpt.empty(sh=(n_local_trials,), dtype=np.int32, device=device)
 
     # Pick first center randomly
-    starting_center_id = dpt.asnumpy(get_random_raw(random_state))[0] % np.uint64(
-        n_samples
-    )
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    random_uint64 = dpt.asnumpy(get_random_raw(random_state))[0]
+    starting_center_id = random_uint64 % np.uint64(n_samples)
     center_indices[0] = np.int32(starting_center_id)
 
     # track index of point, initialize list of closest distances and calculate
@@ -831,7 +843,10 @@ def kmeans_plusplus(
         )
 
         candidate_potentials = reduce_potential_2d_kernel(sq_distances_t)[:, 0]
-        best_candidate = np.int32(select_best_candidate_kernel(candidate_potentials)[0])
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+        best_candidate = dpt.asnumpy(
+            select_best_candidate_kernel(candidate_potentials)
+        )[0]
 
         total_potential = candidate_potentials[best_candidate : (best_candidate + 1)]
 
