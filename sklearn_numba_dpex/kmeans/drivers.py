@@ -196,6 +196,15 @@ def lloyd(
             cluster_sizes_private_copies,
         )
 
+        reduce_centroid_data_kernel(
+            cluster_sizes_private_copies,
+            new_centroids_t_private_copies,
+            cluster_sizes,
+            new_centroids_t,
+            empty_clusters_list,
+            n_empty_clusters,
+        )
+
         if verbose:
             # ???: verbosity comes at the cost of performance since it triggers
             # computing exact inertia at each iteration. Shouldn't this be
@@ -209,15 +218,6 @@ def lloyd(
             )
             inertia, *_ = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
             print(f"Iteration {n_iteration}, inertia {inertia:5.3e}")
-
-        reduce_centroid_data_kernel(
-            cluster_sizes_private_copies,
-            new_centroids_t_private_copies,
-            cluster_sizes,
-            new_centroids_t,
-            empty_clusters_list,
-            n_empty_clusters,
-        )
 
         n_empty_clusters_ = int(n_empty_clusters[0])
         if n_empty_clusters_ > 0:
