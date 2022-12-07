@@ -164,7 +164,7 @@ if __name__ == "__main__":
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
 
-    from sklearn_numba_dpex.testing.config import override_attr_context
+    from sklearn_numba_dpex.testing import override_attr_context
     import sklearn_numba_dpex.kmeans.engine as skdpex_kmeans_engine_module
     from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 

@@ -180,7 +180,11 @@ def lloyd(
     # TODO: Investigate possible speedup with a custom dpctl queue with a custom
     # DAG of events and a final single "wait"
     while (n_iteration < max_iter) and (centroid_shifts_sum > tol):
-        half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
+        half_l2_norm_kernel(
+            centroids_t,
+            # OUT:
+            centroids_half_l2_norm,
+        )
 
         reset_cluster_sizes_private_copies_kernel(cluster_sizes_private_copies)
         reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
@@ -192,6 +196,7 @@ def lloyd(
             sample_weight,
             centroids_t,
             centroids_half_l2_norm,
+            # OUT:
             assignments_idx,
             new_centroids_t_private_copies,
             cluster_sizes_private_copies,
@@ -200,6 +205,7 @@ def lloyd(
         reduce_centroid_data_kernel(
             cluster_sizes_private_copies,
             new_centroids_t_private_copies,
+            # OUT:
             cluster_sizes,
             new_centroids_t,
             empty_clusters_list,
@@ -215,6 +221,7 @@ def lloyd(
                 sample_weight,
                 new_centroids_t,
                 assignments_idx,
+                # OUT:
                 per_sample_inertia,
             )
             inertia, *_ = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
@@ -232,7 +239,11 @@ def lloyd(
             # been computed in the main kernel
             if not verbose:
                 assignment_fixed_window_kernel(
-                    X_t, centroids_t, centroids_half_l2_norm, assignments_idx
+                    X_t,
+                    centroids_t,
+                    centroids_half_l2_norm,
+                    # OUT:
+                    assignments_idx,
                 )
 
             # if verbose is True and if sample_weight is uniform, distances to
@@ -246,6 +257,7 @@ def lloyd(
                     dpt.ones_like(sample_weight),
                     centroids_t,
                     assignments_idx,
+                    # OUT:
                     sq_dist_to_nearest_centroid,
                 )
 
@@ -262,9 +274,15 @@ def lloyd(
                 max_work_group_size,
             )
 
+        # Change `new_centroids_t` inplace
         broadcast_division_kernel(new_centroids_t, cluster_sizes)
 
-        compute_centroid_shifts_kernel(centroids_t, new_centroids_t, centroid_shifts)
+        compute_centroid_shifts_kernel(
+            centroids_t,
+            new_centroids_t,
+            # OUT:
+            centroid_shifts,
+        )
 
         centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
         # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
@@ -307,7 +325,11 @@ def lloyd(
 
     # Finally, run an assignment kernel to compute the assignments to the best
     # centroids found, along with the exact inertia.
-    half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
+    half_l2_norm_kernel(
+        centroids_t,
+        # OUT:
+        centroids_half_l2_norm,
+    )
 
     # NB: inertia and labels could be computed in a single fused kernel, however,
     # re-using the quantity Q = ((1/2)c^2 - <x.c>) that is computed in the
@@ -317,11 +339,20 @@ def lloyd(
     # data.
     # See https://github.com/soda-inria/sklearn-numba-dpex/issues/28
     assignment_fixed_window_kernel(
-        X_t, centroids_t, centroids_half_l2_norm, assignments_idx
+        X_t,
+        centroids_t,
+        centroids_half_l2_norm,
+        # OUT:
+        assignments_idx,
     )
 
     compute_inertia_kernel(
-        X_t, sample_weight, centroids_t, assignments_idx, per_sample_inertia
+        X_t,
+        sample_weight,
+        centroids_t,
+        assignments_idx,
+        # OUT:
+        per_sample_inertia,
     )
 
     # inertia = per_sample_inertia.sum()
@@ -373,9 +404,11 @@ def _relocate_empty_clusters(
     samples_far_from_center = dpt.empty(n_samples, dtype=np.uint32, device=device)
     n_selected_gt_threshold = dpt.zeros(1, dtype=np.int32, device=device)
     n_selected_eq_threshold = dpt.ones(1, dtype=np.int32, device=device)
+
     select_samples_far_from_centroid_kernel(
         sq_dist_to_nearest_centroid,
         threshold,
+        # OUT
         samples_far_from_center,
         n_selected_gt_threshold,
         n_selected_eq_threshold,
@@ -400,6 +433,7 @@ def _relocate_empty_clusters(
         assignments_idx,
         samples_far_from_center,
         empty_clusters_list,
+        # OUT
         per_sample_inertia,
         centroids_t,
         cluster_sizes,
@@ -450,6 +484,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     divisor = dpt.full(
         sh=(1,), fill_value=compute_dtype(n_samples), dtype=compute_dtype, device=device
     )
+    # Change `X_mean` inplace
     elementwise_binary_divide_kernel(X_mean, divisor)
 
     X_sum_squared = sum_of_squares_kernel(X_mean)[0]
@@ -471,6 +506,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
             work_group_size=max_work_group_size,
         )
 
+        # Change `X_t` inplace
         broadcast_X_minus_X_mean(X_t, X_mean)
 
         if isinstance(init, dpt.usm_ndarray):
@@ -481,6 +517,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
                 ops=_minus,
                 work_group_size=max_work_group_size,
             )
+            # Change `init` inplace
             broadcast_init_minus_X_mean(init, X_mean)
 
     n_items = n_features * n_samples
@@ -537,6 +574,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
     broadcast_init_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
         n_features, n_clusters, ops=_plus, work_group_size=max_work_group_size
     )
+    # Change `best_centers_t` inplace
     broadcast_init_plus_X_mean(best_centers_t, X_mean)
 
     # NB: copy_x being set to False does not mean that no copy actually happened, only
@@ -554,6 +592,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
         broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
             n_features, n_samples, ops=_plus, work_group_size=max_work_group_size
         )
+        # Change X_t inplace
         broadcast_X_plus_X_mean(X_t, X_mean)
 
 
@@ -584,7 +623,12 @@ def get_nb_distinct_clusters(labels, n_clusters):
 
     nb_distinct_clusters = dpt.zeros(sh=(1,), dtype=np.int32, device=device)
 
-    get_nb_distinct_clusters_kernel(labels, clusters_seen, nb_distinct_clusters)
+    get_nb_distinct_clusters_kernel(
+        labels,
+        clusters_seen,
+        # OUT
+        nb_distinct_clusters,
+    )
 
     # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
     return dpt.asnumpy(nb_distinct_clusters[0])
@@ -617,10 +661,18 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     centroids_half_l2_norm = dpt.empty(n_clusters, dtype=compute_dtype, device=device)
     assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
 
-    half_l2_norm_kernel(centroids_t, centroids_half_l2_norm)
+    half_l2_norm_kernel(
+        centroids_t,
+        # OUT
+        centroids_half_l2_norm,
+    )
 
     label_assignment_fixed_window_kernel(
-        X_t, centroids_t, centroids_half_l2_norm, assignments_idx
+        X_t,
+        centroids_t,
+        centroids_half_l2_norm,
+        # OUT
+        assignments_idx,
     )
 
     if not with_inertia:
@@ -641,7 +693,12 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     per_sample_inertia = dpt.empty(n_samples, dtype=compute_dtype, device=device)
 
     compute_inertia_kernel(
-        X_t, sample_weight, centroids_t, assignments_idx, per_sample_inertia
+        X_t,
+        sample_weight,
+        centroids_t,
+        assignments_idx,
+        # OUT
+        per_sample_inertia,
     )
 
     # inertia = per_sample_inertia.sum()
@@ -673,7 +730,12 @@ def get_euclidean_distances(X_t, Y_t):
         (n_clusters, n_samples), dtype=compute_dtype, device=device
     )
 
-    euclidean_distances_fixed_window_kernel(X_t, Y_t, euclidean_distances_t)
+    euclidean_distances_fixed_window_kernel(
+        X_t,
+        Y_t,
+        # OUT
+        euclidean_distances_t,
+    )
     return euclidean_distances_t.T
 
 
@@ -799,7 +861,12 @@ def kmeans_plusplus(
     # track index of point, initialize list of closest distances and calculate
     # current potential
     kmeansplusplus_init_kernel(
-        X_t, sample_weight, centers_t, center_indices, closest_dist_sq
+        X_t,
+        sample_weight,
+        # OUT
+        centers_t,
+        center_indices,
+        closest_dist_sq,
     )
     total_potential = reduce_potential_1d_kernel(closest_dist_sq)
 
@@ -822,13 +889,18 @@ def kmeans_plusplus(
             sample_center_candidates_kernel(
                 closest_dist_sq.to_device(cpu_device),
                 total_potential.to_device(cpu_device),
+                # OUT
                 random_state,
                 candidate_ids,
             )
             candidate_ids = candidate_ids.to_device(device)
         else:
             sample_center_candidates_kernel(
-                closest_dist_sq, total_potential, random_state, candidate_ids
+                closest_dist_sq,
+                total_potential,
+                # OUT
+                random_state,
+                candidate_ids,
             )
 
         # Now, for each (sample, candidate)-pair, compute the minimum between
@@ -839,7 +911,12 @@ def kmeans_plusplus(
         # `dtype.nbytes * n_local_trials * n_sample` bytes in memory.
         # Which is better ?
         kmeansplusplus_single_step_fixed_window_kernel(
-            X_t, sample_weight, candidate_ids, closest_dist_sq, sq_distances_t
+            X_t,
+            sample_weight,
+            candidate_ids,
+            closest_dist_sq,
+            # OUT
+            sq_distances_t,
         )
 
         candidate_potentials = reduce_potential_2d_kernel(sq_distances_t)[:, 0]

@@ -208,9 +208,10 @@ def make_lloyd_single_step_fixed_window_kernel(
                 local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
+                is_last_centroid_window,
+                # OUT
                 window_of_centroids_half_l2_norms,
                 dot_products,
-                is_last_centroid_window
             )
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
@@ -228,6 +229,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                     window_loading_centroid_idx,
                     window_loading_feature_offset,
                     current_centroids_t,
+                    # OUT
                     centroids_window,
                 )
                 # Since other work items are responsible for loading the relevant data
@@ -240,9 +242,10 @@ def make_lloyd_single_step_fixed_window_kernel(
                     first_feature_idx,
                     X_t,
                     centroids_window,
-                    dot_products,
                     is_last_feature_window,
                     is_last_centroid_window,
+                    # OUT
+                    dot_products
                 )
 
                 first_feature_idx += centroids_window_height
@@ -260,8 +263,8 @@ def make_lloyd_single_step_fixed_window_kernel(
                 min_idx,
                 min_sample_pseudo_inertia,
                 window_of_centroids_half_l2_norms,
+                is_last_centroid_window,
                 dot_products,
-                is_last_centroid_window
             )
 
             first_centroid_idx += window_n_centroids

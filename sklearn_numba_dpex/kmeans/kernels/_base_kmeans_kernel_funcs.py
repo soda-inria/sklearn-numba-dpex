@@ -66,15 +66,17 @@ def make_pairwise_ops_base_kernel_funcs(
             local_work_id,
             first_centroid_idx,
             centroids_half_l2_norm,
+            is_last_centroid_window,
+            # OUT
             window_of_centroids_half_l2_norms,
             dot_products,
-            is_last_centroid_window,
         ):
             if is_last_centroid_window:
                 initialize_last_window_of_centroids(
                     local_work_id,
                     first_centroid_idx,
                     centroids_half_l2_norm,
+                    # OUT
                     window_of_centroids_half_l2_norms,
                     dot_products,
                 )
@@ -83,6 +85,7 @@ def make_pairwise_ops_base_kernel_funcs(
                     local_work_id,
                     first_centroid_idx,
                     centroids_half_l2_norm,
+                    # OUT
                     window_of_centroids_half_l2_norms,
                     dot_products,
                 )
@@ -90,7 +93,11 @@ def make_pairwise_ops_base_kernel_funcs(
     else:
 
         @dpex.func
-        def initialize_window_of_centroids(dot_products, is_last_centroid_window):
+        def initialize_window_of_centroids(
+            is_last_centroid_window,
+            # OUT
+            dot_products,
+        ):
             if is_last_centroid_window:
                 initialize_last_window_of_centroids(dot_products)
             else:
@@ -132,13 +139,19 @@ def make_pairwise_ops_base_kernel_funcs(
         first_feature_idx,
         X_t,
         centroids_window,
-        dot_products,
         is_last_feature_window,
         is_last_centroid_window,
+        # OUT
+        dot_products,
     ):
         if is_last_feature_window and is_last_centroid_window:
             accumulate_last_centroid_and_last_feature_window_dot_products(
-                sample_idx, first_feature_idx, X_t, centroids_window, dot_products
+                sample_idx,
+                first_feature_idx,
+                X_t,
+                centroids_window,
+                # OUT
+                dot_products,
             )
         elif is_last_feature_window:
             accumulate_last_feature_window_dot_products(
@@ -319,8 +332,8 @@ def make_update_closest_centroid_kernel_func(n_clusters, window_n_centroids):
         min_idx,
         min_sample_pseudo_inertia,
         window_of_centroids_half_l2_norms,
-        dot_products,
         is_last_centroid_window,
+        dot_products,
     ):
 
         if is_last_centroid_window:

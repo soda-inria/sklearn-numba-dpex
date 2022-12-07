@@ -14,7 +14,7 @@ from sklearn.exceptions import NotSupportedByEngineError
 from sklearn.utils import check_array, check_random_state
 from sklearn.utils.validation import _is_arraylike_not_scalar
 
-from sklearn_numba_dpex.testing.config import override_attr_context
+from sklearn_numba_dpex.testing import override_attr_context
 
 from .drivers import (
     get_euclidean_distances,

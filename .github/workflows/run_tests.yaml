@@ -27,7 +27,7 @@ jobs:
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
     - name: Run sklearn_numba_dpex tests
-      run: pytest sklearn_numba_dpex/
+      run: pytest -v sklearn_numba_dpex/
 
       # TODO: run those tests in a separate pipeline
       # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type
@@ -40,4 +40,4 @@ jobs:
       # activated when the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is set
       # to 1.
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      run: SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+      run: SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
