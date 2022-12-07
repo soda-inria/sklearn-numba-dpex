@@ -6,11 +6,12 @@ import dpctl.tensor as dpt
 import dpnp
 import numpy as np
 
-from sklearn_numba_dpex.common._utils import _minus, _plus, _square
+from sklearn_numba_dpex.common._utils import _divide, _minus, _plus, _square
 from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
+    make_elementwise_binary_op_1d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
@@ -196,6 +197,15 @@ def lloyd(
             cluster_sizes_private_copies,
         )
 
+        reduce_centroid_data_kernel(
+            cluster_sizes_private_copies,
+            new_centroids_t_private_copies,
+            cluster_sizes,
+            new_centroids_t,
+            empty_clusters_list,
+            n_empty_clusters,
+        )
+
         if verbose:
             # ???: verbosity comes at the cost of performance since it triggers
             # computing exact inertia at each iteration. Shouldn't this be
@@ -209,15 +219,6 @@ def lloyd(
             )
             inertia, *_ = dpt.asnumpy(reduce_inertia_kernel(per_sample_inertia))
             print(f"Iteration {n_iteration}, inertia {inertia:5.3e}")
-
-        reduce_centroid_data_kernel(
-            cluster_sizes_private_copies,
-            new_centroids_t_private_copies,
-            cluster_sizes,
-            new_centroids_t,
-            empty_clusters_list,
-            n_empty_clusters,
-        )
 
         n_empty_clusters_ = int(n_empty_clusters[0])
         if n_empty_clusters_ > 0:
@@ -266,6 +267,8 @@ def lloyd(
         compute_centroid_shifts_kernel(centroids_t, new_centroids_t, centroid_shifts)
 
         centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+        centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
 
         # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
         # and keep an additional copy of centroids that is updated only if the
@@ -403,7 +406,7 @@ def _relocate_empty_clusters(
     )
 
 
-def prepare_data_for_lloyd(X_t, init, tol, copy_x):
+def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     """It can be more numerically accurate to center the data first. If copy_x is True,
     then the original data is not modified. If False, the original data is modified,
     and put back later on (see `restore_data_after_lloyd`), but small numerical
@@ -425,8 +428,33 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
         dtype=compute_dtype,
     )
 
-    X_mean = (sum_axis1_kernel(X_t) / compute_dtype(n_samples))[:, 0]
-    X_mean_is_zeroed = (X_mean == 0).astype(int).sum() == len(X_mean)
+    elementwise_binary_divide_kernel = make_elementwise_binary_op_1d_kernel(
+        n_features, _divide, max_work_group_size
+    )
+
+    # At the time of writing this code, dpnp does not support functions (like `==`
+    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # manner.
+    # TODO: if dpnp support extends to relevant features, use it instead ?
+    sum_of_squares_kernel = make_sum_reduction_2d_axis1_kernel(
+        size0=n_features,
+        size1=None,
+        work_group_size=max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+        fused_unary_func=_square,
+    )
+
+    X_mean = sum_axis1_kernel(X_t)[:, 0]
+
+    divisor = dpt.full(
+        sh=(1,), fill_value=compute_dtype(n_samples), dtype=compute_dtype, device=device
+    )
+    elementwise_binary_divide_kernel(X_mean, divisor)
+
+    X_sum_squared = sum_of_squares_kernel(X_mean)[0]
+    X_mean_is_zeroed = float(X_sum_squared) == 0.0
+
     if X_mean_is_zeroed:
         # If the data is already centered, there's no need to perform shift/unshift
         # steps. In this case, X_mean is set to None, thus carrying the information
@@ -455,18 +483,40 @@ def prepare_data_for_lloyd(X_t, init, tol, copy_x):
             )
             broadcast_init_minus_X_mean(init, X_mean)
 
+    n_items = n_features * n_samples
+
     variance_kernel = make_sum_reduction_2d_axis1_kernel(
-        size0=n_features * n_samples,
+        size0=n_items,
         size1=None,
         work_group_size=max_work_group_size,
         device=device,
         dtype=compute_dtype,
         fused_unary_func=_square,
     )
-    variance = variance_kernel(dpt.reshape(X_t, -1)) / n_features
-    tol = variance * tol
 
-    return X_t, X_mean, init, tol
+    variance = variance_kernel(dpt.reshape(X_t, -1))
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    tol = (dpt.asnumpy(variance)[0] / n_features) * tol
+
+    # check if sample_weight is uniform
+    # At the time of writing this code, dpnp does not support functions (like `==`
+    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # manner.
+    # TODO: if dpnp support extends to relevant features, use it instead ?
+    sum_sample_weight_kernel = make_sum_reduction_2d_axis1_kernel(
+        size0=n_samples,
+        size1=None,
+        work_group_size=max_work_group_size,
+        device=device,
+        dtype=compute_dtype,
+    )
+
+    sample_weight_sum = compute_dtype(sum_sample_weight_kernel(sample_weight)[0])
+    sample_weight_is_uniform = sample_weight_sum == (
+        compute_dtype(sample_weight[0]) * n_samples
+    )
+
+    return X_t, X_mean, init, tol, sample_weight_is_uniform
 
 
 def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
@@ -536,7 +586,8 @@ def get_nb_distinct_clusters(labels, n_clusters):
 
     get_nb_distinct_clusters_kernel(labels, clusters_seen, nb_distinct_clusters)
 
-    return nb_distinct_clusters[0]
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    return dpt.asnumpy(nb_distinct_clusters[0])
 
 
 def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
@@ -740,8 +791,10 @@ def kmeans_plusplus(
     candidate_ids = dpt.empty(sh=(n_local_trials,), dtype=np.int32, device=device)
 
     # Pick first center randomly
-    starting_center_id = np.int32(get_random_raw(random_state) % n_samples)
-    center_indices[0] = starting_center_id[0]
+    # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+    random_uint64 = dpt.asnumpy(get_random_raw(random_state))[0]
+    starting_center_id = random_uint64 % np.uint64(n_samples)
+    center_indices[0] = np.int32(starting_center_id)
 
     # track index of point, initialize list of closest distances and calculate
     # current potential
@@ -790,7 +843,10 @@ def kmeans_plusplus(
         )
 
         candidate_potentials = reduce_potential_2d_kernel(sq_distances_t)[:, 0]
-        best_candidate = select_best_candidate_kernel(candidate_potentials)[0]
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+        best_candidate = dpt.asnumpy(
+            select_best_candidate_kernel(candidate_potentials)
+        )[0]
 
         total_potential = candidate_potentials[best_candidate : (best_candidate + 1)]
 

@@ -181,9 +181,9 @@ Once you have loaded into the container, follow those instructions to install th
 `wip-engines` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/ogrisel/scikit-learn
+git clone https://github.com/ogrisel/scikit-learn -b wip-engines
 cd scikit-learn
-git checkout wip-engines
+git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
 pip install -e .
 cd ..
 ```

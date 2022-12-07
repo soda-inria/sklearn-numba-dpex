@@ -69,7 +69,7 @@ def test_kmeans_same_results(dtype, array_constr):
     y_labels = kmeans_vanilla.fit_predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.fit_predict(X_array)
-    assert_array_equal(y_labels, y_labels_engine)
+    assert_array_equal(y_labels, asnumpy(y_labels_engine))
     assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
     assert_allclose(
         kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
@@ -171,22 +171,22 @@ def test_inertia(dtype):
     rng = default_rng(random_seed)
     X = rng.random((100, 10), dtype=dtype)
     sample_weight = rng.standard_normal(100, dtype=dtype)
-    centers = dpnp.asarray(rng.standard_normal((5, 10), dtype=dtype))
+    centers = rng.standard_normal((5, 10), dtype=dtype)
 
     estimator = KMeans(n_clusters=len(centers))
-    estimator.cluster_centers_ = centers
+    estimator.cluster_centers_ = dpt.asarray(centers)
     engine = KMeansEngine(estimator)
     X_prepared, sample_weight_prepared = engine.prepare_prediction(X, sample_weight)
     labels = engine.get_labels(X_prepared, sample_weight_prepared)
 
-    closest_centers = centers.take(dpnp.asarray(labels, dtype=np.int32), axis=0)
-    distances = ((X_prepared - closest_centers) ** 2).sum(axis=1)
-    expected = float(np.sum(distances * sample_weight_prepared))
+    closest_centers = centers[asnumpy(labels), :]
+    distances = ((X - closest_centers) ** 2).sum(axis=1)
+    expected = float(np.sum(distances * sample_weight))
 
     inertia = engine.get_score(X_prepared, sample_weight_prepared)
 
     rtol = 1e-4 if dtype == np.float32 else 1e-6
-    assert_allclose(inertia, expected, rtol=rtol)
+    assert_allclose(float(inertia), expected, rtol=rtol)
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
@@ -267,7 +267,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
 
     # NB: the values used to initialize the output array do not matter, 100 is chosen
     # here for readability, but `dpctl.empty` is also possible.
-    selected_samples_idx = (dpt.ones(sh=10, dtype=np.int32) * 100).get_array()
+    selected_samples_idx = dpt.full(sh=10, fill_value=100, dtype=np.int32)
 
     n_selected_gt_threshold = dpt.zeros(sh=1, dtype=np.int32)
     n_selected_eq_threshold = dpt.ones(sh=1, dtype=np.int32)
@@ -282,7 +282,7 @@ def test_select_samples_far_from_centroid_kernel(dtype):
     # NB: the variable n_selected_eq_threshold is always one unit above the true value
     # It is only used as an intermediary variable in the kernel and is not used
     # otherwise.
-    n_selected_eq_threshold = int(n_selected_eq_threshold[0] - 1)
+    n_selected_eq_threshold = int(n_selected_eq_threshold[0]) - 1
     n_selected_gt_threshold = int(n_selected_gt_threshold[0])
     selected_samples_idx = asnumpy(selected_samples_idx)
 

@@ -17,3 +17,7 @@ def _minus(x, y):
 
 def _plus(x, y):
     return x + y
+
+
+def _divide(x, y):
+    return x / y
