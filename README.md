@@ -1,6 +1,6 @@
 # sklearn-numba-dpex
 
-Experimental plugin for scikit-learn to be able to run (some estimators) on Intel GPUs
+Experimental plugin for scikit-learn to be able to run (some) estimators on Intel GPUs
 via [numba-dpex](https://github.com/IntelPython/numba-dpex). Support for other GPU
 constructors is also on the roadmap and depends on progress of interoperability features
 of the `numba-dpex` stack.
@@ -9,21 +9,24 @@ This package requires working with the following branch of scikit-learn:
 
 - `wip-engines` branch on https://github.com/ogrisel/scikit-learn
 
+A step-by-step guide is provided in this README for installing `numba-dpex`, along with
+the `wip-engines` branch of `scikit-learn` and this plugin from source`
+
+🚧 TODO: package `wip-engines` and `sklearn-numba-dpex` to have everything installable
+in `conda` with a single one-liner.
+
 ## List of Included Engines
 
 - `sklearn.cluster.KMeans` for the standard LLoyd's algorithm on dense data arrays,
   including `kmeans++` support.
-
-  No implementation of k-means for sparse input data or for the "Elkan" algorithm is
-  included at the moment or planned to be.
 
 ## Getting started:
 
 ### Step 1: Installing a `numba_dpex` environment
 
 Getting started requires a working environment for using `numba_dpex`. Currently a
-[conda install](#using-a-conda-installation) or a
-[docker image](#using-the-docker-image) are available.
+[conda install](#using-a-conda-installation) or a [docker image](#using-the-docker-image)
+are available.
 
 #### Using a conda installation
 
@@ -32,13 +35,13 @@ GPUs, so the first part of the installation guide consists in installing those l
 on the host system.
 
 The second part consists in running conda commands that create the environment with
-all the required packages and configuration. Note that while the installation is a bit
+all the required packages and configuration. Note that the installation logic is a bit
 complicated since it mixes packages from several conda channels `conda-forge`,
-`dppy/label/dev`, and `intel`, some of which being experimental, neither the builds nor
-the channels are maintained by the `sklearn_numba_dpex` and their level of stability is
-unknown.
+`dppy/label/dev`, and `intel`, some of which being experimental. Neither the builds nor
+the channels are maintained by the `sklearn_numba_dpex` team and their level of
+stability is unknown.
 
-TODO: update the instructions to install everything from non-dev conda packages on
+🚧 TODO: update the instructions to install everything from non-dev conda packages on
 always up-to-date channels whenever it's available.
 
 ##### Install low-level runtime libraries for your GPU (1/2)
@@ -50,14 +53,30 @@ At this time, only Intel GPUs are supported.
 For Intel GPUs, two backends are available. You might want to install both of those,
 and test if one gives better performances.
 
-TODO: write a guide on how to select the device and the backend in a python script.
+🚧 TODO: write a guide on how to select the device and the backend in a python script.
 
-- **intel opencl for gpu**: the intel opencl runtime can be installed following
-  [this link](https://github.com/intel/compute-runtime#installation-options) . For apt
-  based linux distributions, for example it can be installed using the package manager:
-  ```
-  $ apt-get install intel-opencl-icd
-  ```
+- **Intel Opencl for GPU**: the intel opencl runtime can be installed following
+  [this link](https://github.com/intel/compute-runtime#installation-options).
+  **WARNING**: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
+  installation is broken, see https://github.com/IntelPython/dpctl/issues/887 .
+
+   ⚠ Like whenever installing packages outside of official repositories, existing
+   workarounds might make your system unstable and are not recommended outside of a
+   containerized environment and/or for expert users.
+
+   To not alter the `apt`-based version tree too much and risk other compatibility
+   issues, there's a minimal workaround that consists in identifying the version
+   that is officially supported by your OS (use [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=intel-opencl-icd&searchon=names))
+   then download the corresponding build from the [Intel release page on github](https://github.com/intel/compute-runtime/releases)
+   and adapt the following set of instructions accordingly:
+
+   ```bash
+    sudo apt-get install intel-opencl-icd  # install the whole dependency tree
+    sudo apt-get remove intel-opencl-icd  # remove only the top-level package
+    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd_22.14.22890_amd64.deb
+    sudo dpkg -i intel-opencl-icd_22.14.22890_amd64.deb  # replace the top-level package only
+   ```
+
 - **oneAPI level zero loader**: alternatively, or in addition, the oneAPI level zero
   backend can be used. This backend is more experimental, and is sometimes preferred
   over opencl. Source and `deb` archives are available
@@ -66,34 +85,59 @@ TODO: write a guide on how to select the device and the backend in a python scri
 ###### Give permissions to submit GPU workloads
 
 Non-root users might lack permission to access the GPU device to submit workloads. Add
-those users to the `video` group and/or `render` group:
+the current user to the `video` group and/or `render` group:
 
+```bash
+sudo usermod -a -G video $USER
+sudo usermod -a -G render $USER
 ```
-$ sudo usermod -a -G video my_username
-$ sudo usermod -a -G render my_username
-```
-
-where `my_username` should be the username of your current session, or any other user
-you want to give permissions to.
 
 ##### Setup a conda environment for numba-dpex (2/2)
 
-The following [conda](https://docs.conda.io/en/latest/) commands:
-
+To setup a [conda](https://docs.conda.io/en/latest/) conda environment, run first
+```bash
+export CONDA_DPEX_ENV_NAME=my-dpex-env
+conda create -n $CONDA_DPEX_ENV_NAME numba-dpex intel::dpcpp_linux-64 -c dppy/label/dev -c conda-forge -c intel
 ```
-$ conda create -n my-dpex-env numba-dpex -c conda-forge -c dppy/label/dev -c intel
-# The following command is currently required to work around missing Intel CPU opencl
-# runtime activation
-$ conda env config vars set OCL_ICD_FILENAMES_RESET=1 OCL_ICD_FILENAMES=libintelocl.so -n my-dpex-env
+An additonal command is currently required to work around missing Intel CPU opencl
+runtime activation:
+```bash
+conda env config vars set OCL_ICD_FILENAMES_RESET=1 OCL_ICD_FILENAMES=libintelocl.so -n $CONDA_DPEX_ENV_NAME
 ```
 
-will create an environment named `my-dpex-env` (that you can change to your liking)
-containing the package `numba_dpex`, all of its dependencies, and adequate
+This will create an environment named `my-dpex-env` (that you can change to your
+liking) containing the package `numba_dpex`, all of its dependencies, and adequate
 configuration.
 
-Activate the environment with the command:
+The corresponding development branch of scikit-learn must be installed from source and
+that requires a separate conda environment. The following sequence of commands will
+create the appropriate conda environment, build the scikit-learn binary, then remove
+the environment:
+
+```bash
+conda activate $CONDA_DPEX_ENV_NAME
+export DPEX_PYTHON_VERSION=$(python -c "import platform; print(platform.python_version())")
+export DPEX_NUMPY_VERSION=$(python -c "import numpy; print(numpy.__version__)")
+conda create -n sklearn-dev -c conda-forge python==$(DPEX_PYTHON_VERSION) numpy==$(DPEX_NUMPY_VERSION) scipy cython joblib threadpoolctl pytest compilers
+conda activate sklearn-dev
+git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+cd scikit-learn
+git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
+python setup.py bdist_wheel
+conda activate $CONDA_DPEX_ENV_NAME
+cd build/
+pip install *.whl
+unset DPEX_PYTHON_VERSION
+unset DPEX_NUMPY_VERSION
+conda deactivate
+conda env remove -n sklearn-dev
+cd ../../
+rm -Rf scikit-learn
 ```
-$ conda activate my-dpex-env
+
+Finally, activate the environment with the command:
+```bash
+conda activate my-dpex-env
 ```
 
 #### Using the docker image
@@ -101,22 +145,22 @@ $ conda activate my-dpex-env
 Alternatively, a docker image is available and provides an up-to-date, one-command
 install environment. You can either build it from the [Dockerfile](./docker/Dockerfile):
 
-```
-$ cd docker
-$ DOCKER_BUILDKIT=1 docker build . -t my_tag
+```bash
+cd docker
+DOCKER_BUILDKIT=1 docker build . -t my_tag
 ```
 
 or pull the docker image from
 [this publicly available repository](https://hub.docker.com/repository/docker/jjerphan/numba_dpex_dev):
 
-```
-$ docker pull jjerphan/numba_dpex_dev:latest
+```bash
+docker pull jjerphan/numba_dpex_dev:latest
 ```
 
 Run the container in interactive mode with your favorite docker flags, for example:
 
-```
-$ docker run --name my_container_name -it -v /my/host/volume/:/mounted/volume --device=/dev/dri my_tag
+```bash
+docker run --name my_container_name -it -v /my/host/volume/:/mounted/volume --device=/dev/dri my_tag
 ```
 
 where `my_tag` would be `jjerphan/numba_dpex_dev:latest` if you pulled from the
@@ -129,30 +173,14 @@ also the user starting the `docker run` command must have access to the gpu, see
 Unless using the flag `--rm` when starting a container, you can restart it after it was
 exited, with the command:
 
-```
-$ sudo docker start -a -i my_container_name
-```
-
-### Step 2: Check the installation of the environment was successfull
-
-Once inside the environment you just installed with one of those two methods, you can
-check that the environment works by introspecting the available hardware:
-
-```
-$ python -c "import dpctl; print(dpctl.get_devices())"
+```bash
+sudo docker start -a -i my_container_name
 ```
 
-this should print a list of available devices, including `cpu` and `gpu` devices, once
-for each available backends (`opencl`, `level_zero`,...).
+Once you have loaded into the container, follow those instructions to install the
+`wip-engines` branch of scikit-learn:
 
-### Step 3: install the `wip-engines` branch of scikit-learn
-
-TODO: rather than expecting user to manually install this branch, release an end-to-end
-conda build.
-
-Once you have loaded into a `numba_dpex` environment, follow those instructions:
-
-```
+```bash
 git clone https://github.com/ogrisel/scikit-learn
 cd scikit-learn
 git checkout wip-engines
@@ -160,14 +188,26 @@ pip install -e .
 cd ..
 ```
 
-### Step 4: install this plugin
+### Step 2: Check the installation of the environment was successfull
 
-TODO: rather than expecting user to manually install this branch, release an end-to-end
-conda build.
+Once the environment you just installed with one of those two methods is activated,
+you can inspect the available hardware:
+
+```bash
+python -c "import dpctl; print(dpctl.get_devices())"
+```
+
+this should print a list of available devices, including `cpu` and `gpu` devices, once
+for each available backends (`opencl`, `level_zero`,...).
+
+### Step 3: install this plugin
 
 FIXME: currently, non-editable mode installation does not work.
 
-```
+When loaded into your `numba_dpex` + `scikit-learn` environment from previous steps,
+run:
+
+```bash
 git clone https://github.com/soda-inria/sklearn-numba-dpex
 cd sklearn-numba-dpex
 pip install -e .
@@ -177,20 +217,20 @@ pip install -e .
 
 See the `sklearn_numba_dpex/kmeans/tests` folder for example usage.
 
-TODO: write some examples here instead.
+🚧 TODO: write some examples here instead.
 
 ### Running the tests
 
-To run the tests run the following:
+To run the tests run the following from the root of the `sklearn_numba_dpex` repository:
 
-```
-pytest sklearn_numba_dpex/
+```bash
+pytest sklearn_numba_dpex
 ```
 
 To run the `scikit-learn` tests with the `sklearn_numba_dpex` engine you can run the
 following:
 
-```
+```bash
 SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
 ```
 
@@ -208,13 +248,13 @@ _xfailed_.
 Repeat the pip installation step exposed in [step 3](#step-3-install-this-plugin) with
 the following edit:
 
-```
+```bash
 pip install -e .[benchmark]
 ```
 
 (i.e adding the _benchmark_ extra-require), followed by:
 
-```
+```bash
 cd benckmark
 python ./kmeans.py
 ```
@@ -225,7 +265,7 @@ the performance.
 Some parameters in the `__main__` section of the file `./benchmark/kmeans.py` are
 exposed for quick edition (`n_clusters`, `max_iter`, `skip_slow`, ...).
 
-### Notes about the preferred floating point precision
+### Notes about the preferred floating point precision (float32)
 
 In many machine learning applications, operations using single-precision (float32)
 floating point data require twice as less memory that double-precision (float64), are
@@ -233,17 +273,19 @@ regarded as faster, accurate enough and more suitable for GPU compute. Besides, 
 GPUs used in machine learning projects are significantly faster with float32 than with
 double-precision (float64) floating point data.
 
-To leverage the full potential of GPU execution, it's strongly advised to use a data
-loader that loads float32 data. By default, unless specified otherwise numpy array are
-created with type float64, so be especially careful to the type whenever the loader
-does not explicitly document the type nor expose a type option.
+To leverage the full potential of GPU execution, it's strongly advised to use a float32
+data type.
 
-Although it's less recommended to prevent avoidable data copies, it's also possible to
-transform float64 numpy arrays into float32 arrays using the
-[numpy.ndarray.astype](https://numpy.org/doc/stable/reference/generated/numpy.ndarray.astype.html)
-type converter following this example:
+By default, unless specified otherwise numpy array are created with type float64, so be
+especially careful to the type whenever the loader does not explicitly document the
+type nor expose a type option.
 
-```
+Transforming NumPy arrays from float64 to float32 is also possible using
+[`numpy.ndarray.astype`](https://numpy.org/doc/stable/reference/generated/numpy.ndarray.astype.html),
+although it is less recommended to prevent avoidable data copies. `numpy.ndarray.astype`
+can be used as follows:
+
+```python
 X = my_data_loader()
 X_float32 = X.astype(float32)
 my_gpu_compute(X_float32)
