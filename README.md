@@ -10,7 +10,7 @@ This package requires working with the following branch of scikit-learn:
 - `wip-engines` branch on https://github.com/ogrisel/scikit-learn
 
 A step-by-step guide is provided in this README for installing `numba-dpex`, along with
-the `wip-engines` branch of `scikit-learn` and this plugin from source`
+the `wip-engines` branch of `scikit-learn` and this plugin from source.
 
 🚧 TODO: package `wip-engines` and `sklearn-numba-dpex` to have everything installable
 in `conda` with a single one-liner.
@@ -57,7 +57,8 @@ and test if one gives better performances.
 
 - **Intel Opencl for GPU**: the intel opencl runtime can be installed following
   [this link](https://github.com/intel/compute-runtime#installation-options).
-  **WARNING**: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
+
+  ⚠⚠⚠ **WARNING** ⚠⚠⚠: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
   installation is broken, see https://github.com/IntelPython/dpctl/issues/887 .
 
    ⚠ Like whenever installing packages outside of official repositories, existing
@@ -65,22 +66,26 @@ and test if one gives better performances.
    containerized environment and/or for expert users.
 
    To not alter the `apt`-based version tree too much and risk other compatibility
-   issues, there's a minimal workaround that consists in identifying the version
-   that is officially supported by your OS (use [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=intel-opencl-icd&searchon=names))
-   then download the corresponding build from the [Intel release page on github](https://github.com/intel/compute-runtime/releases)
-   and adapt the following set of instructions accordingly:
+   issues, the recommended workaround consists in identifying the version that is
+   officially supported by your OS (use [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=intel-opencl-icd&searchon=names))
+   then find the corresponding build from the [Intel release page on github](https://github.com/intel/compute-runtime/releases)
+   and follow the instruction from the release page, e.g for `jammy`:
 
    ```bash
-    sudo apt-get install intel-opencl-icd  # install the whole dependency tree
-    sudo apt-get remove intel-opencl-icd  # remove only the top-level package
+    mkdir neo
+    cd neo
+    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-gmmlib_22.0.2_amd64.deb
+    wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-core_1.0.10840_amd64.deb
+    wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-opencl_1.0.10840_amd64.deb
+    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd-dbgsym_22.14.22890_amd64.ddeb
     wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd_22.14.22890_amd64.deb
-    sudo dpkg -i intel-opencl-icd_22.14.22890_amd64.deb  # replace the top-level package only
-   ```
+    cd ../ && rm -Rf neo
+    ```
 
 - **oneAPI level zero loader**: alternatively, or in addition, the oneAPI level zero
   backend can be used. This backend is more experimental, and is sometimes preferred
   over opencl. Source and `deb` archives are available
-  [here](https://github.com/oneapi-src/level-zero/releases)
+  [here](https://github.com/oneapi-src/level-zero/releases).
 
 ###### Give permissions to submit GPU workloads
 
@@ -118,14 +123,14 @@ the environment:
 conda activate $CONDA_DPEX_ENV_NAME
 export DPEX_PYTHON_VERSION=$(python -c "import platform; print(platform.python_version())")
 export DPEX_NUMPY_VERSION=$(python -c "import numpy; print(numpy.__version__)")
-conda create -n sklearn-dev -c conda-forge python==$(DPEX_PYTHON_VERSION) numpy==$(DPEX_NUMPY_VERSION) scipy cython joblib threadpoolctl pytest compilers
+conda create -n sklearn-dev -c conda-forge "python==$DPEX_PYTHON_VERSION" "numpy==$DPEX_NUMPY_VERSION" scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
 git clone https://github.com/ogrisel/scikit-learn -b wip-engines
 cd scikit-learn
 git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
-cd build/
+cd dist/
 pip install *.whl
 unset DPEX_PYTHON_VERSION
 unset DPEX_NUMPY_VERSION
