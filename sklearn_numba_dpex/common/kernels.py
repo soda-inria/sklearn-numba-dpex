@@ -276,7 +276,7 @@ def make_sum_reduction_2d_axis1_kernel(
         for kernel, result in kernels_and_empty_tensors_pairs:
             kernel(summands, result)
             summands = result
-        return result
+        return summands
 
     return sum_reduction
 
