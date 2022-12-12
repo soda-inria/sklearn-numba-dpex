@@ -59,28 +59,37 @@ and test if one gives better performances.
   [this link](https://github.com/intel/compute-runtime#installation-options).
 
   ⚠⚠⚠ **WARNING** ⚠⚠⚠: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
-  installation is broken, see https://github.com/IntelPython/dpctl/issues/887 .
+  installation is broken, see https://github.com/IntelPython/dpctl/issues/887 . Prefer
+  the upstream packages `.deb` packages provided at
+  https://github.com/intel/compute-runtime/releases
 
-   ⚠ Like whenever installing packages outside of official repositories, existing
-   workarounds might make your system unstable and are not recommended outside of a
-   containerized environment and/or for expert users.
+   <details>
+     <summary markdown="span">Click to expand a guide for the recommended installation
+     steps for Ubuntu</summary>
 
-   To not alter the `apt`-based version tree too much and risk other compatibility
-   issues, the recommended workaround consists in identifying the version that is
-   officially supported by your OS (use [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=intel-opencl-icd&searchon=names))
-   then find the corresponding build from the [Intel release page on github](https://github.com/intel/compute-runtime/releases)
-   and follow the instruction from the release page, e.g for `jammy`:
+     ⚠ Like whenever installing packages outside of official repositories, existing
+     workarounds might make your system unstable and are not recommended outside of a
+     containerized environment and/or for expert users.
 
-   ```bash
-    mkdir neo
-    cd neo
-    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-gmmlib_22.0.2_amd64.deb
-    wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-core_1.0.10840_amd64.deb
-    wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-opencl_1.0.10840_amd64.deb
-    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd-dbgsym_22.14.22890_amd64.ddeb
-    wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd_22.14.22890_amd64.deb
-    cd ../ && rm -Rf neo
-    ```
+     To not alter the `apt`-based version tree too much and risk other compatibility
+     issues, the recommended workaround consists in identifying the version that is
+     officially supported by your OS (use [packages.ubuntu.com](https://packages.ubuntu.com/search?keywords=intel-opencl-icd&searchon=names))
+     then find the corresponding build from the [Intel release page on github](https://github.com/intel/compute-runtime/releases)
+     and follow the instruction from the release page, e.g for `jammy`:
+
+     ```bash
+      mkdir neo
+      cd neo
+      wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-gmmlib_22.0.2_amd64.deb
+      wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-core_1.0.10840_amd64.deb
+      wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.10840/intel-igc-opencl_1.0.10840_amd64.deb
+      wget https://github.com/intel/compute-runtime/releases/download/22.14.22890/intel-opencl-icd_22.14.22890_amd64.deb
+      dpkg -i *.deb  # requires root permissions
+      apt-get install -y ocl-icd-libopencl1  # requires root permissions
+      cd ../ && rm -Rf neo
+      ```
+
+    </details>
 
 - **oneAPI level zero loader**: alternatively, or in addition, the oneAPI level zero
   backend can be used. This backend is more experimental, and is sometimes preferred
@@ -99,46 +108,69 @@ sudo usermod -a -G render $USER
 
 ##### Setup a conda environment for numba-dpex (2/2)
 
-To setup a [conda](https://docs.conda.io/en/latest/) conda environment, run first
+You can setup a [`conda`](https://docs.conda.io/en/latest/) environment, and install
+dependencies (`numba-dpex` and `intel::dpcpp_linux-64`) distributed on the
+`conda-forge`, `intel` and experimental `dppy/label/dev` channels with:
+
 ```bash
 export CONDA_DPEX_ENV_NAME=my-dpex-env
-conda create -n $CONDA_DPEX_ENV_NAME numba-dpex intel::dpcpp_linux-64 -c dppy/label/dev -c conda-forge -c intel
-```
-An additonal command is currently required to work around missing Intel CPU opencl
-runtime activation:
-```bash
-conda env config vars set OCL_ICD_FILENAMES_RESET=1 OCL_ICD_FILENAMES=libintelocl.so -n $CONDA_DPEX_ENV_NAME
+conda create --yes --name $CONDA_DPEX_ENV_NAME \
+             --channel dppy/label/dev \
+             --channel conda-forge \
+             --channel intel \
+             numba-dpex intel::dpcpp_linux-64
 ```
 
-This will create an environment named `my-dpex-env` (that you can change to your
-liking) containing the package `numba_dpex`, all of its dependencies, and adequate
-configuration.
+(where you can replace the name of the environment `my-dpex-env` with a name of your
+liking)
 
-The corresponding development branch of scikit-learn must be installed from source and
-that requires a separate conda environment. The following sequence of commands will
-create the appropriate conda environment, build the scikit-learn binary, then remove
-the environment:
+An additional command is currently required to work around missing Intel CPU OpenCL
+runtime activation. To resolve it, one needs to set environement variables for the
+newly created environement:
 
 ```bash
-conda activate $CONDA_DPEX_ENV_NAME
-export DPEX_PYTHON_VERSION=$(python -c "import platform; print(platform.python_version())")
-export DPEX_NUMPY_VERSION=$(python -c "import numpy; print(numpy.__version__)")
-conda create -n sklearn-dev -c conda-forge "python==$DPEX_PYTHON_VERSION" "numpy==$DPEX_NUMPY_VERSION" scipy cython joblib threadpoolctl pytest compilers
-conda activate sklearn-dev
-git clone https://github.com/ogrisel/scikit-learn -b wip-engines
-cd scikit-learn
-git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
-python setup.py bdist_wheel
-conda activate $CONDA_DPEX_ENV_NAME
-cd dist/
-pip install *.whl
-unset DPEX_PYTHON_VERSION
-unset DPEX_NUMPY_VERSION
-conda deactivate
-conda env remove -n sklearn-dev
-cd ../../
-rm -Rf scikit-learn
+conda env config vars set \
+        OCL_ICD_FILENAMES_RESET=1 \
+        OCL_ICD_FILENAMES=libintelocl.so \
+        --name "$CONDA_DPEX_ENV_NAME"
 ```
+
+`scikit-learn` must be installed from source using an experimental version available on
+[`wip-engines`](https://github.com/ogrisel/scikit-learn/commits/wip-engines), a
+development branch. Be careful to build with compatible `python` and `numpy` versions.
+
+  <details>
+     <summary markdown="span">Click to expand a guide for building `scikit-learn`
+     </summary>
+
+  We use a separate conda environment dedicated to building `scikit-learn`. The
+  following sequence of commands will create the appropriate conda environment, build
+  the scikit-learn binary, then remove the environment:
+
+  ```bash
+  conda activate $CONDA_DPEX_ENV_NAME
+  export DPEX_PYTHON_VERSION=$(python -c "import platform; print(platform.python_version())")
+  export DPEX_NUMPY_VERSION=$(python -c "import numpy; print(numpy.__version__)")
+  conda create --yes --name sklearn-dev \
+                     --channel conda-forge \
+                     "python==$DPEX_PYTHON_VERSION" \
+                     "numpy==$DPEX_NUMPY_VERSION" \
+                     scipy cython joblib threadpoolctl pytest compilers
+  conda activate sklearn-dev
+  git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+  cd scikit-learn
+  git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
+  python setup.py bdist_wheel
+  conda activate $CONDA_DPEX_ENV_NAME
+  cd dist/
+  pip install --yes *.whl
+  unset DPEX_PYTHON_VERSION
+  unset DPEX_NUMPY_VERSION
+  conda deactivate
+  conda env remove --name sklearn-dev --yes
+  cd ../../
+  rm -Rf scikit-learn
+  ```
 
 Finally, activate the environment with the command:
 ```bash
