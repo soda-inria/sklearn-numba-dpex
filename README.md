@@ -171,6 +171,7 @@ development branch. Be careful to build with compatible `python` and `numpy` ver
   cd ../../
   rm -Rf scikit-learn
   ```
+    </details>
 
 Finally, activate the environment with the command:
 ```bash
