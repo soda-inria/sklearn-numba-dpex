@@ -164,12 +164,12 @@ git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
 cd dist/
-pip install --yes *.whl
+pip install *.whl
 unset DPEX_PYTHON_VERSION
 unset DPEX_NUMPY_VERSION
-conda deactivate
 conda env remove --name sklearn-dev --yes
 cd ../../
+conda deactivate
 rm -Rf scikit-learn
 ```
 
