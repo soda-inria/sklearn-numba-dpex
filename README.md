@@ -55,13 +55,13 @@ and test if one gives better performances.
 
 🚧 TODO: write a guide on how to select the device and the backend in a python script.
 
-- **Intel Opencl for GPU**: the intel opencl runtime can be installed following
+- **Intel OpenCL for GPU**: the intel OpenCL runtime can be installed following
   [this link](https://github.com/intel/compute-runtime#installation-options).
 
   ⚠⚠⚠ **WARNING** ⚠⚠⚠: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
-  installation is broken, see https://github.com/IntelPython/dpctl/issues/887 . Prefer
-  the upstream packages `.deb` packages provided at
-  https://github.com/intel/compute-runtime/releases
+  installation is broken, see https://github.com/IntelPython/dpctl/issues/887.
+  Prefer the upstream packages `.deb` packages provided at:
+  https://github.com/intel/compute-runtime/releases.
 
   <details>
 
@@ -94,7 +94,7 @@ and test if one gives better performances.
 
 - **oneAPI level zero loader**: alternatively, or in addition, the oneAPI level zero
   backend can be used. This backend is more experimental, and is sometimes preferred
-  over opencl. Source and `deb` archives are available
+  over OpenCL. Source and `deb` archives are available
   [here](https://github.com/oneapi-src/level-zero/releases).
 
 ###### Give permissions to submit GPU workloads
@@ -126,8 +126,8 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
 liking)
 
 An additional command is currently required to work around missing Intel CPU OpenCL
-runtime activation. To resolve it, one needs to set environement variables for the
-newly created environement:
+runtime activation. To resolve it, one needs to set environment variables for the
+newly created environment:
 
 ```bash
 conda env config vars set \
