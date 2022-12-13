@@ -187,7 +187,7 @@ install environment. You can either build it from the [Dockerfile](./docker/Dock
 
 ```bash
 cd docker
-DOCKER_BUILDKIT=1 docker build . -t my_tag
+DOCKER_BUILDKIT=1 docker build . -t numba_dpex_dev
 ```
 
 or pull the docker image from
@@ -200,11 +200,11 @@ docker pull jjerphan/numba_dpex_dev:latest
 Run the container in interactive mode with your favorite docker flags, for example:
 
 ```bash
-docker run --name my_container_name -it -v /my/host/volume/:/mounted/volume --device=/dev/dri my_tag
+docker run --name my_container_name -it -v /my/host/volume/:/mounted/volume --device=/dev/dri jjerphan/numba_dpex_dev:latest
 ```
 
-where `my_tag` would be `jjerphan/numba_dpex_dev:latest` if you pulled from the
-repository.
+or alternatively, replace `jjerphan/numba_dpex_dev:latest` by `numba_dpex_dev` or
+any tag you used when building the image locally from the provided `Dockerfile`.
 
 ⚠ The flag `--device=/dev/dri` is **mandatory** to enable the gpu within the container,
 also the user starting the `docker run` command must have access to the gpu, see
