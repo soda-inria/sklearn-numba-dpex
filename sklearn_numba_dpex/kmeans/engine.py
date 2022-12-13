@@ -105,17 +105,27 @@ class KMeansEngine(KMeansCythonEngine):
             )
         self._is_in_testing_mode = _is_in_testing_mode == "1"
 
+    def accepts(self, X, y):
+        try:
+            if (algorithm := self.estimator.algorithm) not in ("lloyd", "auto", "full"):
+                raise NotSupportedByEngineError(
+                    "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
+                    f" algorithm, {algorithm} is not supported."
+                )
+            self._X_validated = self._validate_data(X)
+            self._X_accepted = X
+            return True
+        except Exception:
+            if self._is_in_testing_mode:
+                raise
+            return False
+
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
 
-        algorithm = estimator.algorithm
-        if algorithm not in ("lloyd", "auto", "full"):
-            raise NotSupportedByEngineError(
-                "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
-                f" algorithm, {algorithm} is not supported."
-            )
-
-        X = self._validate_data(X)
+        self._check_is_accepted_X(X)
+        X = self._X_validated
+        estimator._check_n_features(X, reset=True)
         estimator._check_params_vs_input(X)
 
         self.sample_weight = self._check_sample_weight(sample_weight, X)
@@ -226,7 +236,9 @@ class KMeansEngine(KMeansCythonEngine):
         return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
     def prepare_prediction(self, X, sample_weight):
-        X = self._validate_data(X, reset=False)
+        self._check_is_accepted_X(X)
+        X = self._X_validated
+        self.estimator._check_n_features(X, reset=False)
         sample_weight = self._check_sample_weight(sample_weight, X)
         return X, sample_weight
 
@@ -263,7 +275,10 @@ class KMeansEngine(KMeansCythonEngine):
         return X
 
     def get_euclidean_distances(self, X):
-        X = self._validate_data(X, reset=False)
+        self._check_is_accepted_X(X)
+        X = self._X_validated
+
+        self.estimator._check_n_features(X, reset=False)
         cluster_centers = self._check_init(
             self.estimator.cluster_centers_, X, copy=False
         )
@@ -272,7 +287,7 @@ class KMeansEngine(KMeansCythonEngine):
             euclidean_distances = dpt.asnumpy(euclidean_distances)
         return euclidean_distances
 
-    def _validate_data(self, X, reset=True):
+    def _validate_data(self, X):
         if isinstance(X, dpnp.ndarray):
             X = X.get_array()
 
@@ -299,7 +314,7 @@ class KMeansEngine(KMeansCythonEngine):
                     dtype=accepted_dtypes,
                     order=self.order,
                     copy=False,
-                    reset=reset,
+                    reset=False,
                     force_all_finite=True,
                     estimator=self.estimator,
                 )
@@ -309,6 +324,13 @@ class KMeansEngine(KMeansCythonEngine):
                     type_error
                 ):
                     raise NotSupportedByEngineError from type_error
+
+    def _check_is_accepted_X(self, X):
+        if X is not self._X_accepted:
+            raise RuntimeError(
+                "The object that was passed to the engine to query its compatibility "
+                "is different from the object that was given in downstream methods."
+            )
 
     def _check_sample_weight(self, sample_weight, X):
         """Adapted from sklearn.utils.validation._check_sample_weight to be compatible
