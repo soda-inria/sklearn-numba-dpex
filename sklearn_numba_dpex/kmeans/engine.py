@@ -105,15 +105,20 @@ class KMeansEngine(KMeansCythonEngine):
             )
         self._is_in_testing_mode = _is_in_testing_mode == "1"
 
-    def accepts(self, X, y):
+    def accepts(self, X, y, sample_weight):
         try:
             if (algorithm := self.estimator.algorithm) not in ("lloyd", "auto", "full"):
                 raise NotSupportedByEngineError(
                     "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
                     f" algorithm, {algorithm} is not supported."
                 )
+
             self._X_validated = self._validate_data(X)
             self._X_accepted = X
+
+            self._sample_weight_accepted = sample_weight
+            if sample_weight is not None:
+                self._sample_weight_validated = self._check_sample_weight(sample_weight)
             return True
         except Exception:
             if self._is_in_testing_mode:
@@ -124,11 +129,12 @@ class KMeansEngine(KMeansCythonEngine):
         estimator = self.estimator
 
         self._check_is_accepted_X(X)
+        self._check_is_accepted_sample_weight(sample_weight)
         X = self._X_validated
         estimator._check_n_features(X, reset=True)
         estimator._check_params_vs_input(X)
 
-        self.sample_weight = self._check_sample_weight(sample_weight, X)
+        self.sample_weight = self._sample_weight_validated
 
         init = self.estimator.init
         init_is_array_like = _is_arraylike_not_scalar(init)
@@ -237,9 +243,10 @@ class KMeansEngine(KMeansCythonEngine):
 
     def prepare_prediction(self, X, sample_weight):
         self._check_is_accepted_X(X)
+        self._check_is_accepted_sample_weight(sample_weight)
         X = self._X_validated
         self.estimator._check_n_features(X, reset=False)
-        sample_weight = self._check_sample_weight(sample_weight, X)
+        sample_weight = self._sample_weight_validated
         return X, sample_weight
 
     def get_labels(self, X, sample_weight):
@@ -332,9 +339,26 @@ class KMeansEngine(KMeansCythonEngine):
                 "is different from the object that was given in downstream methods."
             )
 
-    def _check_sample_weight(self, sample_weight, X):
+    def _check_is_accepted_sample_weight(self, sample_weight):
+        if sample_weight is not self._sample_weight_accepted:
+            raise RuntimeError(
+                "The object that was passed to the engine to query its compatibility "
+                "is different from the object that was given in downstream methods."
+            )
+
+        # When sample_weight is None, the call to `_check_sample_weight` is delayed
+        # until now because, because the array of `ones` that is created is only
+        # necessary for engine methods that actually make use of `sample_weight` and
+        # call `_check_is_accepted_sample_weight`.
+        # Methods that don't use `sample_weight` still pass `sample_weight=None` to
+        # `accepts` but doesn't need to create the corresponding array.
+        if sample_weight is None:
+            self._sample_weight_validated = self._check_sample_weight(sample_weight)
+
+    def _check_sample_weight(self, sample_weight):
         """Adapted from sklearn.utils.validation._check_sample_weight to be compatible
         with Array API dispatch"""
+        X = self._X_validated
         n_samples = X.shape[0]
         dtype = X.dtype
         device = X.device.sycl_device
