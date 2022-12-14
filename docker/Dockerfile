@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-082cde669552482c541a297e38adce4afee4fd34
+ARG BASE_IMAGE_VERSION=latest-15917cb7b677b5cb86d7d3e8d0537e2a9ef307ad
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -39,7 +39,7 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
-ARG L0_LOADER_DEB_VERSION=1.8.8
+ARG L0_LOADER_DEB_VERSION=1.8.12
 ARG L0_LOADER_DEB_PLATFORM=u18.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
@@ -60,19 +60,21 @@ ARG INTEL_SCIPY_VERSION="==1.7.3"
 # content of the intel pypi or not. (this Dockerfile currently assumes that
 # it is not limited to intel pypi. The opposite assumption seems to create
 # impossible build conditions.)
+# NB: `numba_dpex>=0.19` should be compatible with `numba>=0.56` but it does not seems
+# to work at the moment, see https://github.com/IntelPython/numba-dpex/issues/850
 ARG INTEL_NUMBA_VERSION="<0.56"
 
 
 # So far, the intel numpy python package is not built for python>=3.10
-ARG PYTHON_VERSION=3.9.13
+ARG PYTHON_VERSION=3.9.16
 
 
 # This link might need to be refreshed occasionally.
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc_nas/18970
-ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2022.3.1.17310.sh
+ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc_nas/19079
+ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.0.0.25537.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 
@@ -80,15 +82,15 @@ ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 # Bump it if necessary.
 
 ARG CMAKE_VERSION=3.25
-ARG CMAKE_VERSION_BUILD=0
+ARG CMAKE_VERSION_BUILD=1
 
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.0rc2
+ARG DPCTL_GIT_BRANCH=0.14.0
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.11.0rc1
+ARG DPNP_GIT_BRANCH=0.11.0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
