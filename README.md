@@ -119,7 +119,7 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             numba-dpex intel::dpcpp_linux-64
+             numba-dpex "intel::dpcpp_linux-64<2023.0.0"
 ```
 
 (where you can replace the name of the environment `my-dpex-env` with a name of your
