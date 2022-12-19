@@ -59,8 +59,8 @@ and test if one gives better performances.
   [this link](https://github.com/intel/compute-runtime#installation-options).
 
   ⚠⚠⚠ **WARNING** ⚠⚠⚠: for Ubuntu (confirmed for `focal` and `jammy`) the `apt`-based
-  installation is broken, see https://github.com/IntelPython/dpctl/issues/887.
-  Prefer the upstream packages `.deb` packages provided at:
+  installation is broken, see https://github.com/IntelPython/dpctl/issues/1010.
+  Prefer the upstream `.deb` packages provided at:
   https://github.com/intel/compute-runtime/releases.
 
   <details>
