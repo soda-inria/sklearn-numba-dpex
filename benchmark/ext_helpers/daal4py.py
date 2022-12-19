@@ -1,33 +1,41 @@
+import inspect
 import warnings
-import sklearn
 
-
-# HACK: daal4py will fail to import with too recent versions of sklearn because
-# of this missing attribute. Let's pretend it still exists.
-try:
-    _daal4py_kmeans_compat_mode = not hasattr(sklearn.neighbors._base, "_check_weights")
-    if _daal4py_kmeans_compat_mode:
-        warnings.warn(
-            f"The current version of scikit-learn ( =={sklearn.__version__} ) is too "
-            "recent to ensure good compatibility with sklearn intelex, who only "
-            "supports sklearn >=0.22, <1.1 . Use very cautiously, things might not "
-            "work as expected...",
-            RuntimeWarning,
-        )
-        sklearn.neighbors._base._check_weights = None
-    from daal4py.sklearn.cluster._k_means_0_23 import (
-        _daal4py_compute_starting_centroids,
-        _daal4py_k_means_fit,
-        support_usm_ndarray,
-        getFPType,
-    )
-finally:
-    if _daal4py_kmeans_compat_mode:
-        del sklearn.neighbors._base._check_weights
-
+from daal4py.sklearn.cluster._k_means_0_23 import (
+    _daal4py_compute_starting_centroids,
+    _daal4py_kmeans_compatibility,
+    _daal4py_k_means_fit,
+    support_usm_ndarray,
+    getFPType,
+)
 
 from sklearn.exceptions import NotSupportedByEngineError
 from sklearn.cluster._kmeans import KMeansCythonEngine
+
+
+if "gamma" not in inspect.signature(_daal4py_kmeans_compatibility).parameters:
+    warnings.warn(
+        "Your scikit-learn-intelex build ships a broken KMeans, that will be "
+        "live-patched by sklearn-numba-dpex. See "
+        "https://github.com/intel/scikit-learn-intelex/issues/1113 for more updates "
+        "on this issue",
+        RuntimeWarning,
+    )
+
+    import daal4py
+    from daal4py import kmeans as daal4py_kmeans
+
+    def daal4py_kmeans_patched(*args, **kwargs):
+        kwargs["gamma"] = kwargs.get("gamma", 1.0)
+        return daal4py_kmeans(*args, **kwargs)
+
+    daal4py.kmeans = daal4py_kmeans_patched
+
+else:
+    warnings.warn1(
+        "Patching sklearn_intelex KMeans is not necessary anymore. Reminder to remove "
+        "the patch from the benchmark code."
+    )
 
 
 # TODO: instead of relying on monkey patching the default engine, find a way to
