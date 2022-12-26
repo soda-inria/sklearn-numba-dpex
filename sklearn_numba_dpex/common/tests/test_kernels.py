@@ -6,11 +6,12 @@ from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
-    make_sum_reduction_2d_axis1_kernel,
+    make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
+@pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
 @pytest.mark.parametrize(
     "array_in, expected_result",
@@ -32,19 +33,25 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
     ],
 )
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_sum_reduction_2d(array_in, expected_result, dtype, work_group_size):
+def test_sum_reduction_2d(array_in, expected_result, axis, dtype, work_group_size):
+    if axis == 0:
+        array_in = dpt.asarray(array_in.T, order="C")
     array_in = dpt.astype(array_in, dtype)
 
     device = dpctl.SyclDevice()
     if work_group_size == "max":
         work_group_size = device.max_work_group_size
 
-    sum_reduction_2d_kernel = make_sum_reduction_2d_axis1_kernel(
+    sub_group_size = work_group_size // 2
+
+    sum_reduction_2d_kernel = make_sum_reduction_2d_kernel(
         size0=len(array_in),
         size1=array_in.shape[1],
         work_group_size=work_group_size,
         device=device,
         dtype=dtype,
+        axis=axis,
+        sub_group_size=sub_group_size,
     )
 
     actual_result = dpt.asnumpy(dpt.squeeze(sum_reduction_2d_kernel(array_in)))
@@ -62,7 +69,7 @@ def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
 
     array_in = dpt.arange(length, dtype=dtype)
 
-    sum_reduction_1d_kernel = make_sum_reduction_2d_axis1_kernel(
+    sum_reduction_1d_kernel = make_sum_reduction_2d_kernel(
         size0=len(array_in),
         size1=None,
         work_group_size=work_group_size,
