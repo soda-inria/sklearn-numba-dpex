@@ -1,5 +1,7 @@
 from contextlib import contextmanager
 
+import numpy as np
+
 
 @contextmanager
 def override_attr_context(obj, **attrs):
@@ -19,3 +21,12 @@ def override_attr_context(obj, **attrs):
     finally:
         for attr_name, attr_value in attrs_before.items():
             setattr(obj, attr_name, attr_value)
+
+
+def _assert_array_equal_any(array, list_of_arrays):
+    try:
+        np.testing.assert_array_equal(array, list_of_arrays[0])
+    except AssertionError:
+        if len(list_of_arrays) == 1:
+            raise
+        _assert_array_equal_any(array, list_of_arrays[1:])

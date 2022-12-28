@@ -315,12 +315,12 @@ def make_sum_reduction_2d_kernel(
         if is_1d:
             summands = dpt.reshape(summands, (1, -1))
 
-        # TODO: manually dispatch the kernels with a SyclQueue
-        if not kernels_and_empty_tensors_pairs:
+        if sum_axis_size == 0:
             # By convention the sum of all elements of an empty array is equal to 0. (
             # likewise with numpy np.sum([]) returns 0).
             summands = dpt.zeros(sh=get_result_shape(1))
 
+        # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, result in kernels_and_empty_tensors_pairs:
             kernel(summands, result)
             summands = result

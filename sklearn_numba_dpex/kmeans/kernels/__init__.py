@@ -15,7 +15,6 @@ from .utils import (
     make_is_same_clustering_kernel,
     make_reduce_centroid_data_kernel,
     make_relocate_empty_clusters_kernel,
-    make_select_samples_far_from_centroid_kernel,
 )
 
 __all__ = (
@@ -27,7 +26,6 @@ __all__ = (
     "make_sample_center_candidates_kernel",
     "make_kmeansplusplus_single_step_fixed_window_kernel",
     "make_relocate_empty_clusters_kernel",
-    "make_select_samples_far_from_centroid_kernel",
     "make_centroid_shifts_kernel",
     "make_reduce_centroid_data_kernel",
     "make_is_same_clustering_kernel",

@@ -8,6 +8,7 @@ from numpy.testing import assert_array_equal
 from sklearn import config_context
 from sklearn.base import clone
 from sklearn.cluster import KMeans, kmeans_plusplus
+from sklearn.cluster._kmeans import _is_same_clustering
 from sklearn.cluster.tests.test_k_means import X as X_sklearn_test
 from sklearn.cluster.tests.test_k_means import n_clusters as n_clusters_sklearn_test
 from sklearn.datasets import make_blobs
@@ -19,9 +20,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_compute_euclidean_distances_fixed_window_kernel,
     make_label_assignment_fixed_window_kernel,
     make_lloyd_single_step_fixed_window_kernel,
-)
-from sklearn_numba_dpex.kmeans.kernels.utils import (
-    make_select_samples_far_from_centroid_kernel,
 )
 from sklearn_numba_dpex.testing.config import float_dtype_params
 
@@ -212,102 +210,22 @@ def test_relocate_empty_clusters(dtype):
         kmeans_engine.fit(X)
 
     expected_n_iter = 1
-    expected_labels = [0, 0, 0, 0, 0, 0, 0, 2, 2, 1]
+    expected_labels = np.array([0, 0, 0, 0, 0, 0, 0, 2, 2, 1], dtype=np.int32)
+    vanilla_labels = kmeans_vanilla.labels_
+    engine_labels = asnumpy(kmeans_engine.labels_).astype(np.int32)
     assert kmeans_vanilla.n_iter_ == expected_n_iter
     assert kmeans_engine.n_iter_ == expected_n_iter
-    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
-    assert_array_equal(kmeans_vanilla.labels_, expected_labels)
+    assert _is_same_clustering(
+        vanilla_labels,
+        engine_labels,
+        n_clusters=3,
+    )
+    assert _is_same_clustering(vanilla_labels, expected_labels, n_clusters=3)
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+        kmeans_vanilla.cluster_centers_[vanilla_labels],
+        asnumpy(kmeans_engine.cluster_centers_)[engine_labels],
     )
     assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
-
-
-@pytest.mark.parametrize("dtype", float_dtype_params)
-def test_select_samples_far_from_centroid_kernel(dtype):
-
-    # The following array, when sorted, reads:
-    # [-1.0, 9.0, 9.0, 20.22, 20.22, 20.22, 20.22, 23.0, 23.0, 30.0]
-    # Assuming n_selected == 5, the threshold is 20.22 and we expect 3 values
-    # above threshold (23.0, 23.0, 30.0) and 2 values equal to threshold.
-    distance_to_centroid = dpt.from_numpy(
-        np.array(
-            [
-                20.22,  # == threshold
-                20.22,
-                -1.0,
-                23.0,  # idx = 3
-                20.22,
-                9.0,
-                20.22,
-                30.0,  # idx = 7
-                9.0,
-                23.0,  # idx = 9
-            ],
-            dtype=dtype,
-        )
-    )
-
-    # NB: we wrap everything in dpctl tensors and select the threshold with __getitem__
-    # on a dpt because loading of numpy arrays to and from dpt arrays
-    # seems to create numerical errors that break the kernel
-    # (the condition ==threshold stops being evaluated properly) when using float64
-    # precision ?
-    # TODO: write a minimal reproducer and open an issue if confirmed
-    threshold = distance_to_centroid[0:1]  # == 20.22
-
-    n_selected = 5
-    n_samples = len(distance_to_centroid)
-    work_group_size = 4
-    select_samples_far_from_centroid_kernel = (
-        make_select_samples_far_from_centroid_kernel(
-            n_selected, n_samples, work_group_size
-        )
-    )
-
-    # NB: the values used to initialize the output array do not matter, 100 is chosen
-    # here for readability, but `dpctl.empty` is also possible.
-    selected_samples_idx = dpt.full(sh=10, fill_value=100, dtype=np.int32)
-
-    n_selected_gt_threshold = dpt.zeros(sh=1, dtype=np.int32)
-    n_selected_eq_threshold = dpt.ones(sh=1, dtype=np.int32)
-    select_samples_far_from_centroid_kernel(
-        distance_to_centroid,
-        threshold,
-        selected_samples_idx,
-        n_selected_gt_threshold,
-        n_selected_eq_threshold,
-    )
-
-    # NB: the variable n_selected_eq_threshold is always one unit above the true value
-    # It is only used as an intermediary variable in the kernel and is not used
-    # otherwise.
-    n_selected_eq_threshold = int(n_selected_eq_threshold[0]) - 1
-    n_selected_gt_threshold = int(n_selected_gt_threshold[0])
-    selected_samples_idx = asnumpy(selected_samples_idx)
-
-    # NB: the exact number of selected values equal to the threshold and the
-    # corresponding selected indexes in the input array can change depending on
-    # concurrency. We only check conditions for success that do not depend on the
-    # concurrency induced non-determinism.
-    assert n_selected_gt_threshold == 3
-    assert n_selected_eq_threshold >= 2
-
-    expected_gt_threshold_indices = {3, 7, 9}
-    actual_gt_threshold_indices = set(
-        selected_samples_idx[:n_selected_gt_threshold]
-    )  # stored at the beginning
-    assert actual_gt_threshold_indices == expected_gt_threshold_indices
-
-    expected_eq_threshold_indices = {0, 1, 4, 6}
-    actual_eq_threshold_indices = set(
-        selected_samples_idx[-n_selected_eq_threshold:]
-    )  # stored at the end
-    assert actual_eq_threshold_indices.issubset(expected_eq_threshold_indices)
-
-    assert (
-        selected_samples_idx[n_selected_gt_threshold:-n_selected_eq_threshold] == 100
-    ).all()
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)

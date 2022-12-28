@@ -99,6 +99,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     # TODO: control that this value is not higher than the number of sub-groups of size
     # sub_group_size that can effectively run concurrently. We should fetch this
     # information and apply it here.
+    # See https://github.com/IntelPython/dpctl/issues/1033
     n_centroids_private_copies = (
         global_mem_cache_size * centroids_private_copies_max_cache_occupancy
     ) // n_cluster_bytes
