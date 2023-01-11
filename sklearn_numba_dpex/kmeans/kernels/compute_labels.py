@@ -15,14 +15,24 @@ from ._base_kmeans_kernel_funcs import (
 
 @lru_cache
 def make_label_assignment_fixed_window_kernel(
-    n_samples,
-    n_features,
-    n_clusters,
-    sub_group_size,
-    work_group_size,
-    dtype,
+    n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype, device
 ):
     window_n_centroids = sub_group_size
+    centroids_window_width = window_n_centroids + 1
+
+    if work_group_size == "max":
+        if device.has_aspect_cpu:
+            work_group_size = 2 ** (
+                math.floor(
+                    math.log2(
+                        device.local_mem_size
+                        / ((centroids_window_width + 1) * np.dtype(dtype).itemsize)
+                    )
+                )
+            )
+        else:
+            work_group_size = device.max_work_group_size
+
     centroids_window_height = work_group_size // sub_group_size
 
     if centroids_window_height * sub_group_size != work_group_size:
@@ -55,7 +65,7 @@ def make_label_assignment_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
+    centroids_window_shape = (centroids_window_height, centroids_window_width)
 
     inf = dtype(math.inf)
     zero_idx = np.int64(0)

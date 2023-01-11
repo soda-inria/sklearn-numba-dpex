@@ -40,6 +40,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     centroids_private_copies_max_cache_occupancy,
     work_group_size,
     dtype,
+    device,
 ):
     # The height of the window on centroids (or, equivalently, the number of features
     # in the window), and the width (number of centroids in the window), are chosen
@@ -57,6 +58,21 @@ def make_lloyd_single_step_fixed_window_kernel(
     #     of items is: `centroids_window_height * window_n_centroids`, i.e.
     #     `centroids_window_height * sub_group_size`
     window_n_centroids = sub_group_size
+    centroids_window_width = window_n_centroids + 1
+
+    if work_group_size == "max":
+        if device.has_aspect_cpu:
+            work_group_size = 2 ** (
+                math.floor(
+                    math.log2(
+                        device.local_mem_size
+                        / (centroids_window_width * np.dtype(dtype).itemsize)
+                    )
+                )
+            )
+        else:
+            work_group_size = device.max_work_group_size
+
     centroids_window_height = work_group_size // sub_group_size
 
     if centroids_window_height * sub_group_size != work_group_size:
@@ -89,7 +105,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
+    centroids_window_shape = (centroids_window_height, centroids_window_width)
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     n_subgroups = global_size // sub_group_size

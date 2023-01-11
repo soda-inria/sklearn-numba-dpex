@@ -44,6 +44,7 @@ def make_random_raw_kernel():
 
     Note, this always uses and updates state states[0].
     """
+    _xoroshiro128pp_next = _make_xoroshiro128pp_next_kernel_func()
 
     @dpex.kernel
     def _get_random_raw_kernel(states, result):
@@ -52,7 +53,6 @@ def make_random_raw_kernel():
     return _get_random_raw_kernel[1, 1]
 
 
-@lru_cache
 def make_rand_uniform_kernel_func(dtype):
     """Instantiate a kernel function that returns a random float in [0, 1)
 
@@ -108,6 +108,8 @@ def make_rand_uniform_kernel_func(dtype):
             "Expected dtype.name in {float32, float64} but got "
             f"dtype.name == {dtype.name}"
         )
+
+    _xoroshiro128pp_next = _make_xoroshiro128pp_next_kernel_func()
 
     @dpex.func
     def xoroshiro128pp_uniform(states, state_idx):
@@ -210,6 +212,8 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     jump_init = uint64(0)
     long_2 = int64(2)
     long_64 = int64(64)
+
+    _xoroshiro128pp_next = _make_xoroshiro128pp_next_kernel_func()
 
     @dpex.func
     def _xoroshiro128pp_jump(states, state_idx):
@@ -316,30 +320,31 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
         return states
 
 
-next_rot_1 = uint32(17)
-next_rot_2 = uint32(49)
-next_rot_3 = uint32(28)
-shift_1 = uint32(21)
+def _make_xoroshiro128pp_next_kernel_func():
 
+    _64_as_uint32 = uint32(64)
 
-@dpex.func
-def _xoroshiro128pp_next(states, state_idx):
-    """Return the next random uint64 and advance the RNG in states[state_idx]."""
-    s0 = states[state_idx, zero_idx]
-    s1 = states[state_idx, one_idx]
-    result = _rotl(s0 + s1, next_rot_1) + s0
+    @dpex.func
+    def _rotl(x, k):
+        """Left rotate x by k bits. x is expected to be a uint64 integer."""
+        return (x << k) | (x >> (_64_as_uint32 - k))
 
-    s1 ^= s0
-    states[state_idx, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
-    states[state_idx, one_idx] = _rotl(s1, next_rot_3)
+    next_rot_1 = uint32(17)
+    next_rot_2 = uint32(49)
+    next_rot_3 = uint32(28)
+    shift_1 = uint32(21)
 
-    return result
+    @dpex.func
+    def _xoroshiro128pp_next(states, state_idx):
+        """Return the next random uint64 and advance the RNG in states[state_idx]."""
+        s0 = states[state_idx, zero_idx]
+        s1 = states[state_idx, one_idx]
+        result = _rotl(s0 + s1, next_rot_1) + s0
 
+        s1 ^= s0
+        states[state_idx, zero_idx] = _rotl(s0, next_rot_2) ^ s1 ^ (s1 << shift_1)
+        states[state_idx, one_idx] = _rotl(s1, next_rot_3)
 
-_64_as_uint32 = uint32(64)
+        return result
 
-
-@dpex.func
-def _rotl(x, k):
-    """Left rotate x by k bits. x is expected to be a uint64 integer."""
-    return (x << k) | (x >> (_64_as_uint32 - k))
+    return _xoroshiro128pp_next

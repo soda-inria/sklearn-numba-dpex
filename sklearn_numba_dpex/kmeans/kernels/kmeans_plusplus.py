@@ -104,15 +104,25 @@ def make_sample_center_candidates_kernel(
 
 @lru_cache
 def make_kmeansplusplus_single_step_fixed_window_kernel(
-    n_samples,
-    n_features,
-    n_candidates,
-    sub_group_size,
-    work_group_size,
-    dtype,
+    n_samples, n_features, n_candidates, sub_group_size, work_group_size, dtype, device
 ):
 
     window_n_candidates = sub_group_size
+    candidates_window_width = window_n_candidates + 1
+
+    if work_group_size == "max":
+        if device.has_aspect_cpu:
+            work_group_size = 2 ** (
+                math.floor(
+                    math.log2(
+                        device.local_mem_size
+                        / (candidates_window_width * np.dtype(dtype).itemsize)
+                    )
+                )
+            )
+        else:
+            work_group_size = device.max_work_group_size
+
     candidates_window_height = work_group_size // sub_group_size
 
     if candidates_window_height * sub_group_size != work_group_size:
@@ -141,7 +151,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     last_candidate_window_idx = n_windows_for_candidates - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    candidates_window_shape = (candidates_window_height, (window_n_candidates + 1))
+    candidates_window_shape = (candidates_window_height, candidates_window_width)
 
     zero_idx = np.int64(0)
 

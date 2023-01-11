@@ -20,12 +20,12 @@
 # The `ubuntu2004_intel_drivers` base ships an up-to-date installation of the
 # intel runtime, including drivers and opencl and level_zero runtimes.
 #
-# See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2004_intel_drivers
+# See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2204_intel_drivers
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-15917cb7b677b5cb86d7d3e8d0537e2a9ef307ad
-ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
+ARG BASE_IMAGE_VERSION=latest-1299e21c883616aedd48495f77429f3d235cfaa4
+ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 
@@ -60,9 +60,7 @@ ARG INTEL_SCIPY_VERSION="==1.7.3"
 # content of the intel pypi or not. (this Dockerfile currently assumes that
 # it is not limited to intel pypi. The opposite assumption seems to create
 # impossible build conditions.)
-# NB: `numba_dpex>=0.19` should be compatible with `numba>=0.56` but it does not seems
-# to work at the moment, see https://github.com/IntelPython/numba-dpex/issues/850
-ARG INTEL_NUMBA_VERSION="<0.56"
+ARG INTEL_NUMBA_VERSION=""
 
 
 # So far, the intel numpy python package is not built for python>=3.10
@@ -87,13 +85,13 @@ ARG CMAKE_VERSION_BUILD=1
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.0
+ARG DPCTL_GIT_BRANCH=0.14.1dev1
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
 ARG DPNP_GIT_BRANCH=0.11.0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
+ARG NUMBA_DPEX_GIT_BRANCH=0.19.0
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
