@@ -320,6 +320,9 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
         return states
 
 
+# HACK: Work around https://github.com/IntelPython/numba-dpex/issues/867
+# Revert changes in https://github.com/soda-inria/sklearn-numba-dpex/pull/82
+# when fixed.
 def _make_xoroshiro128pp_next_kernel_func():
 
     _64_as_uint32 = uint32(64)

@@ -75,6 +75,7 @@ ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc
 ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.0.0.25537.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
+ARG LLVM_SPIRV_INSTALL_DIR=/opt/llvm-spirv
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
@@ -121,26 +122,7 @@ RUN mkdir -p $L0_LOADER_DOWNLOAD_DIR \
     && rm -Rf $L0_LOADER_DOWNLOAD_DIR
 
 
-FROM l0_base AS oneapi_dpcpp_binaries_installer
-ARG TMPDIR
-ARG ONEAPI_INSTALL_DIR
-ARG ONEAPI_INSTALLER_URL
-ARG ONEAPI_INSTALL_BINARY_NAME
-ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
-ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
-ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
-ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler"
-RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
-    && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
-    && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
-    && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
-        --action install --components $ONEAPI_COMPONENTS  \
-        --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
-        --download-cache $ONEAPI_CACHE_DIR \
-    && rm -Rf $TMPDIR/*
-
-
-FROM oneapi_dpcpp_binaries_installer AS oneapi_devel_installer
+FROM l0_base AS oneapi_devel_installer
 ARG TMPDIR
 ARG ONEAPI_INSTALL_DIR
 ARG ONEAPI_INSTALLER_URL
@@ -153,10 +135,13 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
-        --action modify --components $ONEAPI_COMPONENTS  \
+        --action install --components $ONEAPI_COMPONENTS  \
         --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
         --download-cache $ONEAPI_CACHE_DIR \
-    && rm -Rf $TMPDIR/*
+    && rm -Rf $TMPDIR/* \
+    && mkdir -p $LLVM_SPIRV_INSTALL_DIR \
+    && mv $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR \
+    && ln -s $LLVM_SPIRV_INSTALL_DIR/llvm-spirv $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm
 
 
 FROM l0_base AS base_config
@@ -347,7 +332,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-COPY --from=oneapi_dpcpp_binaries_installer $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
+COPY --from=oneapi_devel_installer $LLVM_SPIRV_INSTALL_DIR $LLVM_SPIRV_INSTALL_DIR
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 

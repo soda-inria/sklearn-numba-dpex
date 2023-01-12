@@ -24,11 +24,18 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 
-from sklearn_numba_dpex.common._utils import check_power_of_2
+from sklearn_numba_dpex.common._utils import (
+    _check_max_work_group_size,
+    check_power_of_2,
+)
 
 zero_idx = np.int64(0)
 
 
+# HACK: dtype argument is passed to prevent caching as a workaround for
+# https://github.com/IntelPython/numba-dpex/issues/867. Revert changes in
+# https://github.com/soda-inria/sklearn-numba-dpex/pull/82 when
+# fixed.
 @lru_cache
 def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
     """This kernel is mostly necessary to work around lack of support for this
@@ -378,18 +385,14 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                     from_array[row, zero_idx] + from_array[row, one_idx]
                 )
 
-    if work_group_size == "max":
-        if device.has_aspect_cpu:
-            work_group_size = 2 ** (
-                math.floor(
-                    math.log2(
-                        device.local_mem_size
-                        / ((n_rows or 1) * np.dtype(dtype).itemsize)
-                    )
-                )
-            )
-        else:
-            work_group_size = device.max_work_group_size
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size, device, (n_rows or 1) * np.dtype(dtype).itemsize
+    )
+    if work_group_size == input_work_group_size:
+        check_power_of_2(work_group_size)
+    else:
+        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
@@ -462,24 +465,16 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     inf = dtype(np.inf)
 
     local_argmin_dtype = np.int32
-
-    if work_group_size == "max":
-        if device.has_aspect_cpu:
-            work_group_size = 2 ** (
-                math.floor(
-                    math.log2(
-                        device.local_mem_size
-                        / (
-                            np.dtype(dtype).itemsize
-                            + np.dtype(local_argmin_dtype).itemsize
-                        )
-                    )
-                )
-            )
-        else:
-            work_group_size = device.max_work_group_size
-
-    check_power_of_2(work_group_size)
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size,
+        device,
+        np.dtype(dtype).itemsize + np.dtype(local_argmin_dtype).itemsize,
+    )
+    if work_group_size == input_work_group_size:
+        check_power_of_2(work_group_size)
+    else:
+        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
     # Number of iteration in each execution of the kernel:
     local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)

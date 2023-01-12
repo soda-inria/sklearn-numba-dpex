@@ -4,6 +4,8 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numpy as np
 
+from sklearn_numba_dpex.common._utils import _check_max_work_group_size
+
 from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
@@ -18,22 +20,17 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     window_n_centroids = sub_group_size
     centroids_window_width = window_n_centroids + 1
 
-    if work_group_size == "max":
-        if device.has_aspect_cpu:
-            work_group_size = 2 ** (
-                math.floor(
-                    math.log2(
-                        device.local_mem_size
-                        / (centroids_window_width * np.dtype(dtype).itemsize)
-                    )
-                )
-            )
-        else:
-            work_group_size = device.max_work_group_size
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size, device, centroids_window_width * np.dtype(dtype).itemsize
+    )
 
     centroids_window_height = work_group_size // sub_group_size
 
-    if centroids_window_height * sub_group_size != work_group_size:
+    if work_group_size != input_work_group_size:
+        work_group_size = centroids_window_height * sub_group_size
+
+    elif centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"

@@ -1,0 +1,3 @@
+from .common._utils import _force_reload_numba_dpex_with_patches
+
+_force_reload_numba_dpex_with_patches()
