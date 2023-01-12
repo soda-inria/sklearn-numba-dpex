@@ -10,7 +10,10 @@ from sklearn import config_context
 from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 
-from sklearn_numba_dpex.common._utils import _force_reload_numba_dpex_with_patches
+from sklearn_numba_dpex.kmeans.kernels.lloyd_single_step import (
+    make_lloyd_single_step_fixed_window_kernel,
+)
+from sklearn_numba_dpex.patches.load_numba_dpex import _load_numba_dpex_with_patches
 
 
 def test_init_config():
@@ -77,8 +80,9 @@ def test_spirv_fix():
 
     with config_context(engine_provider="sklearn_numba_dpex"):
         try:
-            _force_reload_numba_dpex_with_patches(with_spirv_fix=False)
+            make_lloyd_single_step_fixed_window_kernel.cache_clear()
+            _load_numba_dpex_with_patches(with_spirv_fix=False, with_compiler_fix=False)
             with pytest.raises(subprocess.CalledProcessError):
                 kmeans.fit(X_array)
         finally:
-            _force_reload_numba_dpex_with_patches(with_spirv_fix=True)
+            _load_numba_dpex_with_patches()

@@ -751,6 +751,7 @@ def get_euclidean_distances(X_t, Y_t):
         # OUT
         euclidean_distances_t,
     )
+
     return euclidean_distances_t.T
 
 

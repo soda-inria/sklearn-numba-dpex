@@ -1,10 +1,4 @@
-import importlib
 import math
-
-import dpctl
-
-dpctl_select_default_device = dpctl.select_default_device
-native_dpex_spirv_generator_cmdline = None
 
 
 def check_power_of_2(e):
@@ -19,8 +13,6 @@ def check_power_of_2(e):
 # https://github.com/soda-inria/sklearn-numba-dpex/pull/82 )
 # when the bug is fixed. The bugfix can be tracked at
 # https://github.com/IntelPython/numba-dpex/issues/867
-
-
 def _square():
     def __square(x):
         return x * x
@@ -49,56 +41,6 @@ def _divide():
     return __divide
 
 
-def _force_reload_numba_dpex_with_patches(with_spirv_fix=True):
-    """This function hacks `numba_dpex` init to work around issues after
-    `dpctl>=0.14.1dev1` and `numba_dpex>=0.19.0` bumps. It will be
-    reverted when the official fixes are out.
-    """
-    global native_dpex_spirv_generator_cmdline
-
-    def _patch_mock_dpctl_select_default_device():
-        class _mock_device:
-            is_host = False
-
-        return _mock_device()
-
-    try:
-        # A better fix for this is already available in the development tree of
-        # `numba_dpex` but it's not released yet.
-        dpctl.select_default_device = _patch_mock_dpctl_select_default_device
-        import numba_dpex
-        import numba_dpex.config as dpex_config
-        import numba_dpex.spirv_generator as dpex_spirv_generator
-
-        if native_dpex_spirv_generator_cmdline is None:
-            native_dpex_spirv_generator_cmdline = dpex_spirv_generator.CmdLine
-
-        importlib.reload(dpex_config)
-        importlib.reload(numba_dpex)
-        importlib.reload(dpex_spirv_generator)
-
-        # TODO: revert this once https://github.com/IntelPython/numba-dpex/issues/868
-        # is fixed.
-        class _CmdLine(dpex_spirv_generator.CmdLine):
-            def generate(self, llvm_spirv_args, ipath, opath):
-                if not dpex_config.NATIVE_FP_ATOMICS:
-                    llvm_spirv_args = ["--spirv-max-version", "1.0"] + llvm_spirv_args
-                super().generate(llvm_spirv_args, ipath, opath)
-
-        if with_spirv_fix:
-            dpex_spirv_generator.CmdLine = _CmdLine
-        else:
-            dpex_spirv_generator.CmdLine = native_dpex_spirv_generator_cmdline
-
-    finally:
-        dpctl.select_default_device = dpctl_select_default_device
-
-
-# HACK: workarounds for issue
-# https://github.com/IntelPython/numba-dpex/issues/868
-# and for yet unreleased `dpctl` compatibility fixes in `numba_dpex==0.19.0`.
-# Revert when fixed. See all changes in
-# https://github.com/soda-inria/sklearn-numba-dpex/pull/82
 def _check_max_work_group_size(
     work_group_size,
     device,
