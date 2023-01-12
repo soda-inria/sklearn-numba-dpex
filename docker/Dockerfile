@@ -20,12 +20,12 @@
 # The `ubuntu2004_intel_drivers` base ships an up-to-date installation of the
 # intel runtime, including drivers and opencl and level_zero runtimes.
 #
-# See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2004_intel_drivers
+# See available versions here: https://github.com/intel/llvm/pkgs/container/llvm%2Fubuntu2204_intel_drivers
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-15917cb7b677b5cb86d7d3e8d0537e2a9ef307ad
-ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2004_intel_drivers
+ARG BASE_IMAGE_VERSION=latest-1299e21c883616aedd48495f77429f3d235cfaa4
+ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 
@@ -60,9 +60,7 @@ ARG INTEL_SCIPY_VERSION="==1.7.3"
 # content of the intel pypi or not. (this Dockerfile currently assumes that
 # it is not limited to intel pypi. The opposite assumption seems to create
 # impossible build conditions.)
-# NB: `numba_dpex>=0.19` should be compatible with `numba>=0.56` but it does not seems
-# to work at the moment, see https://github.com/IntelPython/numba-dpex/issues/850
-ARG INTEL_NUMBA_VERSION="<0.56"
+ARG INTEL_NUMBA_VERSION=""
 
 
 # So far, the intel numpy python package is not built for python>=3.10
@@ -77,6 +75,7 @@ ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc
 ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.0.0.25537.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
+ARG LLVM_SPIRV_INSTALL_DIR=/opt/llvm-spirv
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
@@ -87,13 +86,13 @@ ARG CMAKE_VERSION_BUILD=1
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.0
+ARG DPCTL_GIT_BRANCH=0.14.1dev1
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
 ARG DPNP_GIT_BRANCH=0.11.0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.18.1
+ARG NUMBA_DPEX_GIT_BRANCH=0.19.0
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
@@ -123,7 +122,7 @@ RUN mkdir -p $L0_LOADER_DOWNLOAD_DIR \
     && rm -Rf $L0_LOADER_DOWNLOAD_DIR
 
 
-FROM l0_base AS oneapi_dpcpp_binaries_installer
+FROM l0_base AS oneapi_devel_installer
 ARG TMPDIR
 ARG ONEAPI_INSTALL_DIR
 ARG ONEAPI_INSTALLER_URL
@@ -131,7 +130,8 @@ ARG ONEAPI_INSTALL_BINARY_NAME
 ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
 ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
 ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
-ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler"
+ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
+ARG LLVM_SPIRV_INSTALL_DIR
 RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
@@ -142,27 +142,8 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
     && rm -Rf $TMPDIR/*
 
 
-FROM oneapi_dpcpp_binaries_installer AS oneapi_devel_installer
-ARG TMPDIR
-ARG ONEAPI_INSTALL_DIR
-ARG ONEAPI_INSTALLER_URL
-ARG ONEAPI_INSTALL_BINARY_NAME
-ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
-ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
-ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
-ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
-RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
-    && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
-    && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
-    && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
-        --action modify --components $ONEAPI_COMPONENTS  \
-        --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
-        --download-cache $ONEAPI_CACHE_DIR \
-    && rm -Rf $TMPDIR/*
-
-
 FROM l0_base AS base_config
-ARG ONEAPI_INSTALL_DIR
+ARG LLVM_SPIRV_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
@@ -171,7 +152,7 @@ ENV LD_LIBRARY_PATH="$VIRTUAL_ENV/lib:$LD_LIBRARY_PATH"
 ENV OCL_ICD_FILENAMES_RESET=1
 ENV OCL_ICD_FILENAMES=libintelocl.so
 # Needed by the numba-dpex runtime
-ENV PATH=$ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm:$PATH
+ENV PATH=$LLVM_SPIRV_INSTALL_DIR:$PATH
 
 # The following blocks script a convenient way of installing python
 # It installs a python binary that is separate from the system binary
@@ -349,7 +330,9 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-COPY --from=oneapi_dpcpp_binaries_installer $ONEAPI_INSTALL_DIR $ONEAPI_INSTALL_DIR
+ARG ONEAPI_INSTALL_DIR
+ARG LLVM_SPIRV_INSTALL_DIR
+COPY --from=oneapi_devel_installer $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR/
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 
