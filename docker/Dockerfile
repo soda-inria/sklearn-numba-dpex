@@ -131,6 +131,7 @@ ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
 ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
 ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
+ARG LLVM_SPIRV_INSTALL_DIR
 RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
@@ -138,14 +139,11 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
         --action install --components $ONEAPI_COMPONENTS  \
         --install-dir $ONEAPI_INSTALL_DIR --log-dir $ONEAPI_LOG_DIR \
         --download-cache $ONEAPI_CACHE_DIR \
-    && rm -Rf $TMPDIR/* \
-    && mkdir -p $LLVM_SPIRV_INSTALL_DIR \
-    && mv $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR \
-    && ln -s $LLVM_SPIRV_INSTALL_DIR/llvm-spirv $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm
+    && rm -Rf $TMPDIR/*
 
 
 FROM l0_base AS base_config
-ARG ONEAPI_INSTALL_DIR
+ARG LLVM_SPIRV_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
@@ -154,7 +152,7 @@ ENV LD_LIBRARY_PATH="$VIRTUAL_ENV/lib:$LD_LIBRARY_PATH"
 ENV OCL_ICD_FILENAMES_RESET=1
 ENV OCL_ICD_FILENAMES=libintelocl.so
 # Needed by the numba-dpex runtime
-ENV PATH=$ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm:$PATH
+ENV PATH=$LLVM_SPIRV_INSTALL_DIR:$PATH
 
 # The following blocks script a convenient way of installing python
 # It installs a python binary that is separate from the system binary
@@ -332,7 +330,9 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-COPY --from=oneapi_devel_installer $LLVM_SPIRV_INSTALL_DIR $LLVM_SPIRV_INSTALL_DIR
+ARG ONEAPI_INSTALL_DIR
+ARG LLVM_SPIRV_INSTALL_DIR
+COPY --from=oneapi_devel_installer $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR/
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 
