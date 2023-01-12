@@ -54,7 +54,7 @@ def test_regression_fix():
 
     kernel_a[size, size](array_in)
     with pytest.raises(LoweringError):
-        kernel_a[size, size](array_in)
+        kernel_b[size, size](array_in)
 
 
 def test_spirv_fix():

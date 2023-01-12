@@ -4,7 +4,7 @@ import math
 import dpctl
 
 dpctl_select_default_device = dpctl.select_default_device
-native_dpex_spirv_generator = None
+native_dpex_spirv_generator_cmdline = None
 
 
 def check_power_of_2(e):
@@ -54,7 +54,7 @@ def _force_reload_numba_dpex_with_patches(with_spirv_fix=True):
     `dpctl>=0.14.1dev1` and `numba_dpex>=0.19.0` bumps. It will be
     reverted when the official fixes are out.
     """
-    global native_dpex_spirv_generator
+    global native_dpex_spirv_generator_cmdline
 
     def _patch_mock_dpctl_select_default_device():
         class _mock_device:
@@ -70,8 +70,8 @@ def _force_reload_numba_dpex_with_patches(with_spirv_fix=True):
         import numba_dpex.config as dpex_config
         import numba_dpex.spirv_generator as dpex_spirv_generator
 
-        if native_dpex_spirv_generator is None:
-            native_dpex_spirv_generator = dpex_spirv_generator
+        if native_dpex_spirv_generator_cmdline is None:
+            native_dpex_spirv_generator_cmdline = dpex_spirv_generator.CmdLine
 
         importlib.reload(dpex_config)
         importlib.reload(numba_dpex)
@@ -88,7 +88,7 @@ def _force_reload_numba_dpex_with_patches(with_spirv_fix=True):
         if with_spirv_fix:
             dpex_spirv_generator.CmdLine = _CmdLine
         else:
-            dpex_spirv_generator.CmdLine = native_dpex_spirv_generator
+            dpex_spirv_generator.CmdLine = native_dpex_spirv_generator_cmdline
 
     finally:
         dpctl.select_default_device = dpctl_select_default_device
