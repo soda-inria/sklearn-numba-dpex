@@ -164,18 +164,20 @@ if __name__ == "__main__":
     from sklearn.datasets import fetch_openml
     from sklearn.preprocessing import MinMaxScaler
 
+    from sklearnex import config_context as sklearnex_config_context
+
     from sklearn_numba_dpex.testing import override_attr_context
     import sklearn_numba_dpex.kmeans.engine as skdpex_kmeans_engine_module
     from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 
     from ext_helpers.daal4py import DAAL4PYEngine
-    from sklearnex import config_context as sklearnex_config_context
+    from ext_helpers.kmeans_dpcpp import KMeansDPCPPEngine
 
     # TODO: expose CLI args.
 
     random_state = 123
     sample_weight = "unary"  # None, "unary", or "random"
-    init = "k-means++"  # "k-means++" or "random"
+    init = "random"  # "k-means++" or "random"
     n_clusters = 127
     max_iter = 100
     skip_slow = True
@@ -240,6 +242,23 @@ if __name__ == "__main__":
             name="daal4py lloyd GPU",
             engine_provider="sklearn_numba_dpex",
             is_slow=True,
+        )
+
+    with override_attr_context(
+        skdpex_kmeans_engine_module, KMeansEngine=KMeansDPCPPEngine
+    ), override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="cpu")):
+        kmeans_timer.timeit(
+            name="kmeans_dpcpp lloyd CPU",
+            engine_provider="sklearn_numba_dpex",
+            # is_slow=True,
+        )
+
+    with override_attr_context(
+        skdpex_kmeans_engine_module, KMeansEngine=KMeansDPCPPEngine
+    ), override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="gpu")):
+        kmeans_timer.timeit(
+            name="kmeans_dpcpp lloyd GPU",
+            engine_provider="sklearn_numba_dpex",
         )
 
     with override_attr_context(KMeansEngine, _CONFIG=dict(device="cpu")):
