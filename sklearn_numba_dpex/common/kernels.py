@@ -258,9 +258,6 @@ def make_sum_reduction_2d_kernel(
         size1 = size0
         size0 = 1
 
-    # fused_unary_func is applied elementwise during the first pass on data, in the
-    # first kernel execution only, using `fused_func_kernel`. Subsequent kernel
-    # calls only sum the data, using `nofunc_kernel`.
     if axis == 1:
         work_group_size, kernels = _make_partial_sum_reduction_2d_axis1_kernels(
             size0, work_group_size, fused_unary_func, dtype, device
@@ -285,6 +282,9 @@ def make_sum_reduction_2d_kernel(
             * math.ceil(size1 / sub_group_size)
         )
 
+    # fused_unary_func is applied elementwise during the first pass on data, in the
+    # first kernel execution only, using `fused_func_kernel`. Subsequent kernel
+    # calls only sum the data, using `nofunc_kernel`.
     (fused_func_kernel, nofunc_kernel), reduction_block_size = kernels
 
     # As many partial reductions as necessary are chained until only one element
@@ -312,7 +312,7 @@ def make_sum_reduction_2d_kernel(
         kernel = nofunc_kernel
 
     def sum_reduction(summands):
-        if is_1d is True:
+        if is_1d:
             summands = dpt.reshape(summands, (1, -1))
 
         if sum_axis_size == 0:
@@ -325,7 +325,7 @@ def make_sum_reduction_2d_kernel(
             kernel(summands, result)
             summands = result
 
-        if is_1d is None:
+        if is_1d:
             summands = dpt.reshape(summands, (-1,))
 
         return summands
