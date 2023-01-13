@@ -8,7 +8,7 @@ import numpy as np
 
 # HACK: temporarily, those operators are wrapped in a function that must be called
 # without arguments to get the operator.
-# See the notice where it's defined for more informations.
+# See the notice where they are defined for more information.
 from sklearn_numba_dpex.common._utils import _divide, _minus, _plus, _square
 from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,

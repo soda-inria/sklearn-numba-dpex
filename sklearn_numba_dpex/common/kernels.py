@@ -32,7 +32,9 @@ from sklearn_numba_dpex.common._utils import (
 zero_idx = np.int64(0)
 
 
-# HACK: dtype argument is passed to prevent caching as a workaround for
+# HACK: dtype argument is passed to prevent sharing a device function instance
+# between kernels specialized for different argument types.
+# This is a workaround for:
 # https://github.com/IntelPython/numba-dpex/issues/867. Revert changes in
 # https://github.com/soda-inria/sklearn-numba-dpex/pull/82 when
 # fixed.
@@ -109,7 +111,7 @@ def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dty
 
 
 @lru_cache
-def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size, dtype):
+def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
     global_size = math.ceil(size1 / work_group_size) * work_group_size
 
     # NB: the left operand is modified inplace, the right operand is only read into.
@@ -385,7 +387,9 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
-        work_group_size, device, (n_rows or 1) * np.dtype(dtype).itemsize
+        work_group_size,
+        device,
+        required_local_memory_per_item=(n_rows or 1) * np.dtype(dtype).itemsize,
     )
     if work_group_size == input_work_group_size:
         check_power_of_2(work_group_size)
@@ -468,7 +472,8 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     work_group_size = _check_max_work_group_size(
         work_group_size,
         device,
-        np.dtype(dtype).itemsize + np.dtype(local_argmin_dtype).itemsize,
+        required_local_memory_per_item=np.dtype(dtype).itemsize
+        + np.dtype(local_argmin_dtype).itemsize,
     )
     if work_group_size == input_work_group_size:
         check_power_of_2(work_group_size)

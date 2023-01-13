@@ -27,8 +27,8 @@ def make_label_assignment_fixed_window_kernel(
     work_group_size = _check_max_work_group_size(
         work_group_size,
         device,
-        centroids_window_width * dtype_itemsize,
-        sub_group_size * dtype_itemsize,
+        local_memory_requirements_per_item=centroids_window_width * dtype_itemsize,
+        constant_memory_requirement=sub_group_size * dtype_itemsize,
     )
 
     centroids_window_height = work_group_size // sub_group_size

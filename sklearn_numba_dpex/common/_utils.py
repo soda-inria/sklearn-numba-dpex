@@ -14,38 +14,38 @@ def check_power_of_2(e):
 # when the bug is fixed. The bugfix can be tracked at
 # https://github.com/IntelPython/numba-dpex/issues/867
 def _square():
-    def __square(x):
+    def _square_closure(x):
         return x * x
 
-    return __square
+    return _square_closure
 
 
 def _minus():
-    def __minus(x, y):
+    def _minus_closure(x, y):
         return x - y
 
-    return __minus
+    return _minus_closure
 
 
 def _plus():
-    def __plus(x, y):
+    def _plus_closure(x, y):
         return x + y
 
-    return __plus
+    return _plus_closure
 
 
 def _divide():
-    def __divide(x, y):
+    def _divide_closure(x, y):
         return x / y
 
-    return __divide
+    return _divide_closure
 
 
 def _check_max_work_group_size(
     work_group_size,
     device,
-    local_memory_requirements_per_item,
-    constant_memory_requirement=0,
+    required_local_memory_per_item,
+    required_memory_constant=0,
 ):
     """For CPU devices, the value `device.max_work_group_size` seems to always be
     surprisingly large, up to several order of magnitude higher than the number of
@@ -59,7 +59,7 @@ def _check_max_work_group_size(
     `device.local_mem_size` to prevent overflowing.
 
     This is not an issue with GPU devices, for our kernels usually respect the rule of
-    thumb of allocating in local memory about one item per thread, which fit the GPU
+    thumb of allocating in local memory about one item per thread, which fits the GPU
     architecture well and seems to be enough to prevent overflowing. With GPUs, max
     possible work group sizes are smaller, such that there's no oversubscription of
     tasks and GPUs will execute tasks of several work groups at once. For GPUs, this
@@ -77,8 +77,8 @@ def _check_max_work_group_size(
         return device.max_work_group_size
     elif work_group_size == "max":
         return math.floor(
-            (device.local_mem_size - constant_memory_requirement)
-            / local_memory_requirements_per_item
+            (device.local_mem_size - required_memory_constant)
+            / required_local_memory_per_item
         )
     elif work_group_size > max_work_group_size:
         raise RuntimeError(
