@@ -112,7 +112,6 @@ def lloyd(
         size0=n_features,
         size1=n_clusters,
         work_group_size=max_work_group_size,
-        dtype=compute_dtype,
     )
 
     compute_centroid_shifts_kernel = make_centroid_shifts_kernel(
