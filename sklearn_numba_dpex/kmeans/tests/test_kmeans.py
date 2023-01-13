@@ -1,3 +1,4 @@
+import dpctl
 import dpctl.tensor as dpt
 import dpnp
 import numpy as np
@@ -22,15 +23,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_lloyd_single_step_fixed_window_kernel,
 )
 from sklearn_numba_dpex.testing.config import float_dtype_params
-
-
-def test_dpnp_implements_argpartition():
-    # Detect if dpnp exposes an argpartition kernel and alert that sklearn-numba-dpex
-    # can be adapted accordingly.
-    assert not hasattr(dpnp, "argpartition"), (
-        "An argpartition function is now available in dpnp, it should now be used in "
-        "place of dpnp.partition in sklearn_numba_dpex.kmeans.drivers ."
-    )
 
 
 @pytest.mark.parametrize(
@@ -377,6 +369,7 @@ def test_error_raised_on_invalid_group_sizes():
     sub_group_size = 64
     work_group_size = 500  # invalid because is not a multiple of sub_group_size
     dtype = np.float32
+    device = dpctl.SyclDevice()
 
     expected_msg = (
         "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -385,12 +378,24 @@ def test_error_raised_on_invalid_group_sizes():
 
     with pytest.raises(ValueError, match=expected_msg):
         make_compute_euclidean_distances_fixed_window_kernel(
-            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+            n_samples,
+            n_features,
+            n_clusters,
+            sub_group_size,
+            work_group_size,
+            dtype,
+            device,
         )
 
     with pytest.raises(ValueError, match=expected_msg):
         make_label_assignment_fixed_window_kernel(
-            n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype
+            n_samples,
+            n_features,
+            n_clusters,
+            sub_group_size,
+            work_group_size,
+            dtype,
+            device,
         )
 
     return_assignments = False
@@ -408,6 +413,7 @@ def test_error_raised_on_invalid_group_sizes():
             centroids_private_copies_max_cache_occupancy,
             work_group_size,
             dtype,
+            device,
         )
 
 
