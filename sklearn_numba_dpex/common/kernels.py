@@ -40,7 +40,7 @@ zero_idx = np.int64(0)
 def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
     """This kernel is mostly necessary to work around lack of support for this
     operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
-    op = dpex.func(op())
+    op = dpex.func(op)
 
     @dpex.kernel
     # fmt: off
@@ -142,7 +142,7 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
     """
 
     global_size = math.ceil(size1 / work_group_size) * work_group_size
-    ops = dpex.func(ops())
+    ops = dpex.func(ops)
 
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
@@ -301,12 +301,10 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     if fused_unary_func is None:
 
-        @dpex.func
         def fused_unary_func(x):
             return x
 
-    else:
-        fused_unary_func = dpex.func(fused_unary_func())
+    fused_unary_func = dpex.func(fused_unary_func)
 
     # TODO: this set of kernel functions could be abstracted away to other coalescing
     # functions
@@ -392,6 +390,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     if work_group_size == input_work_group_size:
         check_power_of_2(work_group_size)
     else:
+        # Round to the maximum smaller power of two
         work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
     # Number of iteration in each execution of the kernel:
@@ -474,6 +473,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     if work_group_size == input_work_group_size:
         check_power_of_2(work_group_size)
     else:
+        # Round to the maximum smaller power of two
         work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
     # Number of iteration in each execution of the kernel:

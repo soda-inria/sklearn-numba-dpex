@@ -332,6 +332,13 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
 FROM base_config AS runtime_environment
 ARG ONEAPI_INSTALL_DIR
 ARG LLVM_SPIRV_INSTALL_DIR
+# There are python packages uploaded by Intel on pypi in the python dependency tree that
+# ship all the oneapi binaries that are required by the runtime, so that a full install
+# of the oneapi basekit, which is mandatory for building, is not necessary for runtime.
+# However it lacks the `llvm-spirv` binary, that we extract from the oneapi basekit
+# and that we can keep as a standalone binary, since it does not link against any of
+# the other binaries of the oneapi basekit (see
+# https://github.com/IntelPython/numba-dpex/issues/778#issuecomment-1271617194 )
 COPY --from=oneapi_devel_installer $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR/
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV

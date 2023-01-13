@@ -6,6 +6,9 @@ import dpctl.tensor as dpt
 import dpnp
 import numpy as np
 
+# HACK: temporarily, those operators are wrapped in a function that must be called
+# without arguments to get the operator.
+# See the notice where it's defined for more informations.
 from sklearn_numba_dpex.common._utils import _divide, _minus, _plus, _square
 from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
@@ -466,7 +469,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     )
 
     elementwise_binary_divide_kernel = make_elementwise_binary_op_1d_kernel(
-        n_features, _divide, max_work_group_size, compute_dtype
+        n_features, _divide(), max_work_group_size, compute_dtype
     )
 
     # At the time of writing this code, dpnp does not support functions (like `==`
@@ -479,7 +482,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square,
+        fused_unary_func=_square(),
     )
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
@@ -505,7 +508,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
             n_features,
             n_samples,
-            ops=_minus,
+            ops=_minus(),
             work_group_size=max_work_group_size,
             dtype=compute_dtype,
         )
@@ -518,7 +521,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
             broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
                 n_features,
                 n_clusters,
-                ops=_minus,
+                ops=_minus(),
                 work_group_size=max_work_group_size,
                 dtype=compute_dtype,
             )
@@ -533,7 +536,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square,
+        fused_unary_func=_square(),
     )
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
@@ -580,7 +583,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
     broadcast_init_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
         n_features,
         n_clusters,
-        ops=_plus,
+        ops=_plus(),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
@@ -602,7 +605,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
         broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
             n_features,
             n_samples,
-            ops=_plus,
+            ops=_plus(),
             work_group_size=max_work_group_size,
             dtype=compute_dtype,
         )
