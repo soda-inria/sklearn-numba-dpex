@@ -36,8 +36,6 @@ def test_sum_reduction_2d(array_in, expected_result, dtype, work_group_size):
     array_in = dpt.astype(array_in, dtype)
 
     device = dpctl.SyclDevice()
-    if work_group_size == "max":
-        work_group_size = device.max_work_group_size
 
     sum_reduction_2d_kernel = make_sum_reduction_2d_axis1_kernel(
         size0=len(array_in),
@@ -57,8 +55,6 @@ def test_sum_reduction_2d(array_in, expected_result, dtype, work_group_size):
 @pytest.mark.parametrize("dtype", float_dtype_params)
 def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
     device = dpctl.SyclDevice()
-    if work_group_size == "max":
-        work_group_size = device.max_work_group_size
 
     array_in = dpt.arange(length, dtype=dtype)
 
@@ -88,8 +84,6 @@ def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
 def test_argmin_reduction_1d(array_in, expected_result, dtype, work_group_size):
     array_in = dpt.astype(array_in, dtype)
     device = dpctl.SyclDevice()
-    if work_group_size == "max":
-        work_group_size = device.max_work_group_size
 
     argmin_reduction_1d_kernel = make_argmin_reduction_1d_kernel(
         size=len(array_in),
