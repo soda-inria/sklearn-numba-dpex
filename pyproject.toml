@@ -37,8 +37,8 @@ classifiers = [
 # see https://github.com/IntelPython/dpctl/issues/886
 dependencies = [
     "scikit-learn",
-    "numba-dpex",
-    "dpctl",
+    "numba-dpex>=0.19.0",
+    "dpctl>=0.14.1dev0",
 ]
 
 

@@ -121,7 +121,7 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel intel \
              `# TODO: remove <2023.0.0 pin after dppy/label/dev is updated` \
              `# see https://github.com/IntelPython/dpctl/issues/1022` \
-             numba-dpex "intel::dpcpp_linux-64<2023.0.0"
+             numba-dpex "intel::dpcpp_linux-64"
 ```
 
 (where you can replace the name of the environment `my-dpex-env` with a name of your

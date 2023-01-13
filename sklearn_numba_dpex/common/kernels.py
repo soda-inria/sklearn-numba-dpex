@@ -24,13 +24,22 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 
-from sklearn_numba_dpex.common._utils import check_power_of_2
+from sklearn_numba_dpex.common._utils import (
+    _check_max_work_group_size,
+    check_power_of_2,
+)
 
 zero_idx = np.int64(0)
 
 
+# HACK: dtype argument is passed to prevent sharing a device function instance
+# between kernels specialized for different argument types.
+# This is a workaround for:
+# https://github.com/IntelPython/numba-dpex/issues/867. Revert changes in
+# https://github.com/soda-inria/sklearn-numba-dpex/pull/82 when
+# fixed.
 @lru_cache
-def make_elementwise_binary_op_1d_kernel(size, op, work_group_size):
+def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
     """This kernel is mostly necessary to work around lack of support for this
     operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
     op = dpex.func(op)
@@ -126,7 +135,7 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
 
 
 @lru_cache
-def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size):
+def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dtype):
     """
     ops must be a function that will be interpreted as a dpex.func and is subject to
     the same rules. It is expected to take two scalar arguments and return one scalar
@@ -188,7 +197,7 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 
 @lru_cache
 def make_sum_reduction_2d_axis1_kernel(
-    size0, size1, work_group_size, device, dtype, fused_unary_func=None
+    size0, size1, device, dtype, work_group_size="max", fused_unary_func=None
 ):
     """Implement data_2d.sum(axis=1) or data_1d.sum()
 
@@ -226,19 +235,20 @@ def make_sum_reduction_2d_axis1_kernel(
     the same order of magnitude than `preferred_work_group_size_multiple`. If not,
     other reduction implementations might give better performances.
     """
-    check_power_of_2(work_group_size)
     n_rows = size0 if size1 is not None else None
     sum_axis_size = size0 if n_rows is None else size1
 
     # fused_unary_func is applied elementwise during the first pass on data, in the
     # first kernel execution only.
-    fused_func_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
-        n_rows, work_group_size, fused_unary_func, dtype
+    work_group_size, fused_func_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
+        n_rows, work_group_size, fused_unary_func, dtype, device
     )
     # subsequent kernel calls only sum the data.
-    nofunc_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
-        n_rows, work_group_size, fused_unary_func=None, dtype=dtype
+    _, nofunc_kernel = _make_partial_sum_reduction_2d_axis1_kernel(
+        n_rows, work_group_size, fused_unary_func=None, dtype=dtype, device=device
     )
+
+    check_power_of_2(work_group_size)
 
     # As many partial reductions as necessary are chained until only one element
     # remains.
@@ -283,10 +293,8 @@ def make_sum_reduction_2d_axis1_kernel(
 
 @lru_cache
 def _make_partial_sum_reduction_2d_axis1_kernel(
-    n_rows, work_group_size, fused_unary_func, dtype
+    n_rows, work_group_size, fused_unary_func, dtype, device
 ):
-    # Number of iteration in each execution of the kernel:
-    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     zero = dtype(0.0)
     one_idx = np.int64(1)
@@ -303,7 +311,6 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     # TODO: this set of kernel functions could be abstracted away to other coalescing
     # functions
     if n_rows is None:  # 1d
-        local_values_size = work_group_size
 
         @dpex.func
         def set_col_to_zero(array, i):
@@ -338,7 +345,6 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             to_array[to_col] = from_array[zero_idx] + from_array[one_idx]
 
     else:
-        local_values_size = (n_rows, work_group_size)
 
         @dpex.func
         def set_col_to_zero(array, i):
@@ -378,6 +384,23 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 to_array[row, to_col] = (
                     from_array[row, zero_idx] + from_array[row, one_idx]
                 )
+
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size,
+        device,
+        required_local_memory_per_item=(n_rows or 1) * np.dtype(dtype).itemsize,
+    )
+    if work_group_size == input_work_group_size:
+        check_power_of_2(work_group_size)
+    else:
+        # Round to the maximum smaller power of two
+        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
+
+    # Number of iteration in each execution of the kernel:
+    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
+
+    local_values_size = work_group_size if n_rows is None else (n_rows, work_group_size)
 
     # Optimized for C-contiguous array where the size of the sum axis is
     # >> preferred_work_group_size_multiple, and the size of the other axis (if any) is
@@ -433,21 +456,33 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         if first_work_id:
             add_first_cols(local_values, result, group_id)
 
-    return partial_sum_reduction
+    return work_group_size, partial_sum_reduction
 
 
 @lru_cache
-def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
+def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     """Implement 1d argmin with the same strategy than for
     make_sum_reduction_2d_axis1_kernel."""
-    check_power_of_2(work_group_size)
-
-    # Number of iteration in each execution of the kernel:
-    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
-
     two_as_a_long = np.int64(2)
     one_idx = np.int64(1)
     inf = dtype(np.inf)
+
+    local_argmin_dtype = np.int32
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size,
+        device,
+        required_local_memory_per_item=np.dtype(dtype).itemsize
+        + np.dtype(local_argmin_dtype).itemsize,
+    )
+    if work_group_size == input_work_group_size:
+        check_power_of_2(work_group_size)
+    else:
+        # Round to the maximum smaller power of two
+        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
+
+    # Number of iteration in each execution of the kernel:
+    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     # TODO: the first call of partial_argmin_reduction in the final loop should be
     # written with only two arguments since "previous_result" does not exist yet.
@@ -473,7 +508,7 @@ def make_argmin_reduction_1d_kernel(size, work_group_size, device, dtype):
         current_size = (previous_result_size if has_previous_result
                         else values.shape[zero_idx])
 
-        local_argmin = dpex.local.array(work_group_size, dtype=np.int32)
+        local_argmin = dpex.local.array(work_group_size, dtype=local_argmin_dtype)
         local_values = dpex.local.array(work_group_size, dtype=dtype)
 
         first_value_idx = group_id * work_group_size * two_as_a_long
