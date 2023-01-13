@@ -799,7 +799,6 @@ def kmeans_plusplus(
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        axis=1,
     )
 
     random_state = create_xoroshiro128pp_states(
