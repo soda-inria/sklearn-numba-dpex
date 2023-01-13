@@ -374,9 +374,11 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         for i in range(local_n_iterations):
             # We discard half of the remaining active work items at each iteration
             current_n_work_items = current_n_work_items // two_as_a_long
-            if ((local_work_id < current_n_work_items) and
-                ((first_value_idx + local_work_id + current_n_work_items)
-                 < sum_axis_size)):
+            work_item_idx = first_value_idx + local_work_id + current_n_work_items
+            if (
+                (local_work_id < current_n_work_items) and
+                (work_item_idx < sum_axis_size)
+            ):
                 local_values[local_work_id] += (
                     local_values[local_work_id + current_n_work_items]
                 )
