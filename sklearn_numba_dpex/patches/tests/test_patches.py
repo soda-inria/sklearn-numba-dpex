@@ -17,11 +17,11 @@ from sklearn_numba_dpex.patches.load_numba_dpex import _load_numba_dpex_with_pat
 
 
 def test_init_config():
-    """If this test fail, it means that `numba_dpex` has been bumped to a version where
-    its import issues related to `dpctl.SyclDevice.is_host` attribute has been fixed.
-    It's a reminder that the minimum required version of `numba_dpex` can be bumped to
-    the first version that fixed the issue, and this test can be removed, along with the
-    corresponding fixes in
+    """If this test fails, it means that `numba_dpex` has been bumped to a version
+    where its import issues related to `dpctl.SyclDevice.is_host` attribute has been
+    fixed. It's a reminder that the minimum required version of `numba_dpex` can be
+    bumped to the first version that fixed the issue, and this test can be removed,
+    along with the corresponding fixes in
     `sklearn_numba_dpex.common._utils._force_reload_numba_dpex_with_patches`.
     """
     with pytest.raises(AttributeError):
