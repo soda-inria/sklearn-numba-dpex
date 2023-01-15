@@ -482,7 +482,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square(),
+        fused_elementwise_func=_square(),
     )
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
@@ -536,7 +536,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square(),
+        fused_elementwise_func=_square(),
     )
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
