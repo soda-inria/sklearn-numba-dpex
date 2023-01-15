@@ -42,7 +42,6 @@ def test_sum_reduction_2d(array_in, expected_result, axis, dtype, work_group_siz
 
     if work_group_size == "max":
         sub_group_size = min(device.sub_group_sizes)
-
     else:
         sub_group_size = work_group_size // 2
 

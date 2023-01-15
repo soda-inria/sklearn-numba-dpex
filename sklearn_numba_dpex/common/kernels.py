@@ -206,9 +206,11 @@ def make_sum_reduction_2d_kernel(
     work_group_size="max",
     axis=None,
     sub_group_size=None,
-    fused_unary_func=None,
+    fused_elementwise_func=None,
 ):
-    """Implement data_2d.sum(axis=axis) or data_1d.sum()
+    """Implement data_2d.sum(axis=axis) or data_1d.sum().
+
+    This implementation is optimized for C-contiguous arrays.
 
     numba_dpex does not provide tools such as `cuda.reduce` so we implement from scratch
     a reduction strategy. The strategy relies on the commutativity of the operation used
@@ -223,15 +225,16 @@ def make_sum_reduction_2d_kernel(
 
     Once the reduction is done in a work group the result is written in global memory,
     thus creating an intermediary result whose size is divided by
-    `2 * work_group_size`. This is repeated as many time as needed until only one value
-    remains in global memory.
+    `2 * work_group_size` if axis=1, or by `2 * work_group_size // sub_group_size` if\
+    axis=0. This is repeated as many times as needed until only one value remains in
+    global memory.
 
-    If fused_unary_func is not None, it will be applied element-wise before summing.
-    It must be a function that will be interpreted as a dpex.func and is subject to the
-    same rules. It is expected to take one scalar argument and returning one scalar
-    value. lambda functions are advised against since the cache will not work with
-    lambda functions. sklearn_numba_dpex.common._utils expose some pre-defined
-    `fused_unary_funcs`.
+    If `fused_elementwise_func` is not None, it will be applied element-wise before
+    summing. It must be a function that will be interpreted as a dpex.func and is
+    subject to the same rules. It is expected to take one scalar argument and returning
+    one scalar value. lambda functions are advised against since the cache will not
+    work with lambda functions. sklearn_numba_dpex.common._utils expose some
+    pre-defined `fused_elementwise_func`s.
 
     Notes
     -----
@@ -242,25 +245,42 @@ def make_sum_reduction_2d_kernel(
     `(size0, size1)`, and the reduction operation is equivalent to
     `input.sum(axis=axis)`.
 
-    if `size1` is None or if `axis` is `0`, then `work_group_size` is assumed to be a
+    If `size1` is None or if `axis` is `0`, then `work_group_size` is assumed to be a
     power of 2, and the parameter `sub_group_size` is ignored.
 
-    if `size1` is not `None` and `axis` is `1`, then `work_group_size` is assumed to be
+    If `size1` is not `None` and `axis` is `1`, then `work_group_size` is assumed to be
     a multiple of `sub_group_size`, such that `work_group_size // sub_group_size` is
     a power of 2.
 
     Depending on the size of the sum axis, it might be worth tuning `work_group_size`
     for better performance. When `axis` is `1`, tuning `sub_group_size` with respect
     to the size of the other axis might also be beneficial.
+
+    The algorithmic approach that is chosen to implement the underlying kernels takes
+    inspiration from many sources that are available online, such as [1]_, [2]_, [3]_ .
+
+    .. [1] Timcheck, S. W. (2017). Efficient Implementation of Reductions on GPU
+    Architectures.
+
+    .. [2] https://dournac.org/info/gpu_sum_reduction
+
+    .. [3] https://shreeraman-ak.medium.com/parallel-reduction-with-cuda-d0ae10c1ae2c
     """
     if is_1d := not size1:
         axis = 1
         size1 = size0
         size0 = 1
 
+    # NB: the shape of the work group is different in each of those two cases. Summing
+    # efficiently requires to adapt to very different IO patterns depending on the sum
+    # axis, which motivates the need for different kernels with different work group
+    # sizes for each cases. As a consequence, the shape of the intermediate results
+    # in the main driver loop, and the `global_size` (total number of work items fired
+    # per call) for each kernel call, are also differents, and are variabilized with
+    # the lambda functions `get_result_shape1 and `get_global_size`.
     if axis == 1:
-        work_group_size, kernels = _make_partial_sum_reduction_2d_axis1_kernels(
-            size0, work_group_size, fused_unary_func, dtype, device
+        work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
+            size0, work_group_size, fused_elementwise_func, dtype, device
         )
         sum_axis_size = size1
         get_result_shape = lambda result_sum_axis_size: (size0, result_sum_axis_size)
@@ -268,12 +288,15 @@ def make_sum_reduction_2d_kernel(
             lambda result_sum_axis_size: result_sum_axis_size * work_group_size * size0
         )
 
-    else:
-
-        work_group_size, kernels = _make_partial_sum_reduction_2d_axis0_kernels(
-            size1, work_group_size, sub_group_size, fused_unary_func, dtype, device
+    else:  # axis == 0
+        work_group_size, kernels = _prepare_sum_reduction_2d_axis0(
+            size1,
+            work_group_size,
+            sub_group_size,
+            fused_elementwise_func,
+            dtype,
+            device,
         )
-
         sum_axis_size = size0
         get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, size1)
         get_global_size = (
@@ -282,9 +305,9 @@ def make_sum_reduction_2d_kernel(
             * math.ceil(size1 / sub_group_size)
         )
 
-    # fused_unary_func is applied elementwise during the first pass on data, in the
-    # first kernel execution only, using `fused_func_kernel`. Subsequent kernel
-    # calls only sum the data, using `nofunc_kernel`.
+    # `fused_elementwise_func` is applied elementwise during the first pass on
+    # data, in the first kernel execution only, using `fused_func_kernel`. Subsequent
+    # kernel calls only sum the data, using `nofunc_kernel`.
     (fused_func_kernel, nofunc_kernel), reduction_block_size = kernels
 
     # As many partial reductions as necessary are chained until only one element
@@ -313,6 +336,7 @@ def make_sum_reduction_2d_kernel(
 
     def sum_reduction(summands):
         if is_1d:
+            # Makes the 1d case a special 2d case to reuse the same kernel.
             summands = dpt.reshape(summands, (1, -1))
 
         if sum_axis_size == 0:
@@ -333,21 +357,16 @@ def make_sum_reduction_2d_kernel(
     return sum_reduction
 
 
-@lru_cache
-def _make_partial_sum_reduction_2d_axis1_kernels(
-    n_rows, work_group_size, fused_unary_func, dtype, device, return_only_kernel=False
+def _prepare_sum_reduction_2d_axis1(
+    n_rows, work_group_size, fused_elementwise_func, dtype, device
 ):
-    zero = dtype(0.0)
-    one_idx = np.int64(1)
-    minus_one_idx = np.int64(-1)
-    two_as_a_long = np.int64(2)
 
-    if fused_unary_func is None:
+    if fused_elementwise_func is None:
 
-        def fused_unary_func(x):
+        def fused_elementwise_func(x):
             return x
 
-    fused_unary_func_ = dpex.func(fused_unary_func)
+    fused_elementwise_func_ = dpex.func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -359,8 +378,40 @@ def _make_partial_sum_reduction_2d_axis1_kernels(
         # Round to the maximum smaller power of two
         work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
+    (
+        reduction_block_size,
+        partial_sum_reduction,
+    ) = _make_partial_sum_reduction_2d_axis1_kernel(
+        n_rows, work_group_size, fused_elementwise_func_, dtype
+    )
+
+    if fused_elementwise_func is None:
+        partial_sum_reduction_nofunc = partial_sum_reduction
+    else:
+        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis1_kernel(
+            n_rows, work_group_size, fused_elementwise_func_, dtype
+        )
+
+    return work_group_size, (
+        (partial_sum_reduction, partial_sum_reduction_nofunc),
+        reduction_block_size,
+    )
+
+
+@lru_cache
+def _make_partial_sum_reduction_2d_axis1_kernel(
+    n_rows, work_group_size, fused_elementwise_func, dtype
+):
+    """When axis=1, each work group performs a local reduction on axis 1 in a window of
+    size `(1, 2 * work_group_size)`."""
+
+    zero = dtype(0.0)
+    one_idx = np.int64(1)
+    minus_one_idx = np.int64(-1)
+    two_as_a_long = np.int64(2)
+
     # Number of iteration in each execution of the kernel:
-    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
+    n_local_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
@@ -381,10 +432,13 @@ def _make_partial_sum_reduction_2d_axis1_kernels(
         sum_axis_size = summands.shape[minus_one_idx]
         n_work_group_per_row = result.shape[minus_one_idx]
 
-        local_work_group_id_in_row = (group_id % n_work_group_per_row)
+        local_work_group_id_in_row = group_id % n_work_group_per_row
         row_idx = group_id // n_work_group_per_row
 
         first_value_idx = local_work_group_id_in_row * reduction_block_size
+        # NB: we use augend/addend vocabulary
+        # in sum x + y, x is augend, y is addend
+        # https://www.quora.com/What-is-Augend-and-Addend
         augend_idx = first_value_idx + local_work_id
         addend_idx = first_value_idx + work_group_size + local_work_id
 
@@ -392,31 +446,33 @@ def _make_partial_sum_reduction_2d_axis1_kernels(
 
         # Each work item reads two value in global memory and sum it into the local
         # memory
+        # NB: to optimize IO, consecutive work items within as same subgroup read
+        # consecutive adresses in memory.
         if augend_idx >= sum_axis_size:
             local_values[local_work_id] = zero
         elif addend_idx >= sum_axis_size:
             local_values[local_work_id] = (
-                fused_unary_func_(summands[row_idx, augend_idx])
+                fused_elementwise_func(summands[row_idx, augend_idx])
             )
         else:
             local_values[local_work_id] = (
-                fused_unary_func_(summands[row_idx, augend_idx]) +
-                fused_unary_func_(summands[row_idx, addend_idx])
+                fused_elementwise_func(summands[row_idx, augend_idx]) +
+                fused_elementwise_func(summands[row_idx, addend_idx])
             )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        current_n_work_items = work_group_size
-        for i in range(local_n_iterations):
+        n_active_work_items = work_group_size
+        for i in range(n_local_iterations):
             # We discard half of the remaining active work items at each iteration
-            current_n_work_items = current_n_work_items // two_as_a_long
-            work_item_idx = first_value_idx + local_work_id + current_n_work_items
+            n_active_work_items = n_active_work_items // two_as_a_long
+            work_item_idx = first_value_idx + local_work_id + n_active_work_items
             if (
-                (local_work_id < current_n_work_items) and
+                (local_work_id < n_active_work_items) and
                 (work_item_idx < sum_axis_size)
             ):
                 local_values[local_work_id] += (
-                    local_values[local_work_id + current_n_work_items]
+                    local_values[local_work_id + n_active_work_items]
                 )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
@@ -429,39 +485,19 @@ def _make_partial_sum_reduction_2d_axis1_kernels(
                 local_values[zero_idx] + local_values[one_idx]
             )
 
-    if return_only_kernel:
-        return partial_sum_reduction
-
-    partial_sum_reductiom_nofunc = _make_partial_sum_reduction_2d_axis1_kernels(
-        n_rows, work_group_size, None, dtype, device, return_only_kernel=True
-    )
-
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reductiom_nofunc),
-        reduction_block_size,
-    )
+    return reduction_block_size, partial_sum_reduction
 
 
-@lru_cache
-def _make_partial_sum_reduction_2d_axis0_kernels(
-    n_cols,
-    work_group_size,
-    sub_group_size,
-    fused_unary_func,
-    dtype,
-    device,
-    return_only_kernel=False,
+def _prepare_sum_reduction_2d_axis0(
+    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype, device
 ):
-    zero = dtype(0.0)
-    one_idx = np.int64(1)
-    two_as_a_long = np.int64(2)
 
-    if fused_unary_func is None:
+    if fused_elementwise_func is None:
 
-        def fused_unary_func(x):
+        def fused_elementwise_func(x):
             return x
 
-    fused_unary_func_ = dpex.func(fused_unary_func)
+    fused_elementwise_func_ = dpex.func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -474,31 +510,63 @@ def _make_partial_sum_reduction_2d_axis0_kernels(
                 f"sub_group_size={sub_group_size} and "
                 f"work_group_size={work_group_size}"
             )
-        check_power_of_2(
-            n_sub_group_per_work_group := (work_group_size // sub_group_size)
-        )
+        check_power_of_2(work_group_size // sub_group_size)
 
     else:
         # Round work_group_size to the maximum smaller power-of-two multiple of
         # `sub_group_size`
-        n_sub_group_per_work_group = 2 ** (
+        n_sub_groups_per_work_group = 2 ** (
             math.floor(math.log2(work_group_size / sub_group_size))
         )
-        work_group_size = n_sub_group_per_work_group * sub_group_size
+        work_group_size = n_sub_groups_per_work_group * sub_group_size
+
+    (
+        reduction_block_size,
+        partial_sum_reduction,
+    ) = _make_partial_sum_reduction_2d_axis0_kernel(
+        n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
+    )
+
+    if fused_elementwise_func is None:
+        partial_sum_reduction_nofunc = partial_sum_reduction
+    else:
+        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
+            n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
+        )
+
+    return work_group_size, (
+        (partial_sum_reduction, partial_sum_reduction_nofunc),
+        reduction_block_size,
+    )
+
+
+@lru_cache
+def _make_partial_sum_reduction_2d_axis0_kernel(
+    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype
+):
+    """When axis=0, each work group performs a local reduction on axis 0 in a window of
+    size `(sub_group_size_,work_group_size // sub_group_size)`."""
+    zero = dtype(0.0)
+    one_idx = np.int64(1)
+    two_as_a_long = np.int64(2)
+
+    n_sub_groups_per_work_group = work_group_size // sub_group_size
 
     # Number of iteration in each execution of the kernel:
-    local_n_iterations = np.int64(math.floor(math.log2(n_sub_group_per_work_group)) - 1)
+    n_local_iterations = np.int64(
+        math.floor(math.log2(n_sub_groups_per_work_group)) - 1
+    )
 
-    local_values_size = (n_sub_group_per_work_group, sub_group_size)
-    reduction_block_size = 2 * n_sub_group_per_work_group
+    local_values_size = (n_sub_groups_per_work_group, sub_group_size)
+    reduction_block_size = 2 * n_sub_groups_per_work_group
 
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
     @dpex.kernel
     # fmt: off
     def partial_sum_reduction(
-        summands,    # IN        (n_rows, sum_axis_size)
-        result,      # OUT       (n_rows, math.ceil(size / (2 * reduction_block_size),)
+        summands,    # IN        (sum_axis_size, n_cols)
+        result,      # OUT       (math.ceil(size / (2 * reduction_block_size), n_cols)
     ):
 
         # fmt: on
@@ -507,43 +575,54 @@ def _make_partial_sum_reduction_2d_axis0_kernels(
         local_work_id = dpex.get_local_id(zero_idx)
 
         sum_axis_size = summands.shape[zero_idx]
-        n_block_for_col = result.shape[zero_idx]
+        n_blocks_per_col = result.shape[zero_idx]
 
-        local_block_id_in_col = (group_id % n_block_for_col)
+        local_block_id_in_col = group_id % n_blocks_per_col
         first_row_idx = local_block_id_in_col * reduction_block_size
-        local_col_idx = (local_work_id % sub_group_size)
-        local_row_idx = (local_work_id // sub_group_size)
+        local_col_idx = local_work_id % sub_group_size
+        local_row_idx = local_work_id // sub_group_size
         col_idx = (
-            group_id // n_block_for_col) * sub_group_size + local_col_idx
+            (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
+            )
+        # NB: we use augend/addend vocabulary
+        # in sum x + y, x is augend, y is addend
+        # https://www.quora.com/What-is-Augend-and-Addend
         augend_row_idx = first_row_idx + local_row_idx
-        addend_row_idx = augend_row_idx + n_sub_group_per_work_group
+        addend_row_idx = augend_row_idx + n_sub_groups_per_work_group
 
         local_values = dpex.local.array(local_values_size, dtype=dtype)
 
         # Each work item reads two value in global memory and sum it into the local
         # memory
+        # NB: to optimize IO, consecutive work items within as same subgroup read
+        # consecutive adresses in memory.
         if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
             local_values[local_row_idx, local_col_idx] = zero
         elif addend_row_idx >= sum_axis_size:
-            local_values[local_row_idx, local_col_idx] = fused_unary_func_(
-                summands[augend_row_idx, col_idx])
+            local_values[local_row_idx, local_col_idx] = (
+                fused_elementwise_func(summands[augend_row_idx, col_idx])
+                )
         else:
-            local_values[local_row_idx, local_col_idx] = fused_unary_func_(
-                summands[augend_row_idx, col_idx]) + fused_unary_func_(
-                    summands[addend_row_idx, col_idx])
+            local_values[local_row_idx, local_col_idx] = (
+                fused_elementwise_func(summands[augend_row_idx, col_idx]) +
+                fused_elementwise_func(summands[addend_row_idx, col_idx])
+                )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        current_n_nows = n_sub_group_per_work_group
-        for i in range(local_n_iterations):
+        n_active_sub_groups = n_sub_groups_per_work_group
+        for i in range(n_local_iterations):
             # We discard half of the remaining active subgroups at each iteration
-            current_n_nows = current_n_nows // two_as_a_long
-            if (local_row_idx < current_n_nows) and (
-                    col_idx < n_cols) and (
-                        first_row_idx + local_row_idx + current_n_nows) < sum_axis_size:
-                local_values[local_row_idx, local_col_idx] += local_values[
-                    local_row_idx + current_n_nows, local_col_idx
-                ]
+            n_active_sub_groups = n_active_sub_groups // two_as_a_long
+            work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
+            if (
+                (local_row_idx < n_active_sub_groups) and
+                (col_idx < n_cols) and
+                (work_item_row_idx < sum_axis_size)
+            ):
+                local_values[local_row_idx, local_col_idx] += (
+                    local_values[local_row_idx + n_active_sub_groups, local_col_idx]
+                )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -552,26 +631,11 @@ def _make_partial_sum_reduction_2d_axis0_kernels(
         # into global memory
         if (local_row_idx == zero_idx) and (col_idx < n_cols):
             result[local_block_id_in_col, col_idx] = (
-                local_values[zero_idx, local_col_idx] + local_values[
-                    one_idx, local_col_idx])
+                local_values[zero_idx, local_col_idx] +
+                local_values[one_idx, local_col_idx]
+            )
 
-    if return_only_kernel:
-        return partial_sum_reduction
-
-    partial_sum_reductiom_nofunc = _make_partial_sum_reduction_2d_axis0_kernels(
-        n_cols,
-        work_group_size,
-        sub_group_size,
-        None,
-        dtype,
-        device,
-        return_only_kernel=True,
-    )
-
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reductiom_nofunc),
-        reduction_block_size,
-    )
+    return reduction_block_size, partial_sum_reduction
 
 
 @lru_cache
@@ -596,7 +660,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
 
     # Number of iteration in each execution of the kernel:
-    local_n_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
+    n_local_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
 
     # TODO: the first call of partial_argmin_reduction in the final loop should be
     # written with only two arguments since "previous_result" does not exist yet.
@@ -653,12 +717,12 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
                     local_values[local_work_id] = y
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
-        current_n_work_items = work_group_size
-        for i in range(local_n_iterations):
-            current_n_work_items = current_n_work_items // two_as_a_long
-            if local_work_id < current_n_work_items:
+        n_active_work_items = work_group_size
+        for i in range(n_local_iterations):
+            n_active_work_items = n_active_work_items // two_as_a_long
+            if local_work_id < n_active_work_items:
                 local_x_idx = local_work_id
-                local_y_idx = local_work_id + current_n_work_items
+                local_y_idx = local_work_id + n_active_work_items
 
                 x = local_values[local_x_idx]
                 y = local_values[local_y_idx]
