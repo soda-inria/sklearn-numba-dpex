@@ -16,52 +16,16 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
 @pytest.mark.parametrize(
-    "array_in, expected_result",
-    [
-        (
-            # [[0.0, 1.0, 2.0, 3.0],
-            #  [4.0, 5.0, 6.0, 7.0],
-            #  [8.0, 9.0, 10.0, 11.0]]
-            dpt.reshape(dpt.arange(12), (3, 4)),
-            np.array([6.0, 22.0, 38.0]),
-        ),
-        (
-            # [[0.0, 1.0, 2.0, 3.0, 4.0],
-            #  [5.0, 6.0, 7.0, 8.0, 9.0],
-            #  [10.0, 11.0, 12.0, 13.0, 14.0]]
-            dpt.reshape(dpt.arange(15), (3, 5)),
-            np.array([10.0, 35.0, 60.0]),
-        ),
-        (
-            # [[0.0, 1.0, 2.0, 3.0]]
-            dpt.reshape(dpt.arange(4), (1, 4)),
-            np.array([6.0]),
-        ),
-        (
-            # [[0.0, 1.0, 2.0, 3.0, 4.0]]
-            dpt.reshape(dpt.arange(5), (1, 5)),
-            np.array([10.0]),
-        ),
-        (
-            # [[0.0, 1.0, 2.0, 3.0, 4.0],
-            #  [5.0, 6.0, 7.0, 8.0, 9.0],
-            #  [10.0, 11.0, 12.0, 13.0, 14.0]]
-            dpt.reshape(dpt.arange(15), (3, 5)),
-            np.array([10.0, 35.0, 60.0]),
-        ),
-        (
-            # [[123]]
-            dpt.asarray([[123]]),
-            np.array([123]),
-        ),
-    ],
+    "test_input_shape", [(1, 1), (1, 3), (3, 1), (3, 5), (5, 3), (3, 4), (4, 3)]
 )
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_sum_reduction_2d(array_in, expected_result, axis, dtype, work_group_size):
-    if axis == 0:
-        array_in = dpt.asarray(array_in.T, order="C")
+def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
+    n_items = test_input_shape[0] * test_input_shape[1]
+    array_in = np.arange(n_items, dtype=dtype).reshape(test_input_shape)
 
-    array_in = dpt.astype(array_in, dtype)
+    expected_result = array_in.sum(axis=axis)
+
+    array_in = dpt.asarray(array_in, order="C")
 
     device = array_in.device.sycl_device
 

@@ -27,6 +27,7 @@ import numpy as np
 from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
     check_power_of_2,
+    get_maximum_power_of_2_smaller_than,
 )
 
 zero_idx = np.int64(0)
@@ -232,16 +233,18 @@ def make_sum_reduction_2d_kernel(
 
     Once the reduction is done in a work group the result is written in global memory,
     thus creating an intermediary result whose size is divided by
-    `2 * work_group_size` if axis=1, or by `2 * work_group_size // sub_group_size` if\
+    `2 * work_group_size` if axis=1, or by `2 * work_group_size // sub_group_size` if
     axis=0. This is repeated as many times as needed until only one value remains in
     global memory.
 
     If `fused_elementwise_func` is not None, it will be applied element-wise before
     summing. It must be a function that will be interpreted as a dpex.func and is
-    subject to the same rules. It is expected to take one scalar argument and returning
-    one scalar value. lambda functions are advised against since the cache will not
-    work with lambda functions. sklearn_numba_dpex.common._utils expose some
-    pre-defined `fused_elementwise_func`s.
+    subject to the same rules ( see
+    https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
+    ). It is expected to take one scalar argument and returning one scalar value.
+    lambda functions are advised against since the cache will not work with lambda
+    functions. sklearn_numba_dpex.common._utils expose some pre-defined
+    `fused_elementwise_func`s.
 
     Notes
     -----
@@ -283,8 +286,8 @@ def make_sum_reduction_2d_kernel(
     # axis, which motivates the need for different kernels with different work group
     # sizes for each cases. As a consequence, the shape of the intermediate results
     # in the main driver loop, and the `global_size` (total number of work items fired
-    # per call) for each kernel call, are also differents, and are variabilized with
-    # the lambda functions `get_result_shape1 and `get_global_size`.
+    # per call) for each kernel call, are also different, and are variabilized with
+    # the lambda functions `get_result_shape` and `get_global_size`.
     if axis == 1:
         work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
             size0, work_group_size, fused_elementwise_func, dtype, device
@@ -311,6 +314,10 @@ def make_sum_reduction_2d_kernel(
             * work_group_size
             * math.ceil(size1 / sub_group_size)
         )
+
+    # The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
+    if work_group_size == 1:
+        raise ValueError("work_group_size==1 is not supported.")
 
     # `fused_elementwise_func` is applied elementwise during the first pass on
     # data, in the first kernel execution only, using `fused_func_kernel`. Subsequent
@@ -385,7 +392,7 @@ def _prepare_sum_reduction_2d_axis1(
         check_power_of_2(work_group_size)
     else:
         # Round to the maximum smaller power of two
-        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
+        work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     (
         reduction_block_size,
@@ -402,7 +409,7 @@ def _prepare_sum_reduction_2d_axis1(
         )
 
     return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),
+        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
         reduction_block_size,
     )
 
@@ -420,12 +427,12 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     two_as_a_long = np.int64(2)
 
     # Number of iteration in each execution of the kernel:
-    n_local_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
+    n_local_iterations = np.int64(math.log2(work_group_size) - 1)
 
     local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
 
-    # ???: how does this strategy compares to having each thread reducing N contiguous
+    # ???: how does this strategy compare to having each thread reduce N contiguous
     # items ?
     @dpex.kernel
     # fmt: off
@@ -526,8 +533,8 @@ def _prepare_sum_reduction_2d_axis0(
     else:
         # Round work_group_size to the maximum smaller power-of-two multiple of
         # `sub_group_size`
-        n_sub_groups_per_work_group = 2 ** (
-            math.floor(math.log2(work_group_size / sub_group_size))
+        n_sub_groups_per_work_group = get_maximum_power_of_2_smaller_than(
+            work_group_size / sub_group_size
         )
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
@@ -546,7 +553,7 @@ def _prepare_sum_reduction_2d_axis0(
         )
 
     return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),
+        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
         reduction_block_size,
     )
 
@@ -564,9 +571,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     n_sub_groups_per_work_group = work_group_size // sub_group_size
 
     # Number of iteration in each execution of the kernel:
-    n_local_iterations = np.int64(
-        math.floor(math.log2(n_sub_groups_per_work_group)) - 1
-    )
+    n_local_iterations = np.int64(math.log2(n_sub_groups_per_work_group) - 1)
 
     local_values_size = (n_sub_groups_per_work_group, sub_group_size)
     reduction_block_size = 2 * n_sub_groups_per_work_group
@@ -668,10 +673,11 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         check_power_of_2(work_group_size)
     else:
         # Round to the maximum smaller power of two
-        work_group_size = 2 ** (math.floor(math.log2(work_group_size)))
+
+        work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     # Number of iteration in each execution of the kernel:
-    n_local_iterations = np.int64(math.floor(math.log2(work_group_size)) - 1)
+    n_local_iterations = np.int64(math.log2(work_group_size) - 1)
 
     # TODO: the first call of partial_argmin_reduction in the final loop should be
     # written with only two arguments since "previous_result" does not exist yet.

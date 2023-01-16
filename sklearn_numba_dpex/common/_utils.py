@@ -1,10 +1,14 @@
 import math
 
 
-def check_power_of_2(e):
-    if e != 2 ** (math.floor(math.log2(e))):
-        raise ValueError(f"Expected a power of 2, got {e}")
-    return e
+def check_power_of_2(x):
+    if x != 2 ** (math.floor(math.log2(x))):
+        raise ValueError(f"Expected a power of 2, got {x}")
+    return x
+
+
+def get_maximum_power_of_2_smaller_than(x):
+    return 2 ** (math.floor(math.log2(x)))
 
 
 # HACK: the following function are defined as closures to work around a `numba_dpex`
@@ -73,7 +77,9 @@ def _check_max_work_group_size(
     """
     max_work_group_size = device.max_work_group_size
 
-    if work_group_size == "max" and not device.has_aspect_cpu:
+    if work_group_size == "max" and not (
+        device.has_aspect_cpu and required_local_memory_per_item > 0
+    ):
         return device.max_work_group_size
     elif work_group_size == "max":
         return math.floor(
@@ -82,7 +88,7 @@ def _check_max_work_group_size(
         )
     elif work_group_size > max_work_group_size:
         raise RuntimeError(
-            f"Got work_group_size={work_group_size} but that is greather than the "
+            f"Got work_group_size={work_group_size} but that is greater than the "
             "maximum supported work group size device.max_work_group_size="
             f"{device.max_work_group_size} for device {device.name}"
         )
