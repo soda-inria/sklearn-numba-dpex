@@ -158,39 +158,46 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     if hasattr(seed, "randint"):
         seed = uint64(seed.randint(0, np.iinfo(np.int64).max - 1))
 
-    seed = uint64(seed)
+    init_xoroshiro128pp_states_kernel = _make_init_xoroshiro128pp_states_kernel(
+        n_states, subsequence_start
+    )
+
+    # Initialization is purely sequential so it will be faster on CPU, if a cpu device
+    # is available make sure to use it.
+    if device is None:
+        device = dpctl.SyclDevice()
+    from_cpu_to_device = False
+    if not device.has_aspect_cpu:
+        try:
+            cpu_device = dpctl.SyclDevice("cpu")
+            from_cpu_to_device = True
+        except dpctl.SyclDeviceCreationError:
+            warnings.warn(
+                "No CPU found, falling back random initiatlization to default device."
+            )
+
+    states = dpt.empty(
+        sh=(n_states, 2),
+        dtype=np.uint64,
+        device=cpu_device if from_cpu_to_device else device,
+    )
+
+    seed = dpt.asarray(
+        [seed], dtype=np.uint64, device=cpu_device if from_cpu_to_device else device
+    )
+
+    init_xoroshiro128pp_states_kernel(states, seed)
+
+    if from_cpu_to_device:
+        return states.to_device(device)
+
+    else:
+        return states
+
+
+@lru_cache
+def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
     n_states = int64(n_states)
-
-    init_const_1 = np.uint64(0)
-
-    @dpex.kernel
-    def init_xoroshiro128pp_states(states):
-        """
-        Use SplitMix64 to generate an xoroshiro128p state from a uint64 seed.
-
-        This ensures that manually set small seeds don't result in a predictable
-        initial sequence from the random number generator.
-        """
-        if n_states < one_idx:
-            return
-
-        splitmix64_state = init_const_1 ^ seed
-        splitmix64_state, states[zero_idx, zero_idx] = _splitmix64_next(
-            splitmix64_state
-        )
-        _, states[zero_idx, one_idx] = _splitmix64_next(splitmix64_state)
-
-        # advance to starting subsequence number
-        for _ in range(subsequence_start):
-            _xoroshiro128pp_jump(states, zero_idx)
-
-        # populate the rest of the array
-        for idx in range(one_idx, n_states):
-            # take state of previous generator
-            states[idx, zero_idx] = states[idx - one_idx, zero_idx]
-            states[idx, one_idx] = states[idx - one_idx, one_idx]
-            # and jump forward 2**64 steps
-            _xoroshiro128pp_jump(states, idx)
 
     splitmix64_const_1 = uint64(0x9E3779B97F4A7C15)
     splitmix64_const_2 = uint64(0xBF58476D1CE4E5B9)
@@ -234,6 +241,8 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
 
         states[state_idx, zero_idx] = s0
         states[state_idx, one_idx] = s1
+
+    init_const_1 = np.uint64(0)
 
     # TODO: it seems that the reference python implementation in the package
     # `randomgen` that inspired this code contains errors.
@@ -292,32 +301,36 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
 
     #     return result
 
-    # Initialization is purely sequential so it will be faster on CPU, if a cpu device
-    # is available make sure to use it.
-    if device is None:
-        device = dpctl.SyclDevice()
-    from_cpu_to_device = False
-    if not device.has_aspect_cpu:
-        try:
-            cpu_device = dpctl.SyclDevice("cpu")
-            from_cpu_to_device = True
-        except dpctl.SyclDeviceCreationError:
-            warnings.warn(
-                "No CPU found, falling back random initiatlization to default device."
-            )
+    @dpex.kernel
+    def init_xoroshiro128pp_states(states, seed):
+        """
+        Use SplitMix64 to generate an xoroshiro128p state from a uint64 seed.
 
-    states = dpt.empty(
-        sh=(n_states, 2),
-        dtype=np.uint64,
-        device=cpu_device if from_cpu_to_device else device,
-    )
-    init_xoroshiro128pp_states[1, 1](states)
+        This ensures that manually set small seeds don't result in a predictable
+        initial sequence from the random number generator.
+        """
+        if n_states < one_idx:
+            return
 
-    if from_cpu_to_device:
-        return states.to_device(device)
+        splitmix64_state = init_const_1 ^ seed[zero_idx]
+        splitmix64_state, states[zero_idx, zero_idx] = _splitmix64_next(
+            splitmix64_state
+        )
+        _, states[zero_idx, one_idx] = _splitmix64_next(splitmix64_state)
 
-    else:
-        return states
+        # advance to starting subsequence number
+        for _ in range(subsequence_start):
+            _xoroshiro128pp_jump(states, zero_idx)
+
+        # populate the rest of the array
+        for idx in range(one_idx, n_states):
+            # take state of previous generator
+            states[idx, zero_idx] = states[idx - one_idx, zero_idx]
+            states[idx, one_idx] = states[idx - one_idx, one_idx]
+            # and jump forward 2**64 steps
+            _xoroshiro128pp_jump(states, idx)
+
+    return init_xoroshiro128pp_states[1, 1]
 
 
 # HACK: Work around https://github.com/IntelPython/numba-dpex/issues/867

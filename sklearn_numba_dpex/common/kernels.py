@@ -32,6 +32,13 @@ from sklearn_numba_dpex.common._utils import (
 zero_idx = np.int64(0)
 
 
+# HACK: make_* functions that take an operator as input (named `op`, `ops`,
+# `fused_unary_func`,...) now expect those operators to be wrapped in another function
+# that takes no arguments and returns the said operator. See the notice in the
+# `sklearn_numba_dpex.common._utils` where some operators are pre-defined for more
+# information.
+
+
 # HACK: dtype argument is passed to prevent sharing a device function instance
 # between kernels specialized for different argument types.
 # This is a workaround for:
@@ -42,7 +49,7 @@ zero_idx = np.int64(0)
 def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
     """This kernel is mostly necessary to work around lack of support for this
     operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
-    op = dpex.func(op)
+    op = dpex.func(op())
 
     @dpex.kernel
     # fmt: off
@@ -144,7 +151,7 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
     """
 
     global_size = math.ceil(size1 / work_group_size) * work_group_size
-    ops = dpex.func(ops)
+    ops = dpex.func(ops())
 
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
@@ -363,10 +370,12 @@ def _prepare_sum_reduction_2d_axis1(
 
     if fused_elementwise_func is None:
 
-        def fused_elementwise_func(x):
+        @dpex.func
+        def fused_elementwise_func_(x):
             return x
 
-    fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+    else:
+        fused_elementwise_func_ = dpex.func(fused_elementwise_func())
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -494,10 +503,12 @@ def _prepare_sum_reduction_2d_axis0(
 
     if fused_elementwise_func is None:
 
-        def fused_elementwise_func(x):
+        @dpex.func
+        def fused_elementwise_func_(x):
             return x
 
-    fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+    else:
+        fused_elementwise_func_ = dpex.func(fused_elementwise_func())
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
