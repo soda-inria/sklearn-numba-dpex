@@ -673,7 +673,6 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         check_power_of_2(work_group_size)
     else:
         # Round to the maximum smaller power of two
-
         work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     # Number of iteration in each execution of the kernel:
