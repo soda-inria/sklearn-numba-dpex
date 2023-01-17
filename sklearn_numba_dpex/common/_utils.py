@@ -1,4 +1,5 @@
 import math
+import warnings
 
 
 def check_power_of_2(e):
@@ -88,3 +89,25 @@ def _check_max_work_group_size(
         )
     else:
         return work_group_size
+
+
+_GLOBAL_MEM_CACHE_SIZE_DEFAULT = 1048576
+
+
+# Work around https://github.com/IntelPython/dpctl/issues/1036
+def _get_global_mem_cache_size(device):
+    if (global_mem_cache_size := device.global_mem_cache_size) > 0:
+        return global_mem_cache_size
+
+    warnings.warn(
+        "Can't inspect the available global memory cache size for the device "
+        f"{device.name}. Please check that your drivers and runtime libraries are up "
+        "to date, if this warning persists please report it at "
+        "https://github.com/soda-inria/sklearn-numba-dpex/issues . The execution will "
+        "continue with a default value for the cache size set to "
+        f"{_GLOBAL_MEM_CACHE_SIZE_DEFAULT} , which is assumed to be safe but might "
+        "not be adapted to your device and cause a loss of performance.",
+        RuntimeWarning,
+    )
+
+    return _GLOBAL_MEM_CACHE_SIZE_DEFAULT
