@@ -1,11 +1,10 @@
 # This implementation takes inspiration from other open-source implementations, such as
-# [1] https://github.com/pytorch/pytorch/blob/master/caffe2/operators/\
-#    top_k_radix_selection.cuh
+# [1] https://github.com/pytorch/pytorch/blob/master/caffe2/operators/top_k_radix_selection.cuh  # noqa
 # or
-# [2] https://developer.nvidia.com/blog/gpu-pro-tip-fast-histograms-using-shared\
-# -atomics-maxwell
+# [2] https://developer.nvidia.com/blog/gpu-pro-tip-fast-histograms-using-shared-atomics-maxwell  # noqa
 
 # TODO: apply Dr. TopK optimizations
+# (https://dl.acm.org/doi/pdf/10.1145/3458817.3476141)
 
 import math
 from functools import lru_cache
@@ -30,32 +29,174 @@ count_one_as_a_long = np.int64(1)
 count_one_as_an_int = np.int32(1)
 
 
+# The Top-K implemented in this file uses radix sorting. Radix sorting consists in
+# using lexicographical order on bits to sort the items. It assumes that the
+# lexicographical order on the bits of the items that are being sorted matches their
+# natural ordering.
+
+# However, this is not true for sets that mix positive and negative items, given that
+# the dtypes that are supported set the first bit to 1 to encode the negative sign, and
+# 0 to encode the positive sign, in such a way that negative floats are lesser than
+# positive floats using the natural order while the opposite is true with
+# lexicograpbical order on bits.
+
+# Still, it is possible to enable radix sorting for dtypes that don't follow the
+# lexicographical order, providing a bijection can be found with an unsigned type, such
+# as the lexicographical order on the unsigned dtype matches the natural order on the
+# input dtype. The target dtype must also support bitwise operations. Thus, float32 is
+# mapped to uint32, float64 is mapped to uint64,...
+
+# In practice such bijections can be found for all dtypes and are cheap to compute. The
+# code that follows defines bijections to unsigned integers for float32 and float64
+# floats, with the following bitwise transformations:
+#    - reinterpret the float as an unsigned integer (i.e the same buffer used to encode
+#      a float is used to encode an unsigned integer. Said differently, first transform
+#      the float to the integer such as the bits used to encode the integer are the
+#      same than the bits used to encode the float)
+#    - if the float item is positive, set the first bit of the unsigned integer to 1
+#    - if the float item is negative, flip all of the bits of the unsigned integer
+#      (i.e set to 1 if bit is 0, else 0)
+#
+# See also:
+# https://stackoverflow.com/questions/4640906/radix-sort-sorting-a-float-data/4641059#4641059  # noqa
+#
+# Note that our current usecases of the use of radix (selecting TopK distances, that
+# are by definition positive floats)  only involve positive floats.
+# TODO: for arrays of positive floats the mapping trick could be skipped ?
+
+# dict that maps dtypes to the dtype of the space in which the radix sorting will be
+# actually done
+uint_type_mapping = {np.float32: np.uint32, np.float64: np.uint64}
+
+
+# The following closure define a device function that transforms items to their
+# counterpart in the sorting space. For a given dtype, it returns a function that takes
+# as input an item from the input dtype, that has prealably been reinterpreted as an
+# item of the target dtype (see `uint_type_mapping`). It returns another item from the
+# target dtype such as the lexicographical order on transformed items matches the
+# natural order on the the input dtype.
+
+# The second closure define the inverse device function.
+
+
+def _make_lexicographical_mapping_kernel_func(dtype):
+    n_bits_per_item = _get_n_bits_per_item(dtype)
+    sign_bit_idx = np.int32(n_bits_per_item - 1)
+
+    uint_type = uint_type_mapping[dtype]
+    sign_mask = uint_type(2 ** (sign_bit_idx))
+
+    @dpex.func
+    def lexicographical_mapping(item):
+        mask = (-(item >> sign_bit_idx)) | sign_mask
+        return item ^ mask
+
+    return lexicographical_mapping
+
+
+def _make_lexicographical_unmapping_kernel_func(dtype):
+    n_bits_per_item = _get_n_bits_per_item(dtype)
+    sign_bit_idx = np.int32(n_bits_per_item - 1)
+    uint_type = uint_type_mapping[dtype]
+    sign_mask = uint_type(2 ** (sign_bit_idx))
+
+    @dpex.func
+    def lexicographical_unmapping(item):
+        mask = ((item >> sign_bit_idx) - 1) | sign_mask
+        return item ^ mask
+
+    return lexicographical_unmapping
+
+
 def topk(array_in, k, group_sizes=None):
+    """Return an array of size k containing the k greatest values found in `array_in`.
+
+    Parameters
+    ----------
+    array_in : dpctl.tensor array
+        Input array in which looking for the top k values.
+
+    k: int
+        Number of values to search for.
+
+    group_sizes: tuple of int
+        Can be optionnally used to configure `(work_group_size, sub_group_size)`
+        parameters for the kernels.
+
+
+    Returns
+    -------
+    result : dpctl.tensor array
+        An array of size k containing the k greatest valus found in `array_in`.
+
+    Notes
+    -----
+    The output is not deterministic: in case of ties (severa)
+
+    The implementation has been extensively inspired by the "Fused Fixed" strategy
+    exposed in [1]_, along with its reference implementatino by the same authors [2]_,
+    and the reader can also refer to the complementary slide deck [3]_  with schemas
+    that intuitively explain the main computation.
+    """
     k_in_subset, threshold, work_group_size, dtype, device = _get_topk_threshold(
         array_in, k, group_sizes
     )
     result = dpt.empty(sh=(k,), dtype=dtype, device=device)
-    result_idx = dpt.zeros(sh=(1,), dtype=np.int32)
+    index_buffer = dpt.zeros(sh=(1,), dtype=np.int32)
     n_threshold_occurences = int(k_in_subset[0])
     gather_topk_kernel = _make_gather_topk_kernel(
         array_in.shape[0], k, n_threshold_occurences, work_group_size
     )
 
-    gather_topk_kernel(array_in, threshold, k_in_subset, result_idx, result)
+    gather_topk_kernel(array_in, threshold, k_in_subset, index_buffer, result)
     return result
 
 
 def topk_idx(array_in, k, group_sizes=None):
+    """Return an array of size k containing the indices of the k greatest values found
+    in `array_in`.
+
+    Parameters
+    ----------
+    array_in : dpctl.tensor array
+        Input array in which looking for the top k values.
+
+    k: int
+        Number of values to search for.
+
+    group_sizes: tuple of int
+        Can be optionnally used to configure `(work_group_size, sub_group_size)`
+        parameters for the kernels.
+
+
+    Returns
+    -------
+    result : dpctl.tensor array
+        An array of size k with dtype int64 containing the indices of the k greatest
+        valus found in  `array_in`.
+
+    Notes
+    -----
+    The output is not deterministic:
+        - the order of the output is undefined. Successive calls can return the same
+        items in different order.
+
+        - If there are more indices for the smallest top k value than the number of
+        time this value occurs among the top k , then the indices that are returned
+        for this value can be different between two successive calls.
+
+    """
+
     k_in_subset, threshold, work_group_size, dtype, device = _get_topk_threshold(
         array_in, k, group_sizes
     )
     result = dpt.empty(sh=(k,), dtype=np.int64, device=device)
-    result_idx = dpt.zeros(sh=(1,), dtype=np.int32)
+    index_buffer = dpt.zeros(sh=(1,), dtype=np.int32)
     gather_topk_kernel = _make_gather_topk_idx_kernel(
         array_in.shape[0], k, work_group_size
     )
 
-    gather_topk_kernel(array_in, threshold, k_in_subset, result_idx, result)
+    gather_topk_kernel(array_in, threshold, k_in_subset, index_buffer, result)
     return result
 
 
@@ -204,83 +345,6 @@ def _get_topk_threshold(array_in, k, group_sizes):
     )
 
     return k_in_subset, threshold, work_group_size, dtype, device
-
-
-# The Top-K implemented in this file uses radix sorting. Radix sorting consists in
-# using lexicographical order on bits to sort the items. It assumes that the
-# lexicographical order on the bits of the items that are being sorted matches their
-# natural ordering.
-
-# However, this is not true for sets that mix positive and negative items, given that
-# the dtypes that are supported set the first bit to 1 to encode the negative sign, and
-# 0 to encode the positive sign, in such a way that negative floats are lesser than
-# positive floats using the natural order while the opposite is true with
-# lexicograpbical order on bits.
-
-# Still, it is possible to enable radix sorting for dtypes that don't follow the
-# lexicographical order, providing a bijection can be found with an unsigned type, such
-# as the lexicographical order on the unsigned dtype matches the natural order on the
-# input dtype. The target dtype must also support bitwise operations. Thus, float32 is
-# mapped to uint32, float64 is mapped to uint64,...
-
-# In practice such bijections can be found for all dtypes and are cheap to compute. The
-# code that follows defines bijections to unsigned integers for float32 and float64
-# floats, with the following bitwise transformations:
-#    - reinterpret the float as an unsigned integer (i.e the same buffer used to encode
-#      a float is used to encode an unsigned integer. Said differently, first transform
-#      the float to the integer such as the bits used to encode the integer are the
-#      same than the bits used to encode the float)
-#    - if the float item is positive, set the first bit of the unsigned integer to 1
-#    - if the float item is negative, flip all of the bits of the unsigned integer
-#      (i.e set to 1 if bit is 0, else 0)
-#
-# See also:
-# https://stackoverflow.com/questions/4640906/radix-sort-sorting-a-float-data/\
-#     4641059#4641059
-
-
-# dict that maps dtypes to the dtype of the space in which the radix sorting will be
-# actually done
-uint_type_mapping = {np.float32: np.uint32, np.float64: np.uint64}
-
-
-# The following closure define a device function that transforms items to their
-# counterpart in the sorting space. For a given dtype, it returns a function that takes
-# as input an item from the input dtype, that has prealably been reinterpreted as an
-# item of the target dtype (see `uint_type_mapping`). It returns another item from the
-# target dtype such as the lexicographical order on transformed items matches the
-# natural order on the the input dtype.
-
-# The second closure define the inverse device function.
-
-
-def _make_lexicographical_mapping_kernel_func(dtype):
-    n_bits_per_item = _get_n_bits_per_item(dtype)
-    sign_bit_idx = np.int32(n_bits_per_item - 1)
-
-    uint_type = uint_type_mapping[dtype]
-    sign_mask = uint_type(2 ** (sign_bit_idx))
-
-    @dpex.func
-    def lexicographical_mapping(item):
-        mask = (-(item >> sign_bit_idx)) | sign_mask
-        return item ^ mask
-
-    return lexicographical_mapping
-
-
-def _make_lexicographical_unmapping_kernel_func(dtype):
-    n_bits_per_item = _get_n_bits_per_item(dtype)
-    sign_bit_idx = np.int32(n_bits_per_item - 1)
-    uint_type = uint_type_mapping[dtype]
-    sign_mask = uint_type(2 ** (sign_bit_idx))
-
-    @dpex.func
-    def lexicographical_unmapping(item):
-        mask = ((item >> sign_bit_idx) - 1) | sign_mask
-        return item ^ mask
-
-    return lexicographical_unmapping
 
 
 def _get_n_bits_per_item(dtype):
@@ -604,7 +668,7 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
             array_in,                          # IN READ-ONLY (n_items,)
             threshold,                         # IN           (1,)
             n_threshold_occurences,            # UNUSED BUFFER
-            result_idx,                        # BUFFER       (1,)
+            index_buffer,                      # BUFFER       (1,)
             result,                            # OUT          (k,)
         ):
             # fmt: on
@@ -613,15 +677,16 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
             if item_idx >= n_items:
                 return
 
-            if result_idx[zero_idx] >= k:
+            if index_buffer[zero_idx] >= k:
                 return
 
             threshold_ = threshold[zero_idx]
             item = array_in[item_idx]
 
             if item >= threshold_:
-                result_idx_ = dpex.atomic.add(result_idx, zero_idx, count_one_as_an_int)
-                result[result_idx_] = item
+                index_buffer_ = dpex.atomic.add(
+                    index_buffer, zero_idx, count_one_as_an_int)
+                result[index_buffer_] = item
 
         return gather_topk_single_threshold_occurence[global_size, work_group_size]
 
@@ -631,7 +696,7 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
         array_in,                      # IN READ-ONLY (n_items,)
         threshold,                     # IN           (1,)
         n_threshold_occurences,        # IN           (1,)
-        result_idx,                    # BUFFER       (1,)
+        index_buffer,                  # BUFFER       (1,)
         result,                        # OUT          (k,)
     ):
         # fmt: on
@@ -652,7 +717,7 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
         # greater than the threshold.
         k_ = k - n_threshold_occurences_
 
-        if result_idx[zero_idx] >= k_:
+        if index_buffer[zero_idx] >= k_:
             return
 
         item = array_in[item_idx]
@@ -660,8 +725,8 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
         if item <= threshold_:
             return
 
-        result_idx_ = dpex.atomic.add(result_idx, zero_idx, count_one_as_an_int)
-        result[result_idx_] = item
+        index_buffer_ = dpex.atomic.add(index_buffer, zero_idx, count_one_as_an_int)
+        result[index_buffer_] = item
 
     return gather_topk_multiple_threshold_occurences[global_size, work_group_size]
 
@@ -677,7 +742,7 @@ def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
         array_in,                          # IN READ-ONLY (n_items,)
         threshold,                         # IN           (1,)
         n_threshold_occurences,            # BUFFER       (1,)
-        result_idx,                        # BUFFER       (1,)
+        index_buffer,                      # BUFFER       (1,)
         result,                            # OUT          (k,)
     ):
         # fmt: on
@@ -686,7 +751,7 @@ def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
         if item_idx >= n_items:
             return
 
-        if result_idx[zero_idx] >= k:
+        if index_buffer[zero_idx] >= k:
             return
 
         threshold_ = threshold[zero_idx]
@@ -696,8 +761,8 @@ def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
             return
 
         if item > threshold_:
-            result_idx_ = dpex.atomic.add(result_idx, zero_idx, count_one_as_an_int)
-            result[result_idx_] = item_idx
+            index_buffer_ = dpex.atomic.add(index_buffer, zero_idx, count_one_as_an_int)
+            result[index_buffer_] = item_idx
             return
 
         if n_threshold_occurences[zero_idx] <= zero_idx:
@@ -707,7 +772,7 @@ def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
             n_threshold_occurences, zero_idx, count_one_as_an_int)
 
         if remaining_n_threshold_occurences > zero_idx:
-            result_idx_ = dpex.atomic.add(result_idx, zero_idx, count_one_as_an_int)
-            result[result_idx_] = item_idx
+            index_buffer_ = dpex.atomic.add(index_buffer, zero_idx, count_one_as_an_int)
+            result[index_buffer_] = item_idx
 
     return gather_topk_idx[global_size, work_group_size]
