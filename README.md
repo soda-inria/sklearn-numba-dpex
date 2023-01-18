@@ -119,8 +119,8 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             # NB: different versions of `sklearn_numba_dpex` can require to pin
-             # different versions, build or channels here.
+             `# NB: different versions of `sklearn_numba_dpex` can require to pin` \
+             `# different versions, builds or channels here.` \
              numba-dpex=0.19.0=py39hfc4b9b4_5 "intel::dpcpp_linux-64"
 ```
 
