@@ -109,16 +109,13 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 ):
 
     window_n_candidates = sub_group_size
-    candidates_window_width = window_n_candidates + 1
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
-        work_group_size,
-        device,
-        required_local_memory_per_item=candidates_window_width
-        * np.dtype(dtype).itemsize,
+        work_group_size, device, required_local_memory_per_item=np.dtype(dtype).itemsize
     )
 
+    candidates_window_width = window_n_candidates
     candidates_window_height = work_group_size // sub_group_size
 
     if work_group_size != input_work_group_size:

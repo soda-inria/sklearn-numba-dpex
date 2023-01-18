@@ -20,17 +20,17 @@ def make_label_assignment_fixed_window_kernel(
     n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype, device
 ):
     window_n_centroids = sub_group_size
-    centroids_window_width = window_n_centroids + 1
 
     dtype_itemsize = np.dtype(dtype).itemsize
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
         work_group_size,
         device,
-        required_local_memory_per_item=centroids_window_width * dtype_itemsize,
+        required_local_memory_per_item=dtype_itemsize,
         required_memory_constant=sub_group_size * dtype_itemsize,
     )
 
+    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
     if work_group_size != input_work_group_size:
