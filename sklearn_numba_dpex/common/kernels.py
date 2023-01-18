@@ -441,17 +441,64 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         result,      # OUT       (n_rows, math.ceil(size / (2 * work_group_size),)
     ):
         # fmt: on
-        # NB: This kernel only perform a partial reduction
-        group_id = dpex.get_group_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        # NB: This kernel only perform a partial reduction.
 
-        sum_axis_size = summands.shape[minus_one_idx]
+        # The work groups are mapped to window of items in the input `summands` of size
+        # `(1, reduction_block_size)`, with
+        # `reduction_block_size = 2 * work_group_size`, such that the windows never
+        # overlap and create a grid that cover all the items. The work groups are
+        # indexed following a row-major order.
+
+        # `n_work_group_per_row` windows are necessary to cover one row of the input
+        # array.
         n_work_group_per_row = result.shape[minus_one_idx]
 
-        local_work_group_id_in_row = group_id % n_work_group_per_row
+        # The group of work items `group_id` is responsible for summing all items in
+        # the window it spans.
+        group_id = dpex.get_group_id(zero_idx)
+
+        # The work groups are indexed in row-major order, from that let's deduce the
+        # row of `summands` the window of items belongs to...
         row_idx = group_id // n_work_group_per_row
 
+        # ... and the position of the window within this row, ranging from 0 (first
+        # window in the row) to `n_work_group_per_row - 1` (last window in the row):
+        local_work_group_id_in_row = group_id % n_work_group_per_row
+
+        # Since all windows have size `reduction_block_size`, the position of the first
+        # item in the window is given by:
         first_value_idx = local_work_group_id_in_row * reduction_block_size
+
+        # To sum up, this work group `group_id` will sum items with coordinates
+        # `row_idx`, `col_idx`, with `col_idx` ranging from
+        # `first_value_idx` (first item in the window) to
+        # `first_value_idx + work_group_size - 1` (last item in the window)
+
+        # The current work item is indexed locally within the group of work items, with
+        # index `local_work_id` that can range from `0` (first item in the work group)
+        # to `work_group_size - 1` (last item in the work group)
+        local_work_id = dpex.get_local_id(zero_idx)
+
+        # Let's remember the size of the array to ensure that the last window in the
+        # row do not try to access items outside the buffer.
+        sum_axis_size = summands.shape[minus_one_idx]
+
+        # To begin with, each work item sums two items from the window that is spanned
+        # by this work group. The two items are chosen such that contiguous work items
+        # in the work group read contiguous items in the window, i.e the current work
+        # item reads a value at position `local_work_id` (relatively to the first item
+        # of the window), and the second value `work_group_size` items further
+        # (remember that `reduction_block_size = 2 * work_group_size`, so there are
+        # exactly two values to read for each work item).
+        # This memory access pattern is more efficient because:
+        # - it prevents bank conflicts (i.e serializing of write operations when
+        # threads access simultaneously close memory addresses in the same bank)
+        # - each sub group can coalesce the read operation, thus improving IO.
+        # Then this sum is written into a reserved slot in an array `local_values` in
+        # local memory of size `work_group_size` (i.e one slot for each work group and
+        # two items in the window), such that contiguous work items write into
+        # contiguous slots (yet again, this is a nicer memory access pattern).
+
         # NB: we use augend/addend vocabulary
         # in sum x + y, x is augend, y is addend
         # https://www.quora.com/What-is-Augend-and-Addend
@@ -460,10 +507,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
         local_values = dpex.local.array(local_values_size, dtype=dtype)
 
-        # Each work item reads two value in global memory and sum it into the local
-        # memory
-        # NB: to optimize IO, consecutive work items within as same subgroup read
-        # consecutive adresses in memory.
+        # We must be careful to not read items outside of the array !
         if augend_idx >= sum_axis_size:
             local_values[local_work_id] = zero
         elif addend_idx >= sum_axis_size:
@@ -478,15 +522,24 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
+        # Then, the sums of two scalars that have been written in `local_array` are
+        # further summed together into `local_array[0]`. At each iteration, half
+        # of the remaining work items are discarded and will be left idle, and the
+        # other half will sum together two value in the `local_array`, while using
+        # a similar memory access pattern than seen at the previous step.
         n_active_work_items = work_group_size
         for i in range(n_local_iterations):
-            # We discard half of the remaining active work items at each iteration
+            # At each iteration, half of the remaining work items with the highest id
+            # are discarded.
             n_active_work_items = n_active_work_items // two_as_a_long
             work_item_idx = first_value_idx + local_work_id + n_active_work_items
             if (
                 (local_work_id < n_active_work_items) and
                 (work_item_idx < sum_axis_size)
             ):
+                # Yet again, the remaining work items choose two values to sum such
+                # that contiguous work items read and write into contiguous slots of
+                # `local_values`.
                 local_values[local_work_id] += (
                     local_values[local_work_id + n_active_work_items]
                 )
@@ -584,34 +637,77 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         summands,    # IN        (sum_axis_size, n_cols)
         result,      # OUT       (math.ceil(size / (2 * reduction_block_size), n_cols)
     ):
-
         # fmt: on
         # NB: This kernel only perform a partial reduction
-        group_id = dpex.get_group_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
 
-        sum_axis_size = summands.shape[zero_idx]
+        # The work groups are mapped to window of items in the input `summands` of size
+        # `(reduction_block_size, sub_group_size)`,
+        # where `reduction_block_size = 2 * n_sub_groups_per_work_group` such that the
+        # windows never overlap and create a grid that cover all the items. The work
+        # groups are indexed following a column-major order.
+
+        # `n_blocks_per_col` windows are necessary to cover one column of the input
+        # array
         n_blocks_per_col = result.shape[zero_idx]
 
+        # The group of work items `group_id` is responsible for summing all items in
+        # the window it spans over axis 0, resulting in a output of shape
+        # `(1, sub_group_size)`
+        group_id = dpex.get_group_id(zero_idx)
+
+        # The work groups are indexed in column-major order. From this let's deduce the
+        # position of the window within the column...
         local_block_id_in_col = group_id % n_blocks_per_col
+
+        # Let's map the current work item to an index in a 2D grid, where the
+        # `work_group_size` work items are mapped in row-major order to the array
+        # of size `(n_sub_groups_per_work_group, sub_group_size)`.
+        local_work_id = dpex.get_local_id(zero_idx)      # 1D idx
+        local_row_idx = local_work_id // sub_group_size  # 2D idx, first coordinate
+        local_col_idx = local_work_id % sub_group_size   # 2D idx, second coordinate
+
+        # This way, each row in the 2D index can be seen as mapped to two rows in the
+        # corresponding window of items of the input `summands`, with the first row of
+        # work items being mapped to the first row of the input...
         first_row_idx = local_block_id_in_col * reduction_block_size
-        local_col_idx = local_work_id % sub_group_size
-        local_row_idx = local_work_id // sub_group_size
-        col_idx = (
-            (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
-            )
+
+        # ... and the current work item, with index `local_row_idx`, being mapped to
+        # the following row of the input - which is also the row coordinate of the
+        # first term this work item is responsible to sum in the coming sum step:
+
         # NB: we use augend/addend vocabulary
         # in sum x + y, x is augend, y is addend
         # https://www.quora.com/What-is-Augend-and-Addend
         augend_row_idx = first_row_idx + local_row_idx
+
+        # The addend can be chosen arbitrarily (providing that different work items
+        # don't sum overlapping terms!). Let's use a mapping that is consistent with
+        # the choice in the kernel for axis 1, so that in both kernels the code reads
+        # familiar.
         addend_row_idx = augend_row_idx + n_sub_groups_per_work_group
 
+        # NB: because of how the 2D index on work items was defined, contiguous work
+        # items belonging to the same sub groups in the grid always span items in the
+        # data that are located in the same row, and so are contiguous, which ensures
+        # optimal memory access patterns by sub groups (refer to explanations in the
+        # kernel for axis 1 to understand how this access pattern is better). It is
+        # enough to ensure this pattern at the level of sub groups, and one can see
+        # that, contrarily to what is seen in the kernel for axis 1, it does not
+        # depends on how the pair (augend, addend) are chosen.
+
+        # The sums done by each work item during this first step will be written in
+        # this local array of size (n_sub_groups_per_work_group, sub_group_size)
         local_values = dpex.local.array(local_values_size, dtype=dtype)
 
-        # Each work item reads two value in global memory and sum it into the local
-        # memory
-        # NB: to optimize IO, consecutive work items within as same subgroup read
-        # consecutive adresses in memory.
+        # The current work item use the following second coordinate (given by the
+        # position of the window in the grid of windows, and by the local position of
+        # the work item in the 2D index):
+        col_idx = (
+            (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
+            )
+
+        # We must be careful to not read items outside of the array !
+        sum_axis_size = summands.shape[zero_idx]
         if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
             local_values[local_row_idx, local_col_idx] = zero
         elif addend_row_idx >= sum_axis_size:
@@ -626,9 +722,15 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
+        # Then, the sums of two scalars that have been written in `local_array` are
+        # further summed together into `local_array[0, :]`. At each iteration, half
+        # of the remaining work items are discarded and will be left idle, and the
+        # other half will sum together two value in the `local_array`, while using
+        # a similar memory access pattern than seen at the previous step.
         n_active_sub_groups = n_sub_groups_per_work_group
         for i in range(n_local_iterations):
-            # We discard half of the remaining active subgroups at each iteration
+            # At each iteration, half of the remaining work items with the highest id
+            # are discarded.
             n_active_sub_groups = n_active_sub_groups // two_as_a_long
             work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
             if (
@@ -642,9 +744,9 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        # At this point local_values[0] + local_values[1] is equal to the sum of all
-        # elements in summands that have been covered by the work group, we write it
-        # into global memory
+        # At this point local_values[0, :] + local_values[1, :] is equal to the sum of
+        # all elements in summands that have been covered by the work group, we write
+        # it into global memory
         if (local_row_idx == zero_idx) and (col_idx < n_cols):
             result[local_block_id_in_col, col_idx] = (
                 local_values[zero_idx, local_col_idx] +
