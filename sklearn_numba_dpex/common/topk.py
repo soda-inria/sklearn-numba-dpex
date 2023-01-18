@@ -192,11 +192,11 @@ def topk_idx(array_in, k, group_sizes=None):
     )
     result = dpt.empty(sh=(k,), dtype=np.int64, device=device)
     index_buffer = dpt.zeros(sh=(1,), dtype=np.int32)
-    gather_topk_kernel = _make_gather_topk_idx_kernel(
+    gather_topk_idx_kernel = _make_gather_topk_idx_kernel(
         array_in.shape[0], k, work_group_size
     )
 
-    gather_topk_kernel(array_in, threshold, k_in_subset, index_buffer, result)
+    gather_topk_idx_kernel(array_in, threshold, k_in_subset, index_buffer, result)
     return result
 
 
