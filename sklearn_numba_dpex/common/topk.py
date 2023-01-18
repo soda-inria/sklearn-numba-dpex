@@ -15,8 +15,10 @@ import numba_dpex as dpex
 import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
+    _check_max_work_group_size,
     _get_sequential_processing_device,
     check_power_of_2,
+    get_maximum_power_of_2_smaller_than,
 )
 from sklearn_numba_dpex.common.kernels import (
     make_initialize_to_zeros_2d_kernel,
@@ -93,11 +95,12 @@ def _get_topk_threshold(array_in, k, group_sizes):
         create_radix_histogram_kernel,
     ) = _make_create_radix_histogram_kernel(
         n_items,
-        work_group_size,
+        "max" if group_sizes is None else work_group_size,
         sub_group_size,
         global_mem_cache_size,
         counts_private_copies_max_cache_occupancy,
         dtype,
+        device,
     )
 
     reduce_privatized_counts = make_sum_reduction_2d_kernel(
@@ -297,26 +300,42 @@ def _make_create_radix_histogram_kernel(
     global_mem_cache_size,
     counts_private_copies_max_cache_occupancy,
     dtype,
+    device,
 ):
+    histogram_dtype = np.int64
+
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size, device, np.dtype(histogram_dtype).itemsize
+    )
+
     check_power_of_2(sub_group_size)
 
-    n_sub_group_per_work_group = work_group_size // sub_group_size
+    if work_group_size == input_work_group_size:
 
-    try:
-        check_power_of_2(n_sub_group_per_work_group)
-        power_of_2_n_sub_groups = True
-    except ValueError:
-        power_of_2_n_sub_groups = False
+        n_sub_group_per_work_group = work_group_size // sub_group_size
 
-    if not (
-        ((n_sub_group_per_work_group * sub_group_size) == work_group_size)
-        and power_of_2_n_sub_groups
-    ):
-        raise ValueError(
-            "Expected work_group_size to be a power-of-two multiple of sub_group_size "
-            "but got "
-            f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
+        try:
+            check_power_of_2(n_sub_group_per_work_group)
+            power_of_2_n_sub_groups = True
+        except ValueError:
+            power_of_2_n_sub_groups = False
+
+        if not (
+            ((n_sub_group_per_work_group * sub_group_size) == work_group_size)
+            and power_of_2_n_sub_groups
+        ):
+            raise ValueError(
+                "Expected work_group_size to be a power-of-two multiple of"
+                f" sub_group_size but got sub_group_size={sub_group_size} and"
+                f" work_group_size={work_group_size}"
+            )
+
+    else:
+        n_sub_group_per_work_group = get_maximum_power_of_2_smaller_than(
+            work_group_size / sub_group_size
         )
+        work_group_size = n_sub_group_per_work_group * sub_group_size
 
     # The size of the radix is chosen such as the size of intermediate objects that
     # build in shared memory amounts to one int64 item per work item.
@@ -351,7 +370,9 @@ def _make_create_radix_histogram_kernel(
     one_as_uint_dtype = uint_type(1)
     two_as_a_long = np.int64(2)
 
-    select_last_radix_bits_mask = (one_as_uint_dtype << radix_bits) - one_as_uint_dtype
+    select_last_radix_bits_mask = (
+        one_as_uint_dtype << np.uint32(radix_bits)
+    ) - one_as_uint_dtype
 
     @dpex.kernel
     # fmt: off
@@ -393,7 +414,7 @@ def _make_create_radix_histogram_kernel(
         local_subgroup_work_id = local_work_id % sub_group_size
 
         # Initialize the shared memory in the work group
-        local_counts = dpex.local.array(local_counts_size, dtype=np.int64)
+        local_counts = dpex.local.array(local_counts_size, dtype=histogram_dtype)
         local_counts[local_subgroup, local_subgroup_work_id] = zero_idx
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
