@@ -470,9 +470,9 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         first_value_idx = local_work_group_id_in_row * reduction_block_size
 
         # To sum up, this work group `group_id` will sum items with coordinates
-        # `row_idx`, `col_idx`, with `col_idx` ranging from
-        # `first_value_idx` (first item in the window) to
-        # `first_value_idx + work_group_size - 1` (last item in the window)
+        # (`row_idx`, `col_idx`), with `col_idx` ranging from `first_value_idx`
+        # (first item in the window) to `first_value_idx + work_group_size - 1` (last
+        # item in the window)
 
         # The current work item is indexed locally within the group of work items, with
         # index `local_work_id` that can range from `0` (first item in the work group)
@@ -494,8 +494,9 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # - it prevents bank conflicts (i.e serializing of write operations when
         # threads access simultaneously close memory addresses in the same bank)
         # - each sub group can coalesce the read operation, thus improving IO.
+
         # Then this sum is written into a reserved slot in an array `local_values` in
-        # local memory of size `work_group_size` (i.e one slot for each work group and
+        # local memory of size `work_group_size` (i.e one slot for each work item and
         # two items in the window), such that contiguous work items write into
         # contiguous slots (yet again, this is a nicer memory access pattern).
 
@@ -695,8 +696,10 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # that, contrarily to what is seen in the kernel for axis 1, it does not
         # depends on how the pair (augend, addend) are chosen.
 
-        # The sums done by each work item during this first step will be written in
-        # this local array of size (n_sub_groups_per_work_group, sub_group_size)
+        # Then this sum is written into a reserved slot in an array `local_values` in
+        # local memory of size (n_sub_groups_per_work_group, sub_group_size) (i.e one
+        # slot for each work item and two items in the window), and yet again
+        # contiguous work items write into contiguous slots.
         local_values = dpex.local.array(local_values_size, dtype=dtype)
 
         # The current work item use the following second coordinate (given by the
