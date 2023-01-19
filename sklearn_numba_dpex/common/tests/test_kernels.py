@@ -82,9 +82,6 @@ sub_group_size_error = pytest.raises(
 @pytest.mark.parametrize(
     "axis, work_group_size, sub_group_size, expected_error",
     [
-        # for axis 1, work_group_size is required to be be a power of two
-        (1, 64, None, no_error),
-        (1, 63, None, power_of_two_error),
         # for axis 0, work_group_size is required to be a power-of-two multiple of
         # sub_group_size
         (0, 8 * 8, 8, no_error),
@@ -94,6 +91,9 @@ sub_group_size_error = pytest.raises(
         (0, 7 * 11, 11, power_of_two_error),
         # different error if sub_group_size does not divide work_group_size at all
         (0, 8 * 12, 11, sub_group_size_error),
+        # for axis 1, work_group_size is required to be be a power of two
+        (1, 64, None, no_error),
+        (1, 63, None, power_of_two_error),
     ],
 )
 def test_sum_reduction_raise_on_invalid_size_parameters(
