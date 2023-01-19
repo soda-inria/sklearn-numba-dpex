@@ -34,5 +34,5 @@ def test_check_max_work_group_size():
     assert 8192 == _check_max_work_group_size("max", _MockCpuDevice(), 0)
     assert 512 == _check_max_work_group_size("max", _MockGpuDevice(), 0)
 
-    assert 496 == _check_max_work_group_size("max", _MockCpuDevice(), 64, 1024)
+    assert 480 == _check_max_work_group_size("max", _MockCpuDevice(), 64, 1024)
     assert 512 == _check_max_work_group_size("max", _MockGpuDevice(), 64, 1024)
