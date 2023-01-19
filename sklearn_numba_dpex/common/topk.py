@@ -131,24 +131,31 @@ def topk(array_in, k, group_sizes=None):
 
     Notes
     -----
-    The output is not deterministic: in case of ties (severa)
-
-    The implementation has been extensively inspired by the "Fused Fixed" strategy
-    exposed in [1]_, along with its reference implementatino by the same authors [2]_,
-    and the reader can also refer to the complementary slide deck [3]_  with schemas
-    that intuitively explain the main computation.
+    The output is not deterministic: the order of the output is undefined. Successive
+    calls can return the same items in different order.
     """
-    k_in_subset, threshold, work_group_size, dtype, device = _get_topk_threshold(
-        array_in, k, group_sizes
-    )
+    (
+        n_threshold_occurences_in_topk,
+        threshold,
+        n_threshold_occurences_in_data,
+        work_group_size,
+        dtype,
+        device,
+    ) = _get_topk_threshold(array_in, k, group_sizes)
     result = dpt.empty(sh=(k,), dtype=dtype, device=device)
     index_buffer = dpt.zeros(sh=(1,), dtype=np.int32)
-    n_threshold_occurences = int(k_in_subset[0])
+    n_threshold_occurences_in_topk_ = int(n_threshold_occurences_in_topk[0])
+    n_threshold_occurences_in_data_ = int(n_threshold_occurences_in_data[0])
     gather_topk_kernel = _make_gather_topk_kernel(
-        array_in.shape[0], k, n_threshold_occurences, work_group_size
+        array_in.shape[0],
+        k,
+        n_threshold_occurences_in_topk_,
+        n_threshold_occurences_in_data_,
+        work_group_size,
     )
-
-    gather_topk_kernel(array_in, threshold, k_in_subset, index_buffer, result)
+    gather_topk_kernel(
+        array_in, threshold, n_threshold_occurences_in_topk, index_buffer, result
+    )
     return result
 
 
@@ -182,21 +189,33 @@ def topk_idx(array_in, k, group_sizes=None):
         items in different order.
 
         - If there are more indices for the smallest top k value than the number of
-        time this value occurs among the top k , then the indices that are returned
+        time this value occurs among the top k, then the indices that are returned
         for this value can be different between two successive calls.
 
     """
 
-    k_in_subset, threshold, work_group_size, dtype, device = _get_topk_threshold(
-        array_in, k, group_sizes
-    )
+    (
+        n_threshold_occurences_in_topk,
+        threshold,
+        n_threshold_occurences_in_data,
+        work_group_size,
+        dtype,
+        device,
+    ) = _get_topk_threshold(array_in, k, group_sizes)
     result = dpt.empty(sh=(k,), dtype=np.int64, device=device)
     index_buffer = dpt.zeros(sh=(1,), dtype=np.int32)
+    n_threshold_occurences_in_topk_ = int(n_threshold_occurences_in_topk[0])
+    n_threshold_occurences_in_data_ = int(n_threshold_occurences_in_data[0])
     gather_topk_idx_kernel = _make_gather_topk_idx_kernel(
-        array_in.shape[0], k, work_group_size
+        array_in.shape[0],
+        k,
+        n_threshold_occurences_in_topk_,
+        n_threshold_occurences_in_data_,
+        work_group_size,
     )
-
-    gather_topk_idx_kernel(array_in, threshold, k_in_subset, index_buffer, result)
+    gather_topk_idx_kernel(
+        array_in, threshold, n_threshold_occurences_in_topk, index_buffer, result
+    )
     return result
 
 
@@ -279,6 +298,10 @@ def _get_topk_threshold(array_in, k, group_sizes):
     )
     mask_for_desired_value = desired_masked_value = dpt.asarray([0], dtype=uint_type)
     radix_position = dpt.asarray([n_bits_per_item - radix_bits], dtype=uint_type)
+
+    threshold_count = dpt.asarray(
+        [0], dtype=np.int64, device=sequential_processing_device
+    )
     terminate = dpt.asarray([0], dtype=np.int32, device=sequential_processing_device)
 
     if sequential_processing_on_different_device:
@@ -320,6 +343,7 @@ def _get_topk_threshold(array_in, k, group_sizes):
             mask_for_desired_value,
             desired_masked_value,
             # OUT
+            threshold_count,
             terminate,
         )
 
@@ -344,7 +368,7 @@ def _get_topk_threshold(array_in, k, group_sizes):
         shape=desired_masked_value.shape, dtype=dtype, buffer=desired_masked_value
     )
 
-    return k_in_subset, threshold, work_group_size, dtype, device
+    return k_in_subset, threshold, threshold_count, work_group_size, dtype, device
 
 
 def _get_n_bits_per_item(dtype):
@@ -585,6 +609,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype):
         radix_position,                # INOUT        (1,)
         mask_for_desired_value,        # INOUT        (1,)
         desired_masked_value,          # INOUT        (1,)
+        threshold_count,               # OUT          (1,)
         terminate,                     # OUT          (1,)
     ):
         # fmt: on
@@ -628,10 +653,14 @@ def _make_check_radix_histogram_kernel(radix_size, dtype):
 
         if terminate_:
             terminate[zero_idx] = count_one_as_an_int
-            # At this point, any value in the input data equal to
-            # `desired_masked_value_` is the k-th greatest value, and the number of
-            # values equal to `desired_masked_value_` amont the top-k values is exactly
-            # `k_in_subset_`.
+            # At this point:
+            # - any value in the input data equal to `desired_masked_value_` is the
+            # k-th greatest value
+            # - the number of values equal to `desired_masked_value_` among the top-k
+            # values is exactly `k_in_subset_`.
+            # - the number of values equal to `desired_masked_value_` in the data is
+            # exactly `count`
+            threshold_count[zero_idx] = count
             desired_masked_value_ = lexicographical_unmapping(desired_masked_value_)
         else:
             # The current partial analysis with the current radixes seen was not enough
@@ -648,7 +677,13 @@ def _make_check_radix_histogram_kernel(radix_size, dtype):
 
 
 @lru_cache
-def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size):
+def _make_gather_topk_kernel(
+    n_items,
+    k,
+    n_threshold_occurences_in_topk,
+    n_threshold_occurences_in_data,
+    work_group_size,
+):
     """The gather_topk kernel is the last step. By now the k-th greatest values and
     its number of occurences among the top-k values in the search space have been
     identified. The top-k values that are equal or greater than k, including the
@@ -660,11 +695,15 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
     """
     global_size = math.ceil(n_items / work_group_size) * work_group_size
 
-    if n_threshold_occurences == 1:
+    # Both the number of occurences of the threshold value in the data and the number
+    # in the top-k values are known. When those two numbers are equal, the kernel can
+    # be written more efficient and much simpler, and the condition is not unusual.
+    # Let's write a separate kernel for this special case.
+    if n_threshold_occurences_in_topk == n_threshold_occurences_in_data:
 
         @dpex.kernel
         # fmt: off
-        def gather_topk_single_threshold_occurence(
+        def gather_topk_include_all_threshold_occurences(
             array_in,                          # IN READ-ONLY (n_items,)
             threshold,                         # IN           (1,)
             n_threshold_occurences,            # UNUSED BUFFER
@@ -688,11 +727,13 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
                     index_buffer, zero_idx, count_one_as_an_int)
                 result[index_buffer_] = item
 
-        return gather_topk_single_threshold_occurence[global_size, work_group_size]
+        return gather_topk_include_all_threshold_occurences[
+            global_size, work_group_size
+        ]
 
     @dpex.kernel
     # fmt: off
-    def gather_topk_multiple_threshold_occurences(
+    def gather_topk_generic(
         array_in,                      # IN READ-ONLY (n_items,)
         threshold,                     # IN           (1,)
         n_threshold_occurences,        # IN           (1,)
@@ -728,17 +769,54 @@ def _make_gather_topk_kernel(n_items, k, n_threshold_occurences, work_group_size
         index_buffer_ = dpex.atomic.add(index_buffer, zero_idx, count_one_as_an_int)
         result[index_buffer_] = item
 
-    return gather_topk_multiple_threshold_occurences[global_size, work_group_size]
+    return gather_topk_generic[global_size, work_group_size]
 
 
 @lru_cache
-def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
+def _make_gather_topk_idx_kernel(
+    n_items,
+    k,
+    n_threshold_occurences_in_topk,
+    n_threshold_occurences_in_data,
+    work_group_size,
+):
     """Same than gather_topk kernel but return top-k indices rather than top-k values"""
     global_size = math.ceil(n_items / work_group_size) * work_group_size
+    if n_threshold_occurences_in_topk == n_threshold_occurences_in_data:
+
+        @dpex.kernel
+        # fmt: off
+        def gather_topk_idx_include_all_threshold_occurences(
+            array_in,                          # IN READ-ONLY (n_items,)
+            threshold,                         # IN           (1,)
+            n_threshold_occurences,            # UNUSED BUFFER
+            index_buffer,                      # BUFFER       (1,)
+            result,                            # OUT          (k,)
+        ):
+            # fmt: on
+            item_idx = dpex.get_global_id(zero_idx)
+
+            if item_idx >= n_items:
+                return
+
+            if index_buffer[zero_idx] >= k:
+                return
+
+            threshold_ = threshold[zero_idx]
+            item = array_in[item_idx]
+
+            if item >= threshold_:
+                index_buffer_ = dpex.atomic.add(
+                    index_buffer, zero_idx, count_one_as_an_int)
+                result[index_buffer_] = item_idx
+
+        return gather_topk_idx_include_all_threshold_occurences[
+            global_size, work_group_size
+        ]
 
     @dpex.kernel
     # fmt: off
-    def gather_topk_idx(
+    def gather_topk_idx_generic(
         array_in,                          # IN READ-ONLY (n_items,)
         threshold,                         # IN           (1,)
         n_threshold_occurences,            # BUFFER       (1,)
@@ -775,4 +853,4 @@ def _make_gather_topk_idx_kernel(n_items, k, work_group_size):
             index_buffer_ = dpex.atomic.add(index_buffer, zero_idx, count_one_as_an_int)
             result[index_buffer_] = item_idx
 
-    return gather_topk_idx[global_size, work_group_size]
+    return gather_topk_idx_generic[global_size, work_group_size]

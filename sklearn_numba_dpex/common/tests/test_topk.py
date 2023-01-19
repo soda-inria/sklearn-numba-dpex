@@ -8,8 +8,7 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
 
 # TODO: k == 1 works but gives segfaults sometimes
 # Debug then re-activate the test.
-# @pytest.mark.parametrize("k", [1, 3])
-@pytest.mark.parametrize("k", [3])
+@pytest.mark.parametrize("k", [1, 3])
 @pytest.mark.parametrize("dtype", float_dtype_params)
 @pytest.mark.parametrize("work_group_size", [4, 8, None])
 @pytest.mark.parametrize(
