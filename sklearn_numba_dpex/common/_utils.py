@@ -69,6 +69,7 @@ def _check_max_work_group_size(
     device,
     required_local_memory_per_item,
     required_memory_constant=0,
+    minimum_unallocated_buffer_size=1024,
 ):
     """For CPU devices, the value `device.max_work_group_size` seems to always be
     surprisingly large, up to several order of magnitude higher than the number of
@@ -102,7 +103,11 @@ def _check_max_work_group_size(
         return device.max_work_group_size
     elif work_group_size == "max":
         return math.floor(
-            (device.local_mem_size - required_memory_constant)
+            (
+                device.local_mem_size
+                - required_memory_constant
+                - minimum_unallocated_buffer_size
+            )
             / required_local_memory_per_item
         )
     elif work_group_size > max_work_group_size:
@@ -113,3 +118,27 @@ def _check_max_work_group_size(
         )
     else:
         return work_group_size
+
+
+# This is the value found for Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics]
+# GPU.
+_GLOBAL_MEM_CACHE_SIZE_DEFAULT = 1048576  # 2**20
+
+
+# Work around https://github.com/IntelPython/dpctl/issues/1036
+def _get_global_mem_cache_size(device):
+    if (global_mem_cache_size := device.global_mem_cache_size) > 0:
+        return global_mem_cache_size
+
+    warnings.warn(
+        "Can't inspect the available global memory cache size for the device "
+        f"{device.name}. Please check that your drivers and runtime libraries are up "
+        "to date, if this warning persists please report it at "
+        "https://github.com/soda-inria/sklearn-numba-dpex/issues . The execution will "
+        "continue with a default value for the cache size set to "
+        f"{_GLOBAL_MEM_CACHE_SIZE_DEFAULT} bytes, which is assumed to be safe but "
+        "might not be adapted to your device and cause a loss of performance.",
+        RuntimeWarning,
+    )
+
+    return _GLOBAL_MEM_CACHE_SIZE_DEFAULT

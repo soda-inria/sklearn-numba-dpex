@@ -72,35 +72,34 @@ def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
     assert actual_result == pytest.approx(expected_result)
 
 
-context_check_power_of_two_error = pytest.raises(
-    ValueError, match="Expected a power of 2"
-)
-context_check_sub_group_size_error = pytest.raises(
+no_error = nullcontext()
+power_of_two_error = pytest.raises(ValueError, match="Expected a power of 2")
+sub_group_size_error = pytest.raises(
     ValueError, match="Expected sub_group_size to divide work_group_size"
 )
 
 
 @pytest.mark.parametrize(
-    "axis, work_group_size, sub_group_size, raise_context",
+    "axis, work_group_size, sub_group_size, expected_error",
     [
-        # for axis 1, work_group_size is required to be be a power of two
-        (1, 64, None, nullcontext()),  # ok
-        (1, 63, None, context_check_power_of_two_error),
         # for axis 0, work_group_size is required to be a power-of-two multiple of
         # sub_group_size
-        (0, 8 * 8, 8, nullcontext()),  # ok
-        (0, 8 * 11, 11, nullcontext()),  # ok
+        (0, 8 * 8, 8, no_error),
+        (0, 8 * 11, 11, no_error),
         # power-of-two error if work_group_size is multiple of sub_group_size but not
         # power-of-two multiple
-        (0, 7 * 11, 11, context_check_power_of_two_error),
+        (0, 7 * 11, 11, power_of_two_error),
         # different error if sub_group_size does not divide work_group_size at all
-        (0, 8 * 12, 11, context_check_sub_group_size_error),
+        (0, 8 * 12, 11, sub_group_size_error),
+        # for axis 1, work_group_size is required to be be a power of two
+        (1, 64, None, no_error),
+        (1, 63, None, power_of_two_error),
     ],
 )
 def test_sum_reduction_raise_on_invalid_size_parameters(
-    axis, work_group_size, sub_group_size, raise_context
+    axis, work_group_size, sub_group_size, expected_error
 ):
-    with raise_context:
+    with expected_error:
         make_sum_reduction_2d_kernel(
             size0=10,
             size1=10,

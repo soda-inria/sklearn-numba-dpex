@@ -60,17 +60,17 @@ def make_lloyd_single_step_fixed_window_kernel(
     #     of items is: `centroids_window_height * window_n_centroids`, i.e.
     #     `centroids_window_height * sub_group_size`
     window_n_centroids = sub_group_size
-    centroids_window_width = window_n_centroids + 1
 
     dtype_itemsize = np.dtype(dtype).itemsize
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
         work_group_size,
         device,
-        required_local_memory_per_item=centroids_window_width * dtype_itemsize,
+        required_local_memory_per_item=dtype_itemsize,
         required_memory_constant=sub_group_size * dtype_itemsize,
     )
 
+    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
     if work_group_size != input_work_group_size:

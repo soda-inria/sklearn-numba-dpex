@@ -5,6 +5,7 @@ import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
     _divide,
+    _get_global_mem_cache_size,
     _get_sequential_processing_device,
     _minus,
     _plus,
@@ -57,7 +58,7 @@ def lloyd(
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
     sub_group_size = min(device.sub_group_sizes)
-    global_mem_cache_size = device.global_mem_cache_size
+    global_mem_cache_size = _get_global_mem_cache_size(device)
     centroids_private_copies_max_cache_occupancy = 0.7
 
     verbose = bool(verbose)
