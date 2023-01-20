@@ -21,7 +21,7 @@ from sklearn_numba_dpex.common.kernels import (
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_2d_kernel,
     make_initialize_to_zeros_3d_kernel,
-    make_sum_reduction_2d_axis1_kernel,
+    make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.common.random import (
     create_xoroshiro128pp_states,
@@ -131,7 +131,7 @@ def lloyd(
         dtype=compute_dtype,
     )
 
-    reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
+    reduce_inertia_kernel = make_sum_reduction_2d_kernel(
         size0=n_samples,
         size1=None,  # 1d reduction
         work_group_size="max",
@@ -139,7 +139,7 @@ def lloyd(
         dtype=compute_dtype,
     )
 
-    reduce_centroid_shifts_kernel = make_sum_reduction_2d_axis1_kernel(
+    reduce_centroid_shifts_kernel = make_sum_reduction_2d_kernel(
         size0=n_clusters,
         size1=None,  # 1d reduction
         work_group_size="max",
@@ -462,9 +462,10 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
 
-    sum_axis1_kernel = make_sum_reduction_2d_axis1_kernel(
+    sum_axis1_kernel = make_sum_reduction_2d_kernel(
         X_t.shape[0],
         X_t.shape[1],
+        axis=1,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -478,13 +479,13 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # operator) that would help computing `sample_weight_is_uniform` in a simpler
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
-    sum_of_squares_kernel = make_sum_reduction_2d_axis1_kernel(
+    sum_of_squares_kernel = make_sum_reduction_2d_kernel(
         size0=n_features,
         size1=None,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square,
+        fused_elementwise_func=_square,
     )
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
@@ -532,13 +533,13 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     n_items = n_features * n_samples
 
-    variance_kernel = make_sum_reduction_2d_axis1_kernel(
+    variance_kernel = make_sum_reduction_2d_kernel(
         size0=n_items,
         size1=None,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        fused_unary_func=_square,
+        fused_elementwise_func=_square,
     )
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
@@ -550,7 +551,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # operator) that would help computing `sample_weight_is_uniform` in a simpler
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
-    sum_sample_weight_kernel = make_sum_reduction_2d_axis1_kernel(
+    sum_sample_weight_kernel = make_sum_reduction_2d_kernel(
         size0=n_samples,
         size1=None,
         work_group_size="max",
@@ -702,7 +703,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
         n_samples, n_features, max_work_group_size, compute_dtype
     )
 
-    reduce_inertia_kernel = make_sum_reduction_2d_axis1_kernel(
+    reduce_inertia_kernel = make_sum_reduction_2d_kernel(
         size0=n_samples,
         size1=None,  # 1d reduction
         work_group_size="max",
@@ -825,7 +826,7 @@ def kmeans_plusplus(
         dtype=compute_dtype,
     )
 
-    reduce_potential_1d_kernel = make_sum_reduction_2d_axis1_kernel(
+    reduce_potential_1d_kernel = make_sum_reduction_2d_kernel(
         size0=n_samples,
         size1=None,
         work_group_size="max",
@@ -833,9 +834,10 @@ def kmeans_plusplus(
         dtype=compute_dtype,
     )
 
-    reduce_potential_2d_kernel = make_sum_reduction_2d_axis1_kernel(
+    reduce_potential_2d_kernel = make_sum_reduction_2d_kernel(
         size0=n_local_trials,
         size1=n_samples,
+        axis=1,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
