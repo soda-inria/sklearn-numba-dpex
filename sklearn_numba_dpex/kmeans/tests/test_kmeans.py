@@ -449,7 +449,7 @@ def test_error_raised_on_invalid_group_sizes():
     n_features = 2
     n_clusters = 2
     sub_group_size = 64
-    work_group_size = 500  # invalid because is not a multiple of sub_group_size
+    work_group_size = 200  # invalid because is not a multiple of sub_group_size
     dtype = np.float32
     device = dpctl.SyclDevice()
 
