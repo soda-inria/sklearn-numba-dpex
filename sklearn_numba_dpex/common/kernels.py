@@ -222,8 +222,8 @@ def make_sum_reduction_2d_kernel(
 
     numba_dpex does not provide tools such as `cuda.reduce` so we implement
     from scratch a reduction strategy. The strategy relies on the associativity
-    of the operation used for the reduction, thus allowing to reduce the input
-    in any order.
+    and commutativity of the operation used for the reduction, thus allowing to
+    reduce the input in any order.
 
     The strategy consists in performing a series of kernel invocations that
     each perform a partial sum. At each kernel invocation, the input array is
