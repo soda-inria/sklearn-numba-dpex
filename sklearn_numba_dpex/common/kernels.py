@@ -216,46 +216,70 @@ def make_sum_reduction_2d_kernel(
     sub_group_size=None,
     fused_elementwise_func=None,
 ):
-    """Implement data_2d.sum(axis=axis) or data_1d.sum().
+    """Compute data_2d.sum(axis=axis) or data_1d.sum().
 
     This implementation is optimized for C-contiguous arrays.
 
-    numba_dpex does not provide tools such as `cuda.reduce` so we implement from scratch
-    a reduction strategy. The strategy relies on the commutativity of the operation used
-    for the reduction, thus allowing to reduce the input in any order.
+    numba_dpex does not provide tools such as `cuda.reduce` so we implement
+    from scratch a reduction strategy. The strategy relies on the associativity
+    and commutativity of the operation used for the reduction, thus allowing to
+    reduce the input in any order.
 
-    The strategy consists in performing local reductions in each work group using local
-    memory where each work item combine two values, thus halving the number of values,
-    and the number of active work items. At each iteration the work items are discarded
-    in a bracket manner. The work items with the greatest ids are discarded first, and
-    we rely on the fact that the remaining work items are adjacents to optimize the RW
-    operations.
+    The strategy consists in performing a series of kernel invocations that
+    each perform a partial sum. At each kernel invocation, the input array is
+    tiled with non-overlapping windows and all the values within a given window
+    are collaboratively summed by the work items of a given work group.
 
-    Once the reduction is done in a work group the result is written in global memory,
-    thus creating an intermediary result whose size is divided by
-    `2 * work_group_size` if axis=1, or by `2 * work_group_size // sub_group_size` if
-    axis=0. This is repeated as many times as needed until only one value remains in
-    global memory.
+    Each window has shape:
 
-    If `fused_elementwise_func` is not None, it will be applied element-wise before
-    summing. It must be a function that will be interpreted as a dpex.func and is
-    subject to the same rules ( see
+    - when `axis = 0`: `(reduction_block_size, 1)` with: `reduction_block_size
+      = work_group_size // sub_group_size * 2`
+
+    - when `axis = 1`: `(1, reduction_block_size)` with: `reduction_block_size
+      = work_group_size * 2`
+
+    Once the reduction is done in a work group the result is written back to
+    global memory, thus creating an intermediary result array whose size is
+    divided by `reduction_block_size`.
+
+    This is repeated as many times as needed until only one value remains per
+    column if axis=0 or per row if axis=1.
+
+    During a single kernel invocation, several iterations of local reductions
+    are performed using local memory to store intermediate results. At each
+    local iteration, each work item combines two values, thus halving the
+    number of values, and the number of active work items for the subsequent
+    iterations. Work items are progressively discarded in a bracket manner. The
+    work items with the greatest ids are discarded first, and we rely on the
+    fact that the remaining work items are adjacents to optimize the read-write
+    operations in local memory.
+
+    If `fused_elementwise_func` is not None, it will be applied element-wise
+    once to each element of the input array at the beginning of the the first
+    kernel invocation. This function is compiled and fused into the first
+    kernel as a device function with the help of `dpex.func`. This comes with
+    limitations as explained in:
+
     https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
-    ). It is expected to take one scalar argument and returning one scalar value.
-    lambda functions are advised against since the cache will not work with lambda
-    functions. sklearn_numba_dpex.common._utils expose some pre-defined
-    `fused_elementwise_func`s.
+
+    It is expected to take one scalar argument and returning one
+    scalar value. lambda functions are advised against since their compilation
+    might not be cached.
+
+    `sklearn_numba_dpex.common._utils` exposes some pre-defined functions
+    suitable to be passed as `fused_elementwise_func`,
 
     Notes
     -----
-    if `size1` is None then the kernel expects 1d tensor inputs, and `axis` parameter
-    is ignored.
-
-    If `size1` is not None then the expected shape of input tensors is
-    `(size0, size1)`, and the reduction operation is equivalent to
+    If `size1` is not `None` then the expected shape of input tensors is `(size0,
+    size1)`, and the reduction operation is equivalent to
     `input.sum(axis=axis)`.
 
-    If `size1` is None or if `axis` is `0`, then `work_group_size` is assumed to be a
+    If `size1` is `None` then the kernel expects 1d tensor inputs, the `axis`
+    parameter is ignored: the kernel designed for `axis=1` is called used after
+    considering the input re-shaped as `(1, size0)`.
+
+    If `size1` is `None` or if `axis` is `0`, then `work_group_size` is assumed to be a
     power of 2, and the parameter `sub_group_size` is ignored.
 
     If `size1` is not `None` and `axis` is `1`, then `work_group_size` is assumed to be
@@ -288,17 +312,7 @@ def make_sum_reduction_2d_kernel(
     # in the main driver loop, and the `global_size` (total number of work items fired
     # per call) for each kernel call, are also different, and are variabilized with
     # the lambda functions `get_result_shape` and `get_global_size`.
-    if axis == 1:
-        work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
-            size0, work_group_size, fused_elementwise_func, dtype, device
-        )
-        sum_axis_size = size1
-        get_result_shape = lambda result_sum_axis_size: (size0, result_sum_axis_size)
-        get_global_size = (
-            lambda result_sum_axis_size: result_sum_axis_size * work_group_size * size0
-        )
-
-    else:  # axis == 0
+    if axis == 0:
         work_group_size, kernels = _prepare_sum_reduction_2d_axis0(
             size1,
             work_group_size,
@@ -307,17 +321,24 @@ def make_sum_reduction_2d_kernel(
             dtype,
             device,
         )
-        sum_axis_size = size0
         get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, size1)
         get_global_size = (
             lambda result_sum_axis_size: result_sum_axis_size
             * work_group_size
             * math.ceil(size1 / sub_group_size)
         )
+    else:  # axis == 1
+        work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
+            size0, work_group_size, fused_elementwise_func, dtype, device
+        )
+        get_result_shape = lambda result_sum_axis_size: (size0, result_sum_axis_size)
+        get_global_size = (
+            lambda result_sum_axis_size: result_sum_axis_size * work_group_size * size0
+        )
 
-    # The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
+    # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
     if work_group_size == 1:
-        raise ValueError("work_group_size==1 is not supported.")
+        raise NotImplementedError("work_group_size==1 is not supported.")
 
     # `fused_elementwise_func` is applied elementwise during the first pass on
     # data, in the first kernel execution only, using `fused_func_kernel`. Subsequent
@@ -330,23 +351,27 @@ def make_sum_reduction_2d_kernel(
     # TODO: at some point, the cost of scheduling the kernel is more than the cost of
     # running the reduction iteration. At this point the loop should stop and then a
     # single work item should iterates one time on the remaining values to finish the
-    # reduction ?
+    # reduction?
     kernel = fused_func_kernel
-    while sum_axis_size > 1:
-        sum_axis_size = math.ceil(sum_axis_size / reduction_block_size)
+    sum_axis_size = size0 if axis == 0 else size1
+    next_input_size = sum_axis_size
+    while next_input_size > 1:
+        result_sum_axis_size = math.ceil(next_input_size / reduction_block_size)
         # NB: here memory for partial results is allocated ahead of time and will only
         # be garbage collected when the instance of `sum_reduction` is garbage
         # collected. Thus it can be more efficient to re-use a same instance of
         # `sum_reduction` (e.g within iterations of a loop) since it avoid
         # deallocation and reallocation every time.
-        result_shape = get_result_shape(sum_axis_size)
+        result_shape = get_result_shape(result_sum_axis_size)
         result = dpt.empty(result_shape, dtype=dtype, device=device)
 
-        global_size = get_global_size(sum_axis_size)
+        global_size = get_global_size(result_sum_axis_size)
         kernel = kernel[global_size, work_group_size]
 
         kernels_and_empty_tensors_pairs.append((kernel, result))
         kernel = nofunc_kernel
+
+        next_input_size = result_sum_axis_size
 
     def sum_reduction(summands):
         if is_1d:
@@ -418,8 +443,16 @@ def _prepare_sum_reduction_2d_axis1(
 def _make_partial_sum_reduction_2d_axis1_kernel(
     n_rows, work_group_size, fused_elementwise_func, dtype
 ):
-    """When axis=1, each work group performs a local reduction on axis 1 in a window of
-    size `(1, 2 * work_group_size)`."""
+    """Compute a partial sum along axis 1 within each work group
+
+    Each work group performs a sum of all the values in a window of size:
+    `(1, 2 * work_group_size)`.
+
+    The values of input array of shape `(n_rows, n_cols)` are partially summed
+    to get a result array of shape `(n_rows, n_cols / (2 * work_group_size))`.
+    """
+    # ???: how does this strategy compare to having each thread reduce a chunk
+    # of contiguous items?
 
     zero = dtype(0.0)
     one_idx = np.int64(1)
@@ -428,42 +461,37 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     # Number of iteration in each execution of the kernel:
     n_local_iterations = np.int64(math.log2(work_group_size) - 1)
-
     local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
 
-    # ???: how does this strategy compare to having each thread reduce N contiguous
-    # items ?
     @dpex.kernel
     # fmt: off
     def partial_sum_reduction(
-        summands,    # IN        (n_rows, sum_axis_size)
-        result,      # OUT       (n_rows, math.ceil(size / (2 * work_group_size),)
+        summands,    # IN        (n_rows, n_cols)
+        result,      # OUT       (n_rows, math.ceil(n_cols / (2 * work_group_size),)
     ):
         # fmt: on
-        # NB: This kernel only perform a partial reduction.
+        # Each work group processes a window of the `summands` input array with
+        # shape `(1, reduction_block_size)` with `reduction_block_size = 2 *
+        # work_group_size`. The windows never overlap and create a grid that
+        # cover all the values of the `summands` array.
 
-        # The work groups are mapped to window of items in the input `summands` of size
-        # `(1, reduction_block_size)`, with
-        # `reduction_block_size = 2 * work_group_size`, such that the windows never
-        # overlap and create a grid that cover all the items. The work groups are
-        # indexed following a row-major order.
+        # `n_work_groups_per_row` windows are necessary to cover one row of the
+        # input array.
+        n_work_groups_per_row = result.shape[minus_one_idx]
 
-        # `n_work_group_per_row` windows are necessary to cover one row of the input
-        # array.
-        n_work_group_per_row = result.shape[minus_one_idx]
-
-        # The group of work items `group_id` is responsible for summing all items in
-        # the window it spans.
+        # The group of work items identified by `group_id` is responsible for
+        # summing all values in the window it spans.
         group_id = dpex.get_group_id(zero_idx)
 
         # The work groups are indexed in row-major order, from that let's deduce the
-        # row of `summands` the window of items belongs to...
-        row_idx = group_id // n_work_group_per_row
+        # row of `summands` to process by work items in `group_id`.
+        row_idx = group_id // n_work_groups_per_row
 
-        # ... and the position of the window within this row, ranging from 0 (first
-        # window in the row) to `n_work_group_per_row - 1` (last window in the row):
-        local_work_group_id_in_row = group_id % n_work_group_per_row
+        # ... and the position of the window within this row, ranging from 0
+        # (first window in the row) to `n_work_groups_per_row - 1` (last window
+        # in the row):
+        local_work_group_id_in_row = group_id % n_work_groups_per_row
 
         # Since all windows have size `reduction_block_size`, the position of the first
         # item in the window is given by:
