@@ -221,7 +221,7 @@ def make_sum_reduction_2d_kernel(
     This implementation is optimized for C-contiguous arrays.
 
     numba_dpex does not provide tools such as `cuda.reduce` so we implement
-    from scratch a reduction strategy. The strategy relies on the associativoty
+    from scratch a reduction strategy. The strategy relies on the associativity
     of the operation used for the reduction, thus allowing to reduce the input
     in any order.
 
@@ -263,8 +263,8 @@ def make_sum_reduction_2d_kernel(
     https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
 
     It is expected to take one scalar argument and returning one
-    scalar value. lambda functions are advised against since there compilation
-    cannot be cached.
+    scalar value. lambda functions are advised against since their compilation
+    might not be cached.
 
     `sklearn_numba_dpex.common._utils` exposes some pre-defined functions
     suitable to be passed as `fused_elementwise_func`,
