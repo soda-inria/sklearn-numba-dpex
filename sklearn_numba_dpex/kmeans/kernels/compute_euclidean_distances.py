@@ -4,6 +4,8 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numpy as np
 
+from sklearn_numba_dpex.common._utils import _check_max_work_group_size
+
 from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 # NB: refer to the definition of the main lloyd function for a more comprehensive
@@ -12,18 +14,23 @@ from ._base_kmeans_kernel_funcs import make_pairwise_ops_base_kernel_funcs
 
 @lru_cache
 def make_compute_euclidean_distances_fixed_window_kernel(
-    n_samples,
-    n_features,
-    n_clusters,
-    sub_group_size,
-    work_group_size,
-    dtype,
+    n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype, device
 ):
 
     window_n_centroids = sub_group_size
+    centroids_window_width = window_n_centroids + 1
+
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size, device, centroids_window_width * np.dtype(dtype).itemsize
+    )
+
     centroids_window_height = work_group_size // sub_group_size
 
-    if centroids_window_height * sub_group_size != work_group_size:
+    if work_group_size != input_work_group_size:
+        work_group_size = centroids_window_height * sub_group_size
+
+    elif centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
@@ -49,7 +56,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
+    centroids_window_shape = (centroids_window_height, centroids_window_width)
 
     zero_idx = np.int64(0)
 

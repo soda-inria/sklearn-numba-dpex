@@ -4,6 +4,8 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numpy as np
 
+from sklearn_numba_dpex.common._utils import _check_max_work_group_size
+
 from ._base_kmeans_kernel_funcs import (
     make_pairwise_ops_base_kernel_funcs,
     make_update_closest_centroid_kernel_func,
@@ -15,17 +17,26 @@ from ._base_kmeans_kernel_funcs import (
 
 @lru_cache
 def make_label_assignment_fixed_window_kernel(
-    n_samples,
-    n_features,
-    n_clusters,
-    sub_group_size,
-    work_group_size,
-    dtype,
+    n_samples, n_features, n_clusters, sub_group_size, work_group_size, dtype, device
 ):
     window_n_centroids = sub_group_size
+
+    dtype_itemsize = np.dtype(dtype).itemsize
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size,
+        device,
+        required_local_memory_per_item=dtype_itemsize,
+        required_memory_constant=sub_group_size * dtype_itemsize,
+    )
+
+    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
-    if centroids_window_height * sub_group_size != work_group_size:
+    if work_group_size != input_work_group_size:
+        work_group_size = centroids_window_height * sub_group_size
+
+    elif centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
@@ -55,7 +66,7 @@ def make_label_assignment_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, (window_n_centroids + 1))
+    centroids_window_shape = (centroids_window_height, centroids_window_width)
 
     inf = dtype(math.inf)
     zero_idx = np.int64(0)
