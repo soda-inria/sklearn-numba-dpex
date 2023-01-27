@@ -282,7 +282,7 @@ class KMeansEngine(KMeansCythonEngine):
             euclidean_distances = dpt.asnumpy(euclidean_distances)
         return euclidean_distances
 
-    def _validate_data(self, X, reset):
+    def _validate_data(self, X, reset=True):
         if isinstance(X, dpnp.ndarray):
             X = X.get_array()
 
