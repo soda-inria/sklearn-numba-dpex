@@ -21,7 +21,7 @@ jobs:
       # Development tracker: https://github.com/scikit-learn/scikit-learn/pull/24497/
       # TODO: Remove this step when the plugin API is officially released
     - name: Install pytest, @ogrisel sklearn branch "wip-engines", and sklearn-numba-dpex
-      run: pip install pytest git+https://github.com/ogrisel/scikit-learn.git@ff191e296fa87d57ade7e2a3fb573870eded2f26#egg=scikit-learn -e .
+      run: pip install pytest git+https://github.com/ogrisel/scikit-learn.git@39a39ad309414b4d8a1a93bc3105980d2222a589#egg=scikit-learn -e .
 
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"

@@ -148,7 +148,6 @@ def test_euclidean_distance(dtype):
     estimator = KMeans(n_clusters=len(b))
     estimator.cluster_centers_ = b
     engine = KMeansEngine(estimator)
-    assert engine.accepts(a, y=None, sample_weight=None)
 
     result = engine.get_euclidean_distances(a)
 
@@ -169,7 +168,6 @@ def test_inertia(dtype):
     estimator = KMeans(n_clusters=len(centers))
     estimator.cluster_centers_ = dpt.asarray(centers)
     engine = KMeansEngine(estimator)
-    assert engine.accepts(X, y=None, sample_weight=sample_weight)
     X_prepared, sample_weight_prepared = engine.prepare_prediction(X, sample_weight)
     labels = engine.get_labels(X_prepared, sample_weight_prepared)
 
@@ -344,7 +342,6 @@ def test_kmeans_plusplus_same_quality(dtype):
 
         kmeans.set_params(random_state=random_state)
         engine = KMeansEngine(kmeans)
-        assert engine.accepts(X, y=None, sample_weight=None)
         X_prepared, *_ = engine.prepare_fit(X)
         engine_kmeans_plusplus_centers_t = engine.init_centroids(X_prepared)
         engine_kmeans_plusplus_centers = engine_kmeans_plusplus_centers_t.T
@@ -399,7 +396,6 @@ def test_kmeans_plusplus_output(array_constr, dtype):
         init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    assert engine.accepts(X, y=None, sample_weight=sample_weight)
     X_prepared, *_ = engine.prepare_fit(X, sample_weight=sample_weight)
 
     centers_t, indices = engine._kmeans_plusplus(X_prepared)
@@ -434,7 +430,6 @@ def test_kmeans_plusplus_dataorder():
         init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    assert engine.accepts(X_sklearn_test, y=None, sample_weight=None)
     X_sklearn_test_prepared, *_ = engine.prepare_fit(X_sklearn_test)
     centers_c = engine.init_centroids(X_sklearn_test_prepared)
     centers_c = asnumpy(centers_c.T)
@@ -442,7 +437,6 @@ def test_kmeans_plusplus_dataorder():
     X_fortran = np.asfortranarray(X_sklearn_test)
     # The engine is re-created to reset random state
     engine = KMeansEngine(estimator)
-    assert engine.accepts(X_fortran, y=None, sample_weight=None)
     X_fortran_prepared, *_ = engine.prepare_fit(X_fortran)
     centers_fortran = engine.init_centroids(X_fortran_prepared)
     centers_fortran = asnumpy(centers_fortran.T)
