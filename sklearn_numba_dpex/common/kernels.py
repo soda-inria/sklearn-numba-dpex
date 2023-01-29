@@ -47,80 +47,59 @@ zero_idx = np.int64(0)
 # https://github.com/soda-inria/sklearn-numba-dpex/pull/82 when
 # fixed.
 @lru_cache
-def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
-    """This kernel is mostly necessary to work around lack of support for this
-    operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
-    op = dpex.func(op())
+def make_apply_elementwise_func(shape, func, work_group_size, dtype):
+    func_ = dpex.func(func())
+    n_items = math.prod(shape)
 
     @dpex.kernel
     # fmt: off
-    def elementwise_ops(
-        data,                    # INOUT    (size,)
-        operand_right            # IN       (1,)
+    def elementwise_ops_kernel(
+        data,                    # INOUT    (n_items,)
     ):
         # fmt: on
-
         item_idx = dpex.get_global_id(zero_idx)
-        if item_idx >= size:
+        if item_idx >= n_items:
             return
 
-        operand_left = data[item_idx]
-        data[item_idx] = op(operand_left, operand_right[0])
+        item = data[item_idx]
+        data[item_idx] = func_(item)
 
-    global_size = math.ceil(size / work_group_size) * work_group_size
-    return elementwise_ops[global_size, work_group_size]
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
+
+    def elementwise_ops(data):
+        data = dpt.reshape(data, (-1,))
+        elementwise_ops_kernel[global_size, work_group_size](data)
+
+    return elementwise_ops
 
 
 @lru_cache
-def make_initialize_to_zeros_2d_kernel(size0, size1, work_group_size, dtype):
+def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
 
-    n_items = size0 * size1
+    n_items = math.prod(shape)
     global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
-    # Optimized for C-contiguous arrays
     @dpex.kernel
-    def initialize_to_zeros(data):
+    def initialize_to_zeros_kernel(data):
         item_idx = dpex.get_global_id(zero_idx)
 
         if item_idx >= n_items:
             return
 
-        row_idx = item_idx // size1
-        col_idx = item_idx % size1
-        data[row_idx, col_idx] = zero
+        data[item_idx] = zero
 
-    return initialize_to_zeros[global_size, work_group_size]
-
-
-@lru_cache
-def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dtype):
-
-    n_items = size0 * size1 * size2
-    stride0 = size1 * size2
-    global_size = math.ceil(n_items / work_group_size) * work_group_size
-    zero = dtype(0.0)
-
-    # Optimized for C-contiguous arrays
-    @dpex.kernel
     def initialize_to_zeros(data):
-        item_idx = dpex.get_global_id(zero_idx)
+        data = dpt.reshape(data, (-1,))
+        initialize_to_zeros_kernel[global_size, work_group_size](data)
 
-        if item_idx >= n_items:
-            return
-
-        i = item_idx // stride0
-        stride0_idx = item_idx % stride0
-        j = stride0_idx // size2
-        k = stride0_idx % size2
-        data[i, j, k] = zero
-
-    return initialize_to_zeros[global_size, work_group_size]
+    return initialize_to_zeros
 
 
 @lru_cache
-def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
+    n_rows, n_cols = shape
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
 
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
@@ -129,12 +108,12 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
     def broadcast_division(dividend_array, divisor_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
         divisor = divisor_vector[col_idx]
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             dividend_array[row_idx, col_idx] = (
                 dividend_array[row_idx, col_idx] / divisor
             )
@@ -143,15 +122,16 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
 
 
 @lru_cache
-def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dtype):
+def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size, dtype):
     """
     ops must be a function that will be interpreted as a dpex.func and is subject to
     the same rules. It is expected to take two scalar arguments and return one scalar
     value. lambda functions are advised against since the cache will not work with lamda
     functions. sklearn_numba_dpex.common._utils expose some pre-defined `ops`.
     """
+    n_rows, n_cols = shape
 
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
     ops = dpex.func(ops())
 
     # NB: the left operand is modified inplace, the right operand is only read into.
@@ -161,10 +141,10 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
     def broadcast_ops(left_operand_array, right_operand_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             left_operand_array[row_idx, col_idx] = ops(
                 left_operand_array[row_idx, col_idx], right_operand_vector[row_idx]
             )
@@ -173,8 +153,9 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
 
 
 @lru_cache
-def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
+    n_rows, n_cols = shape
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
     zero = dtype(0.0)
     two = dtype(2.0)
 
@@ -189,12 +170,12 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         # fmt: on
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
         l2_norm = zero
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             item = data[row_idx, col_idx]
             l2_norm += item * item
 
@@ -207,8 +188,7 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 # operators than sum.
 @lru_cache
 def make_sum_reduction_2d_kernel(
-    size0,
-    size1,
+    shape,
     device,
     dtype,
     work_group_size="max",
@@ -300,10 +280,30 @@ def make_sum_reduction_2d_kernel(
 
     .. [3] https://shreeraman-ak.medium.com/parallel-reduction-with-cuda-d0ae10c1ae2c
     """
-    if is_1d := not size1:
+    if is_1d := (len(shape) == 1):
         axis = 1
-        size1 = size0
-        size0 = 1
+        shape1 = shape[0]
+        shape0 = 1
+    else:
+        shape0, shape1 = shape
+
+    if axis == 0:
+        work_group_shape, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis0(
+            shape1,
+            work_group_size,
+            sub_group_size,
+            fused_elementwise_func,
+            dtype,
+            device,
+        )
+    else:  # axis == 1
+        work_group_shape, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis1(
+            shape0, work_group_size, fused_elementwise_func, dtype, device
+        )
+
+    # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
+    if math.prod(work_group_shape) == 1:
+        raise NotImplementedError("work_group_size==1 is not supported.")
 
     # NB: the shape of the work group is different in each of those two cases. Summing
     # efficiently requires to adapt to very different IO patterns depending on the sum
@@ -311,34 +311,8 @@ def make_sum_reduction_2d_kernel(
     # sizes for each cases. As a consequence, the shape of the intermediate results
     # in the main driver loop, and the `global_size` (total number of work items fired
     # per call) for each kernel call, are also different, and are variabilized with
-    # the lambda functions `get_result_shape` and `get_global_size`.
-    if axis == 0:
-        work_group_size, kernels = _prepare_sum_reduction_2d_axis0(
-            size1,
-            work_group_size,
-            sub_group_size,
-            fused_elementwise_func,
-            dtype,
-            device,
-        )
-        get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, size1)
-        get_global_size = (
-            lambda result_sum_axis_size: result_sum_axis_size
-            * work_group_size
-            * math.ceil(size1 / sub_group_size)
-        )
-    else:  # axis == 1
-        work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
-            size0, work_group_size, fused_elementwise_func, dtype, device
-        )
-        get_result_shape = lambda result_sum_axis_size: (size0, result_sum_axis_size)
-        get_global_size = (
-            lambda result_sum_axis_size: result_sum_axis_size * work_group_size * size0
-        )
-
-    # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
-    if work_group_size == 1:
-        raise NotImplementedError("work_group_size==1 is not supported.")
+    # the functions `get_result_shape` and `get_global_size`.
+    get_result_shape, get_global_size = shape_update_fn
 
     # `fused_elementwise_func` is applied elementwise during the first pass on
     # data, in the first kernel execution only, using `fused_func_kernel`. Subsequent
@@ -353,7 +327,7 @@ def make_sum_reduction_2d_kernel(
     # single work item should iterates one time on the remaining values to finish the
     # reduction?
     kernel = fused_func_kernel
-    sum_axis_size = size0 if axis == 0 else size1
+    sum_axis_size = shape0 if axis == 0 else shape1
     next_input_size = sum_axis_size
     while next_input_size > 1:
         result_sum_axis_size = math.ceil(next_input_size / reduction_block_size)
@@ -366,7 +340,7 @@ def make_sum_reduction_2d_kernel(
         result = dpt.empty(result_shape, dtype=dtype, device=device)
 
         global_size = get_global_size(result_sum_axis_size)
-        kernel = kernel[global_size, work_group_size]
+        kernel = kernel[global_size, work_group_shape]
 
         kernels_and_empty_tensors_pairs.append((kernel, result))
         kernel = nofunc_kernel
@@ -420,6 +394,7 @@ def _prepare_sum_reduction_2d_axis1(
         work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     (
+        work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis1_kernel(
@@ -429,14 +404,24 @@ def _prepare_sum_reduction_2d_axis1(
     if fused_elementwise_func is None:
         partial_sum_reduction_nofunc = partial_sum_reduction
     else:
-        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis1_kernel(
+        *_, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis1_kernel(
             n_rows, work_group_size, fused_elementwise_func_, dtype
         )
 
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-        reduction_block_size,
+    get_result_shape = lambda result_sum_axis_size: (n_rows, result_sum_axis_size)
+    get_global_size = lambda result_sum_axis_size: (
+        n_rows,
+        result_sum_axis_size * work_group_size,
     )
+
+    return (
+        work_group_shape,
+        (
+            (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
+            reduction_block_size,
+        ),
+        (get_result_shape, get_global_size),
+    )  # shape_update_fn
 
 
 @lru_cache
@@ -463,6 +448,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     n_local_iterations = np.int64(math.log2(work_group_size) - 1)
     local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
+    work_group_shape = (1, work_group_size)
 
     @dpex.kernel
     # fmt: off
@@ -473,39 +459,32 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # fmt: on
         # Each work group processes a window of the `summands` input array with
         # shape `(1, reduction_block_size)` with `reduction_block_size = 2 *
-        # work_group_size`. The windows never overlap and create a grid that
+        # work_group_size`, and is responsible for summing all values in the window
+        # it spans. The windows never overlap and create a grid that
         # cover all the values of the `summands` array.
 
-        # `n_work_groups_per_row` windows are necessary to cover one row of the
-        # input array.
-        n_work_groups_per_row = result.shape[minus_one_idx]
-
-        # The group of work items identified by `group_id` is responsible for
-        # summing all values in the window it spans.
-        group_id = dpex.get_group_id(zero_idx)
-
         # The work groups are indexed in row-major order, from that let's deduce the
-        # row of `summands` to process by work items in `group_id`.
-        row_idx = group_id // n_work_groups_per_row
+        # row of `summands` to process by work items in `group_id`...
+        row_idx = dpex.get_group_id(zero_idx)
 
         # ... and the position of the window within this row, ranging from 0
         # (first window in the row) to `n_work_groups_per_row - 1` (last window
         # in the row):
-        local_work_group_id_in_row = group_id % n_work_groups_per_row
+        local_work_group_id_in_row = dpex.get_group_id(one_idx)
 
         # Since all windows have size `reduction_block_size`, the position of the first
         # item in the window is given by:
         first_value_idx = local_work_group_id_in_row * reduction_block_size
 
-        # To sum up, this work group `group_id` will sum items with coordinates
+        # To sum up, this current work group will sum items with coordinates
         # (`row_idx`, `col_idx`), with `col_idx` ranging from `first_value_idx`
         # (first item in the window) to `first_value_idx + work_group_size - 1` (last
-        # item in the window)
+        # item in the window).
 
         # The current work item is indexed locally within the group of work items, with
         # index `local_work_id` that can range from `0` (first item in the work group)
         # to `work_group_size - 1` (last item in the work group)
-        local_work_id = dpex.get_local_id(zero_idx)
+        local_work_id = dpex.get_local_id(one_idx)
 
         # Let's remember the size of the array to ensure that the last window in the
         # row do not try to access items outside the buffer.
@@ -583,7 +562,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 local_values[zero_idx] + local_values[one_idx]
             )
 
-    return reduction_block_size, partial_sum_reduction
+    return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
 def _prepare_sum_reduction_2d_axis0(
@@ -610,7 +589,8 @@ def _prepare_sum_reduction_2d_axis0(
                 f"sub_group_size={sub_group_size} and "
                 f"work_group_size={work_group_size}"
             )
-        check_power_of_2(work_group_size // sub_group_size)
+        n_sub_groups_per_work_group = work_group_size // sub_group_size
+        check_power_of_2(n_sub_groups_per_work_group)
 
     else:
         # Round work_group_size to the maximum smaller power-of-two multiple of
@@ -621,6 +601,7 @@ def _prepare_sum_reduction_2d_axis0(
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
     (
+        work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis0_kernel(
@@ -630,14 +611,24 @@ def _prepare_sum_reduction_2d_axis0(
     if fused_elementwise_func is None:
         partial_sum_reduction_nofunc = partial_sum_reduction
     else:
-        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
+        *_, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
             n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
         )
 
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-        reduction_block_size,
+    get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, n_cols)
+    get_global_size = lambda result_sum_axis_size: (
+        result_sum_axis_size * n_sub_groups_per_work_group,
+        sub_group_size * math.ceil(n_cols / sub_group_size),
     )
+
+    return (
+        work_group_shape,
+        (
+            (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
+            reduction_block_size,
+        ),
+        (get_result_shape, get_global_size),
+    )  # shape_update_fn
 
 
 @lru_cache
@@ -657,6 +648,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
     local_values_size = (n_sub_groups_per_work_group, sub_group_size)
     reduction_block_size = 2 * n_sub_groups_per_work_group
+    work_group_shape = (n_sub_groups_per_work_group, sub_group_size)
 
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
@@ -672,28 +664,19 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # The work groups are mapped to window of items in the input `summands` of size
         # `(reduction_block_size, sub_group_size)`,
         # where `reduction_block_size = 2 * n_sub_groups_per_work_group` such that the
-        # windows never overlap and create a grid that cover all the items. The work
-        # groups are indexed following a column-major order.
+        # windows never overlap and create a grid that cover all the items. Each
+        # work group is responsible for summing all items in the window it spans over
+        # axis 0, resulting in a output of shape `(1, sub_group_size)`.
 
-        # `n_blocks_per_col` windows are necessary to cover one column of the input
-        # array
-        n_blocks_per_col = result.shape[zero_idx]
-
-        # The group of work items `group_id` is responsible for summing all items in
-        # the window it spans over axis 0, resulting in a output of shape
-        # `(1, sub_group_size)`
-        group_id = dpex.get_group_id(zero_idx)
-
-        # The work groups are indexed in column-major order. From this let's deduce the
+        # The work groups are indexed in row-major order. From this let's deduce the
         # position of the window within the column...
-        local_block_id_in_col = group_id % n_blocks_per_col
+        local_block_id_in_col = dpex.get_group_id(one_idx)
 
         # Let's map the current work item to an index in a 2D grid, where the
         # `work_group_size` work items are mapped in row-major order to the array
         # of size `(n_sub_groups_per_work_group, sub_group_size)`.
-        local_work_id = dpex.get_local_id(zero_idx)      # 1D idx
-        local_row_idx = local_work_id // sub_group_size  # 2D idx, first coordinate
-        local_col_idx = local_work_id % sub_group_size   # 2D idx, second coordinate
+        local_row_idx = dpex.get_local_id(zero_idx)   # 2D idx, first coordinate
+        local_col_idx = dpex.get_local_id(one_idx)    # 2D idx, second coordinate
 
         # This way, each row in the 2D index can be seen as mapped to two rows in the
         # corresponding window of items of the input `summands`, with the first row of
@@ -734,7 +717,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # position of the window in the grid of windows, and by the local position of
         # the work item in the 2D index):
         col_idx = (
-            (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
+            dpex.get_group_id(one_idx) * sub_group_size + local_col_idx
             )
 
         # We must be careful to not read items outside of the array !
@@ -784,7 +767,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
                 local_values[one_idx, local_col_idx]
             )
 
-    return reduction_block_size, partial_sum_reduction
+    return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
 @lru_cache

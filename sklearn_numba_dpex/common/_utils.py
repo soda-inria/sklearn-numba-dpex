@@ -39,11 +39,14 @@ def _plus():
     return _plus_closure
 
 
-def _divide():
-    def _divide_closure(x, y):
-        return x / y
+def _divide_by(divisor):
+    def _divide_by_fn():
+        def _divide_closure(x):
+            return x / divisor
 
-    return _divide_closure
+        return _divide_closure
+
+    return _divide_by_fn
 
 
 def _check_max_work_group_size(

@@ -7,20 +7,19 @@ import dpnp
 import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
-    _divide,
+    _divide_by,
     _get_global_mem_cache_size,
     _minus,
     _plus,
     _square,
 )
 from sklearn_numba_dpex.common.kernels import (
+    make_apply_elementwise_func,
     make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
-    make_elementwise_binary_op_1d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
-    make_initialize_to_zeros_2d_kernel,
-    make_initialize_to_zeros_3d_kernel,
+    make_initialize_to_zeros_kernel,
     make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.common.random import (
@@ -96,17 +95,14 @@ def lloyd(
         n_samples, n_features, max_work_group_size, compute_dtype
     )
 
-    reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
-        size0=n_centroids_private_copies,
-        size1=n_clusters,
+    reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_kernel(
+        shape=(n_centroids_private_copies, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
 
-    reset_centroids_private_copies_kernel = make_initialize_to_zeros_3d_kernel(
-        size0=n_centroids_private_copies,
-        size1=n_features,
-        size2=n_clusters,
+    reset_centroids_private_copies_kernel = make_initialize_to_zeros_kernel(
+        shape=(n_centroids_private_copies, n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
@@ -125,23 +121,20 @@ def lloyd(
     )
 
     half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        (n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
 
     reduce_inertia_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,  # 1d reduction
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
     )
 
     reduce_centroid_shifts_kernel = make_sum_reduction_2d_kernel(
-        size0=n_clusters,
-        size1=None,  # 1d reduction
+        shape=(n_clusters,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -463,16 +456,18 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     max_work_group_size = device.max_work_group_size
 
     sum_axis1_kernel = make_sum_reduction_2d_kernel(
-        X_t.shape[0],
-        X_t.shape[1],
+        X_t.shape,
         axis=1,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
     )
 
-    elementwise_binary_divide_kernel = make_elementwise_binary_op_1d_kernel(
-        n_features, _divide, max_work_group_size, compute_dtype
+    divide_by_n_samples_kernel = make_apply_elementwise_func(
+        (n_features,),
+        _divide_by(compute_dtype(n_samples)),
+        max_work_group_size,
+        compute_dtype,
     )
 
     # At the time of writing this code, dpnp does not support functions (like `==`
@@ -480,8 +475,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_of_squares_kernel = make_sum_reduction_2d_kernel(
-        size0=n_features,
-        size1=None,
+        shape=(n_features,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -490,11 +484,8 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
 
-    divisor = dpt.full(
-        sh=(1,), fill_value=compute_dtype(n_samples), dtype=compute_dtype, device=device
-    )
     # Change `X_mean` inplace
-    elementwise_binary_divide_kernel(X_mean, divisor)
+    divide_by_n_samples_kernel(X_mean)
 
     X_sum_squared = sum_of_squares_kernel(X_mean)[0]
     X_mean_is_zeroed = float(X_sum_squared) == 0.0
@@ -509,8 +500,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         # subtract the mean of x for more accurate distance computations
         X_t = dpt.asarray(X_t, copy=copy_x)
         broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-            n_features,
-            n_samples,
+            (n_features, n_samples),
             ops=_minus,
             work_group_size=max_work_group_size,
             dtype=compute_dtype,
@@ -522,8 +512,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         if isinstance(init, dpt.usm_ndarray):
             n_clusters = init.shape[1]
             broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-                n_features,
-                n_clusters,
+                (n_features, n_clusters),
                 ops=_minus,
                 work_group_size=max_work_group_size,
                 dtype=compute_dtype,
@@ -534,8 +523,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     n_items = n_features * n_samples
 
     variance_kernel = make_sum_reduction_2d_kernel(
-        size0=n_items,
-        size1=None,
+        shape=(n_items,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -552,8 +540,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_sample_weight_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,
+        size0=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -584,8 +571,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
 
     best_centers_t = dpt.asarray(best_centers_t, copy=False)
     broadcast_init_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-        n_features,
-        n_clusters,
+        (n_features, n_clusters),
         ops=_plus,
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
@@ -606,8 +592,7 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
     if not copy_x:
         X_t = dpt.asarray(X_t, copy=False)
         broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-            n_features,
-            n_samples,
+            (n_features, n_samples),
             ops=_plus,
             work_group_size=max_work_group_size,
             dtype=compute_dtype,
@@ -673,8 +658,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     )
 
     half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        (n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
@@ -704,8 +688,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     )
 
     reduce_inertia_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,  # 1d reduction
+        size0=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -827,16 +810,14 @@ def kmeans_plusplus(
     )
 
     reduce_potential_1d_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
     )
 
     reduce_potential_2d_kernel = make_sum_reduction_2d_kernel(
-        size0=n_local_trials,
-        size1=n_samples,
+        shape=(n_local_trials, n_samples),
         axis=1,
         work_group_size="max",
         device=device,
