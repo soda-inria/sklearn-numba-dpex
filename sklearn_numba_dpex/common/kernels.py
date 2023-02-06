@@ -195,6 +195,7 @@ def make_sum_reduction_2d_kernel(
     axis=None,
     sub_group_size=None,
     fused_elementwise_func=None,
+    allocate_output_buffer=True,
 ):
     """Compute data_2d.sum(axis=axis) or data_1d.sum().
 
@@ -336,8 +337,11 @@ def make_sum_reduction_2d_kernel(
         # collected. Thus it can be more efficient to re-use a same instance of
         # `sum_reduction` (e.g within iterations of a loop) since it avoid
         # deallocation and reallocation every time.
-        result_shape = get_result_shape(result_sum_axis_size)
-        result = dpt.empty(result_shape, dtype=dtype, device=device)
+        if (result_sum_axis_size > 1) or allocate_output_buffer:
+            result_shape = get_result_shape(result_sum_axis_size)
+            result = dpt.empty(result_shape, dtype=dtype, device=device)
+        else:
+            result = None
 
         global_size = get_global_size(result_sum_axis_size)
         kernel = kernel[global_size, work_group_shape]
@@ -347,7 +351,7 @@ def make_sum_reduction_2d_kernel(
 
         next_input_size = result_sum_axis_size
 
-    def sum_reduction(summands):
+    def sum_reduction(summands, out=None):
         if is_1d:
             # Makes the 1d case a special 2d case to reuse the same kernel.
             summands = dpt.reshape(summands, (1, -1))
@@ -359,6 +363,8 @@ def make_sum_reduction_2d_kernel(
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, result in kernels_and_empty_tensors_pairs:
+            if result is None:
+                result = out
             kernel(summands, result)
             summands = result
 

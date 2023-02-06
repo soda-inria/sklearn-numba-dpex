@@ -70,17 +70,17 @@ def make_lloyd_single_step_fixed_window_kernel(
         required_memory_constant=sub_group_size * dtype_itemsize,
     )
 
-    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
-    if work_group_size != input_work_group_size:
-        work_group_size = centroids_window_height * sub_group_size
-
-    elif centroids_window_height * sub_group_size != work_group_size:
+    if (work_group_size == input_work_group_size) and (
+        centroids_window_height * sub_group_size != work_group_size
+    ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
+
+    work_group_shape = (centroids_window_height, window_n_centroids)
 
     (
         initialize_window_of_centroids,
@@ -106,10 +106,11 @@ def make_lloyd_single_step_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, centroids_window_width)
-
-    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    n_subgroups = global_size // sub_group_size
+    n_subgroups = math.ceil(n_samples / window_n_centroids)
+    global_size = (
+        math.ceil(n_subgroups / centroids_window_height) * centroids_window_height,
+        window_n_centroids,
+    )
 
     n_cluster_items = n_clusters * (n_features + 1)
     n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
@@ -122,6 +123,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_centroids_private_copies = int(min(n_subgroups, n_centroids_private_copies))
 
     zero_idx = np.int64(0)
+    one_idx = np.int64(0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -172,15 +174,17 @@ def make_lloyd_single_step_fixed_window_kernel(
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
         """
-        sample_idx = dpex.get_global_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        sub_group_idx = dpex.get_global_id(zero_idx)
+        sample_idx = (sub_group_idx * sub_group_size) + dpex.get_global_id(one_idx)
+        local_row_idx = dpex.get_local_id(zero_idx)
+        local_col_idx = dpex.get_local_id(one_idx)
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
         # loaded and used by all work items in the work group to compute partial
         # results. The array slides over the features in the outer loop, and over the
         # samples in the inner loop.
-        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
+        centroids_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
 
         # This array in shared memory is used as a sliding array over the centroids.
         # It contains values of centroids_half_l2_norm for each centroid in the sliding
@@ -204,8 +208,8 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         # Those variables are used in the inner loop during loading of the window of
         # centroids
-        window_loading_centroid_idx = local_work_id % window_n_centroids
-        window_loading_feature_offset = local_work_id // window_n_centroids
+        window_loading_centroid_idx = local_row_idx
+        window_loading_feature_offset = local_col_idx
 
         # STEP 1: compute the closest centroid
         # Outer loop: iterate on successive windows of size window_n_centroids that
@@ -222,7 +226,8 @@ def make_lloyd_single_step_fixed_window_kernel(
             # are modified in place.
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(
-                local_work_id,
+                local_row_idx,
+                local_col_idx,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 is_last_centroid_window,
@@ -334,9 +339,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
-        privatization_idx = (
-            sample_idx // sub_group_size
-        ) % n_centroids_private_copies
+        privatization_idx = sub_group_idx % n_centroids_private_copies
 
         weight = sample_weight[sample_idx]
 
@@ -354,5 +357,5 @@ def make_lloyd_single_step_fixed_window_kernel(
             )
     return (
         n_centroids_private_copies,
-        fused_lloyd_single_step[global_size, work_group_size],
+        fused_lloyd_single_step[global_size, work_group_shape],
     )

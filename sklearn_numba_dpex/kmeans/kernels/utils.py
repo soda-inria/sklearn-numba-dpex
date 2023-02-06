@@ -199,10 +199,10 @@ def make_reduce_centroid_data_kernel(
     work_group_size,
     dtype,
 ):
+    n_centroid_items = n_features * n_clusters
+    n_sums = n_centroid_items + n_clusters  # n additional sums for cluster_sizes
+    global_size = math.ceil(n_sums / work_group_size) * work_group_size
 
-    n_work_groups_for_clusters = math.ceil(n_clusters / work_group_size)
-    n_work_items_for_clusters = n_work_groups_for_clusters * work_group_size
-    global_size = n_work_items_for_clusters * n_features
     zero = dtype(0.0)
     one_incr = np.int32(1)
 
@@ -210,34 +210,26 @@ def make_reduce_centroid_data_kernel(
     # n_features * n_clusters >> preferred_work_group_size_multiple
     @dpex.kernel
     # fmt: off
-    def reduce_centroid_data(
+    def _reduce_centroid_data_kernel(
         cluster_sizes_private_copies,  # IN      (n_copies, n_clusters)
-        centroids_t_private_copies,    # IN      (n_copies, n_features, n_clusters)
+        centroids_t_private_copies,    # IN      (n_copies, n_features * n_clusters) (reshaped)  # noqa
         cluster_sizes,                 # OUT     (n_clusters,)
-        centroids_t,                   # OUT     (n_features, n_clusters)
+        centroids_t,                   # OUT     (n_features * n_clusters,) (flattened)
         empty_clusters_list,           # OUT     (n_clusters,)
         n_empty_clusters,              # OUT     (1,)
     ):
         # fmt: on
-
-        group_idx = dpex.get_group_id(zero_idx)
-        item_idx = dpex.get_local_id(zero_idx)
-        feature_idx = group_idx // n_work_groups_for_clusters
-        cluster_idx = (
-            (group_idx % n_work_groups_for_clusters) * work_group_size
-        ) + item_idx
-        if cluster_idx >= n_clusters:
-            return
+        item_idx = dpex.get_global_id(zero_idx)
+        sum_ = zero
 
         # reduce the centroid values
-        sum_ = zero
-        for copy_idx in range(n_centroids_private_copies):
-            sum_ += centroids_t_private_copies[copy_idx, feature_idx, cluster_idx]
-        centroids_t[feature_idx, cluster_idx] = sum_
+        if item_idx < n_centroid_items:
+            for copy_idx in range(n_centroids_private_copies):
+                sum_ += centroids_t_private_copies[copy_idx, item_idx]
+                centroids_t[item_idx] = sum_
 
-        # reduce the cluster sizes
-        if feature_idx == zero_idx:
-            sum_ = zero
+        elif item_idx < n_sums:
+            cluster_idx = item_idx - n_sums
             for copy_idx in range(n_centroids_private_copies):
                 sum_ += cluster_sizes_private_copies[copy_idx, cluster_idx]
             cluster_sizes[cluster_idx] = sum_
@@ -249,7 +241,33 @@ def make_reduce_centroid_data_kernel(
                 )
                 empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
-    return reduce_centroid_data[global_size, work_group_size]
+    reduce_centroid_data_kernel = _reduce_centroid_data_kernel[
+        global_size, work_group_size
+    ]
+
+    def reduce_centroid_data(
+        cluster_sizes_private_copies,
+        centroids_t_private_copies,
+        cluster_sizes,
+        centroids_t,
+        empty_clusters_list,
+        n_empty_clusters,
+    ):
+        centroids_t_private_copies = dpt.reshape(
+            centroids_t_private_copies,
+            (n_centroids_private_copies, n_features * n_clusters),
+        )
+        centroids_t = dpt.asarray(dpt.reshape(centroids_t, (-1,)))
+        reduce_centroid_data_kernel(
+            cluster_sizes_private_copies,
+            centroids_t_private_copies,
+            cluster_sizes,
+            centroids_t,
+            empty_clusters_list,
+            n_empty_clusters,
+        )
+
+    return reduce_centroid_data
 
 
 @lru_cache

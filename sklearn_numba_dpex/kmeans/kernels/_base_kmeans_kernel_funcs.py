@@ -1,3 +1,4 @@
+import dpctl as dpt
 import numba_dpex as dpex
 
 
@@ -63,7 +64,8 @@ def make_pairwise_ops_base_kernel_funcs(
 
         @dpex.func
         def initialize_window_of_centroids(
-            local_work_id,
+            local_row_idx,
+            local_col_idx,
             first_centroid_idx,
             centroids_half_l2_norm,
             is_last_centroid_window,
@@ -73,7 +75,8 @@ def make_pairwise_ops_base_kernel_funcs(
         ):
             if is_last_centroid_window:
                 initialize_last_window_of_centroids(
-                    local_work_id,
+                    local_row_idx,
+                    local_col_idx,
                     first_centroid_idx,
                     centroids_half_l2_norm,
                     # OUT
@@ -82,7 +85,8 @@ def make_pairwise_ops_base_kernel_funcs(
                 )
             else:
                 initialize_full_window_of_centroids(
-                    local_work_id,
+                    local_row_idx,
+                    local_col_idx,
                     first_centroid_idx,
                     centroids_half_l2_norm,
                     # OUT
@@ -203,6 +207,7 @@ class _KMeansKernelFuncFactory:
 
     def make_initialize_window_kernel_func(self, window_n_centroids):
         zero = self.dtype(0.0)
+        zero_as_a_long = dpt.int64(0)
 
         @dpex.func
         def _initialize_results(results):
@@ -217,7 +222,8 @@ class _KMeansKernelFuncFactory:
         @dpex.func
         # fmt: off
         def _initialize_window_of_centroids(
-            local_work_id,                      # PARAM
+            local_row_idx,                      # PARAM
+            local_col_idx,                      # PARAM
             first_centroid_idx,                 # PARAM
             centroids_half_l2_norm,             # IN
             window_of_centroids_half_l2_norms,  # OUT
@@ -229,10 +235,9 @@ class _KMeansKernelFuncFactory:
             # The first `window_n_centroids` work items cooperate on loading the
             # values of centroids_half_l2_norm relevant to current window. Each work
             # item loads one single value.
-            if local_work_id < window_n_centroids:
-                half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-                window_of_centroids_half_l2_norms[local_work_id] = (
-                    centroids_half_l2_norm[half_l2_norm_loading_idx]
+            if local_row_idx > zero_as_a_long:
+                window_of_centroids_half_l2_norms[local_col_idx] = (
+                    centroids_half_l2_norm[first_centroid_idx + local_col_idx]
                 )
 
         return _initialize_window_of_centroids
