@@ -60,6 +60,12 @@ def lloyd(
     max_work_group_size = device.max_work_group_size
     sub_group_size = min(device.sub_group_sizes)
     global_mem_cache_size = _get_global_mem_cache_size(device)
+
+    # The following parameter controls the fraction of the device global cache memory
+    # that can be relied upon to reduce the probability of collision of atomic
+    # ops during execution (see `lloyd_single_step` kernel for more information). The
+    # following value has been chosen empirically and it might be beneficial to test it
+    # further on different hardware.
     centroids_private_copies_max_cache_occupancy = 0.7
 
     verbose = bool(verbose)
@@ -108,8 +114,7 @@ def lloyd(
     )
 
     broadcast_division_kernel = make_broadcast_division_1d_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        shape=(n_features, n_clusters),
         work_group_size=max_work_group_size,
     )
 
@@ -540,7 +545,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_sample_weight_kernel = make_sum_reduction_2d_kernel(
-        size0=(n_samples,),
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -688,7 +693,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     )
 
     reduce_inertia_kernel = make_sum_reduction_2d_kernel(
-        size0=(n_samples,),
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,

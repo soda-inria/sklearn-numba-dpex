@@ -27,7 +27,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     centroids_window_height = work_group_size // sub_group_size
 
     if (work_group_size == input_work_group_size) and (
-        centroids_window_height * sub_group_size != work_group_size
+        (centroids_window_height * sub_group_size) != work_group_size
     ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -57,7 +57,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     last_feature_window_idx = n_windows_for_features - 1
 
     zero_idx = np.int64(0)
-    one_idx = np.int64(0)
+    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -68,19 +68,21 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     ):
         # fmt: on
 
-        sample_idx = (
-            (dpex.get_global_id(zero_idx) * sub_group_size)
-            + dpex.get_global_id(one_idx)
-        )
-
         centroids_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
 
         sq_distances = dpex.private.array(shape=window_n_centroids, dtype=dtype)
 
         first_centroid_idx = zero_idx
 
-        window_loading_centroid_idx = dpex.get_local_id(zero_idx)
-        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        local_col_idx = dpex.get_local_id(one_idx)
+
+        window_loading_feature_offset = dpex.get_local_id(zero_idx)
+        window_loading_centroid_idx = local_col_idx
+
+        sample_idx = (
+            (dpex.get_global_id(zero_idx) * sub_group_size)
+            + local_col_idx
+        )
 
         for centroid_window_idx in range(n_windows_for_centroids):
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx

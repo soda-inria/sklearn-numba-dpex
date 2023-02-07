@@ -220,6 +220,9 @@ def make_reduce_centroid_data_kernel(
     ):
         # fmt: on
         item_idx = dpex.get_global_id(zero_idx)
+        if item_idx >= n_sums:
+            return
+
         sum_ = zero
 
         # reduce the centroid values
@@ -229,7 +232,7 @@ def make_reduce_centroid_data_kernel(
                 centroids_t[item_idx] = sum_
 
         elif item_idx < n_sums:
-            cluster_idx = item_idx - n_sums
+            cluster_idx = item_idx - n_centroid_items
             for copy_idx in range(n_centroids_private_copies):
                 sum_ += cluster_sizes_private_copies[copy_idx, cluster_idx]
             cluster_sizes[cluster_idx] = sum_

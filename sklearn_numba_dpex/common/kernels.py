@@ -1,15 +1,6 @@
 # TODO: many auxilliary kernels in the package might be better optimized and we could
 # benchmark alternative implementations for each of them, that could include
-#    - using 2D or 3D grid of work groups and work items where applicable (e.g. in
-# some of the kernels that take 2D or 3D data as input) rather than using 1D grid. When
-# doing so, one should be especially careful about how the segments of adjacent work
-# items of size preferred_work_group_size_multiple are dispatched especially regarding
-# RW  operations in memory. A wrong dispatch strategy could slash memory bandwith and
-# reduce performance. Using 2D or 3D grid correctly might on the other hand improve
-# performance since it saves costly indexing operations (like //)
-#    - investigate if flat 1D-like indexing also works for ND kernels, thus saving the
-# need to compute coordinates for each dimension for element-wise operations.
-#    - or using numba + dpnp to directly leverage kernels that are shipped in dpnp to
+# using numba + dpnp to directly leverage kernels that are shipped in dpnp to
 # replace numpy methods.
 # However, in light of our main goal that is bringing a GPU KMeans to scikit-learn, the
 # importance of those TODOs is currently seen as secondary, since the execution time of
@@ -186,7 +177,6 @@ def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
 
 # TODO: this kernel could be abstracted away to support other commutative binary
 # operators than sum.
-@lru_cache
 def make_sum_reduction_2d_kernel(
     shape,
     device,
@@ -370,6 +360,7 @@ def make_sum_reduction_2d_kernel(
     return sum_reduction
 
 
+@lru_cache
 def _prepare_sum_reduction_2d_axis1(
     n_rows, work_group_size, fused_elementwise_func, dtype, device
 ):
@@ -424,7 +415,6 @@ def _prepare_sum_reduction_2d_axis1(
     )  # shape_update_fn
 
 
-@lru_cache
 def _make_partial_sum_reduction_2d_axis1_kernel(
     n_rows, work_group_size, fused_elementwise_func, dtype
 ):
@@ -446,7 +436,6 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     # Number of iteration in each execution of the kernel:
     n_local_iterations = np.int64(math.log2(work_group_size) - 1)
-    local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
     work_group_shape = (1, work_group_size)
 
@@ -513,7 +502,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         augend_idx = first_value_idx + local_work_id
         addend_idx = first_value_idx + work_group_size + local_work_id
 
-        local_values = dpex.local.array(local_values_size, dtype=dtype)
+        local_values = dpex.local.array(work_group_size, dtype=dtype)
 
         # We must be careful to not read items outside of the array !
         if augend_idx >= sum_axis_size:
@@ -565,6 +554,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
+@lru_cache
 def _prepare_sum_reduction_2d_axis0(
     n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype, device
 ):
@@ -631,7 +621,6 @@ def _prepare_sum_reduction_2d_axis0(
     )  # shape_update_fn
 
 
-@lru_cache
 def _make_partial_sum_reduction_2d_axis0_kernel(
     n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype
 ):
@@ -646,7 +635,6 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     # Number of iteration in each execution of the kernel:
     n_local_iterations = np.int64(math.log2(n_sub_groups_per_work_group) - 1)
 
-    local_values_size = (n_sub_groups_per_work_group, sub_group_size)
     reduction_block_size = 2 * n_sub_groups_per_work_group
     work_group_shape = (n_sub_groups_per_work_group, sub_group_size)
 
@@ -670,7 +658,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
         # The work groups are indexed in row-major order. From this let's deduce the
         # position of the window within the column...
-        local_block_id_in_col = dpex.get_group_id(one_idx)
+        local_block_id_in_col = dpex.get_group_id(zero_idx)
 
         # Let's map the current work item to an index in a 2D grid, where the
         # `work_group_size` work items are mapped in row-major order to the array
@@ -711,7 +699,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # local memory of size (n_sub_groups_per_work_group, sub_group_size) (i.e one
         # slot for each work item and two items in the window), and yet again
         # contiguous work items write into contiguous slots.
-        local_values = dpex.local.array(local_values_size, dtype=dtype)
+        local_values = dpex.local.array(work_group_shape, dtype=dtype)
 
         # The current work item use the following second coordinate (given by the
         # position of the window in the grid of windows, and by the local position of

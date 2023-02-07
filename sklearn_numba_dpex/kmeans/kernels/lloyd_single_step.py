@@ -73,7 +73,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     centroids_window_height = work_group_size // sub_group_size
 
     if (work_group_size == input_work_group_size) and (
-        centroids_window_height * sub_group_size != work_group_size
+        (centroids_window_height * sub_group_size) != work_group_size
     ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -117,13 +117,35 @@ def make_lloyd_single_step_fixed_window_kernel(
     # TODO: control that this value is not higher than the number of sub-groups of size
     # sub_group_size that can effectively run concurrently. We should fetch this
     # information and apply it here.
+
+    # NB: for more details about the privatization strategy the following variables
+    # refer too, please read the inline commenting that address it with more details in
+    # the kernel definition.
+
+    # Ensure that the memory allocated for privatization will not saturate the global
+    # memory cache size. For this purpose we limit the number of private copies to
+    # a fraction of the available global memory cache size.
     n_centroids_private_copies = (
         global_mem_cache_size * centroids_private_copies_max_cache_occupancy
     ) // n_cluster_bytes
-    n_centroids_private_copies = int(min(n_subgroups, n_centroids_private_copies))
+
+    # Each set of `sub_group_size` consecutive work items is assigned one private
+    # copy, and several such set can be assigned to the same private copy. Thus, at
+    # most `n_subgroups` private copies are needed.
+    # Moreover, collisions can only occur between sub groups that execute concurrently.
+    # Thus, at most `nb_concurrent_sub_groups` private copies are needed.
+    # TODO: `nb_concurrent_sub_groups` is considered equal to
+    # `device.max_compute_units`. We're not sure that this is the correct
+    # read of the device specs. Confirm or fix once it's made clearer. Suggested reads
+    # that highlight complexity of the execution model:
+    # - https://github.com/IntelPython/dpctl/issues/1033
+    # - https://stackoverflow.com/a/6490897
+    n_centroids_private_copies = int(
+        min(n_subgroups, n_centroids_private_copies, device.max_compute_units)
+    )
 
     zero_idx = np.int64(0)
-    one_idx = np.int64(0)
+    one_idx = np.int64(1)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -175,9 +197,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         operations in the kernel.
         """
         sub_group_idx = dpex.get_global_id(zero_idx)
-        sample_idx = (sub_group_idx * sub_group_size) + dpex.get_global_id(one_idx)
         local_row_idx = dpex.get_local_id(zero_idx)
         local_col_idx = dpex.get_local_id(one_idx)
+        sample_idx = (sub_group_idx * sub_group_size) + local_col_idx
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
@@ -208,8 +230,8 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         # Those variables are used in the inner loop during loading of the window of
         # centroids
-        window_loading_centroid_idx = local_row_idx
-        window_loading_feature_offset = local_col_idx
+        window_loading_feature_offset = local_row_idx
+        window_loading_centroid_idx = local_col_idx
 
         # STEP 1: compute the closest centroid
         # Outer loop: iterate on successive windows of size window_n_centroids that

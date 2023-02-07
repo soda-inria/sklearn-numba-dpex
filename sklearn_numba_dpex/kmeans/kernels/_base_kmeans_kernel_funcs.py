@@ -1,5 +1,5 @@
-import dpctl as dpt
 import numba_dpex as dpex
+import numpy as np
 
 
 def make_pairwise_ops_base_kernel_funcs(
@@ -207,7 +207,7 @@ class _KMeansKernelFuncFactory:
 
     def make_initialize_window_kernel_func(self, window_n_centroids):
         zero = self.dtype(0.0)
-        zero_as_a_long = dpt.int64(0)
+        zero_as_a_long = np.int64(0)
 
         @dpex.func
         def _initialize_results(results):
@@ -235,7 +235,7 @@ class _KMeansKernelFuncFactory:
             # The first `window_n_centroids` work items cooperate on loading the
             # values of centroids_half_l2_norm relevant to current window. Each work
             # item loads one single value.
-            if local_row_idx > zero_as_a_long:
+            if local_row_idx == zero_as_a_long:
                 window_of_centroids_half_l2_norms[local_col_idx] = (
                     centroids_half_l2_norm[first_centroid_idx + local_col_idx]
                 )

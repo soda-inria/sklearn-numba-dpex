@@ -118,7 +118,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     candidates_window_height = work_group_size // sub_group_size
 
     if (work_group_size == input_work_group_size) and (
-        candidates_window_height * sub_group_size != work_group_size
+        (candidates_window_height * sub_group_size) != work_group_size
     ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
@@ -148,7 +148,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     last_feature_window_idx = n_windows_for_features - 1
 
     zero_idx = np.int64(0)
-    one_idx = np.int64(0)
+    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -160,10 +160,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         sq_distances_t,                    # OUT            (n_candidates, n_samples)
     ):
         # fmt: on
-        sample_idx = (
-            (dpex.get_global_id(zero_idx) * sub_group_size)
-            + dpex.get_global_id(one_idx)
-        )
 
         candidates_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
 
@@ -171,8 +167,15 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
         first_candidate_idx = zero_idx
 
-        window_loading_candidate_idx = dpex.get_local_id(zero_idx)
-        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        local_col_idx = dpex.get_local_id(one_idx)
+
+        window_loading_feature_offset = dpex.get_local_id(zero_idx)
+        window_loading_candidate_idx = local_col_idx
+
+        sample_idx = (
+            (dpex.get_global_id(zero_idx) * sub_group_size)
+            + local_col_idx
+        )
 
         for candidate_window_idx in range(n_windows_for_candidates):
             is_last_candidate_window = candidate_window_idx == last_candidate_window_idx
