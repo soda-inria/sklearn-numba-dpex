@@ -292,8 +292,8 @@ def make_sum_reduction_2d_kernel(
         )
 
     # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
-    # if math.prod(work_group_shape) == 1:
-    #     raise NotImplementedError("work_group_size==1 is not supported.")
+    if math.prod(work_group_shape) == 1:
+        raise NotImplementedError("work_group_size==1 is not supported.")
 
     # NB: the shape of the work group is different in each of those two cases. Summing
     # efficiently requires to adapt to very different IO patterns depending on the sum
