@@ -230,9 +230,9 @@ class KMeansEngine(KMeansCythonEngine):
             return super().is_same_clustering(labels, best_labels, n_clusters)
         return is_same_clustering(labels, best_labels, n_clusters)
 
-    def get_nb_distinct_clusters(self, best_labels):
+    def count_distinct_clusters(self, best_labels):
         if self._is_in_testing_mode:
-            return super().get_nb_distinct_clusters(best_labels)
+            return super().count_distinct_clusters(best_labels)
         return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
     def prepare_prediction(self, X, sample_weight):

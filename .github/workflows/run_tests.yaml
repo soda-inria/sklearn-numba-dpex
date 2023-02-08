@@ -15,13 +15,13 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-      # Use a pinned commit from the `wip-engines` branch at
-      # https://github.com/ogrisel/scikit-learn.git to enable smooth synchronization
-      # with the development of this branch.
-      # Development tracker: https://github.com/scikit-learn/scikit-learn/pull/24497/
+      # Use a pinned commit from the `feature/engine-api` branch at
+      # https://github.com/scikit-learn/scikit-learn.git to enable smooth
+      # synchronization with the development of this branch.
+      # Development tracker: https://github.com/scikit-learn/scikit-learn/pull/25535/
       # TODO: Remove this step when the plugin API is officially released
-    - name: Install pytest, @ogrisel sklearn branch "wip-engines", and sklearn-numba-dpex
-      run: pip install pytest git+https://github.com/ogrisel/scikit-learn.git@39a39ad309414b4d8a1a93bc3105980d2222a589#egg=scikit-learn -e .
+    - name: Install pytest, sklearn branch "feature/engine-api", and sklearn-numba-dpex
+      run: pip install pytest git+https://github.com/scikit-learn/scikit-learn.git@a897a34d7d989bf317de17f80948639c0fd5ecf1#egg=scikit-learn -e .
 
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
@@ -40,4 +40,4 @@ jobs:
       # activated when the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is set
       # to 1.
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      run: SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+      run: SKLEARN_RUN_FLOAT32_TESTS=1 SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means

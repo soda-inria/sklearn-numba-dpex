@@ -7,13 +7,13 @@ of the `numba-dpex` stack.
 
 This package requires working with the following branch of scikit-learn:
 
-- `wip-engines` branch on https://github.com/ogrisel/scikit-learn
+- `feature/engine-api` branch on https://github.com/scikit-learn/scikit-learn
 
 A step-by-step guide is provided in this README for installing `numba-dpex`, along with
-the `wip-engines` branch of `scikit-learn` and this plugin from source.
+the `feature/engine-api` branch of `scikit-learn` and this plugin from source.
 
-🚧 TODO: package `wip-engines` and `sklearn-numba-dpex` to have everything installable
-in `conda` with a single one-liner.
+🚧 TODO: package `feature/engine-api` and `sklearn-numba-dpex` to have everything
+installable in `conda` with a single one-liner.
 
 ## List of Included Engines
 
@@ -139,7 +139,7 @@ conda env config vars set \
 ```
 
 `scikit-learn` must be installed from source using an experimental version available on
-[`wip-engines`](https://github.com/ogrisel/scikit-learn/commits/wip-engines), a
+[`feature/engine-api`](https://github.com/scikit-learn/scikit-learn/tree/feature/engine-api), a
 development branch. Be careful to build with compatible `python` and `numpy` versions.
 
 <details>
@@ -160,9 +160,9 @@ conda create --yes --name sklearn-dev \
                    "numpy==$DPEX_NUMPY_VERSION" \
                    scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
-git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+git clone https://github.com/ogrisel/scikit-learn -b "feature/engine-api"
 cd scikit-learn
-git checkout 39a39ad309414b4d8a1a93bc3105980d2222a589
+git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
 cd dist/
@@ -220,12 +220,12 @@ sudo docker start -a -i my_container_name
 ```
 
 Once you have loaded into the container, follow those instructions to install the
-`wip-engines` branch of scikit-learn:
+`feature/engine-api` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api"
 cd scikit-learn
-git checkout 39a39ad309414b4d8a1a93bc3105980d2222a589
+git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 pip install -e .
 cd ..
 ```
