@@ -14,9 +14,9 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 @pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
+@pytest.mark.parametrize("work_group_size", [1, 2, 4, 8, "max"])
 @pytest.mark.parametrize(
-    "test_input_shape", [(1, 1), (1, 3), (3, 1), (3, 5), (5, 3), (3, 4), (4, 3)]
+    "test_input_shape", [(1, 1), (1, 3), (3, 1), (3, 5), (5, 3), (3, 4), (4, 3), (3, 9)]
 )
 @pytest.mark.parametrize("dtype", float_dtype_params)
 def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
@@ -31,6 +31,8 @@ def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
 
     if work_group_size == "max":
         sub_group_size = min(device.sub_group_sizes)
+    elif work_group_size == 1:
+        sub_group_size = 1
     else:
         sub_group_size = work_group_size // 2
 
@@ -48,7 +50,7 @@ def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
     assert_allclose(expected_result, actual_result)
 
 
-@pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
+@pytest.mark.parametrize("work_group_size", [1, 2, 4, 8, "max"])
 @pytest.mark.parametrize("length, expected_result", [(4, 6), (5, 10)])
 @pytest.mark.parametrize("dtype", float_dtype_params)
 def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):

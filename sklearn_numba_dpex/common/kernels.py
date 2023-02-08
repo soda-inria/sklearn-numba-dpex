@@ -292,8 +292,8 @@ def make_sum_reduction_2d_kernel(
         )
 
     # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
-    if math.prod(work_group_shape) == 1:
-        raise NotImplementedError("work_group_size==1 is not supported.")
+    # if math.prod(work_group_shape) == 1:
+    #     raise NotImplementedError("work_group_size==1 is not supported.")
 
     # NB: the shape of the work group is different in each of those two cases. Summing
     # efficiently requires to adapt to very different IO patterns depending on the sum
@@ -590,19 +590,26 @@ def _prepare_sum_reduction_2d_axis0(
         )
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
+    _is_cpu = device.has_aspect_cpu
+
     (
         work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis0_kernel(
-        n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
+        n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype, _is_cpu
     )
 
     if fused_elementwise_func is None:
         partial_sum_reduction_nofunc = partial_sum_reduction
     else:
         *_, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
-            n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
+            n_cols,
+            work_group_size,
+            sub_group_size,
+            fused_elementwise_func_,
+            dtype,
+            _is_cpu,
         )
 
     get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, n_cols)
@@ -622,7 +629,7 @@ def _prepare_sum_reduction_2d_axis0(
 
 
 def _make_partial_sum_reduction_2d_axis0_kernel(
-    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype
+    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype, _is_cpu
 ):
     """When axis=0, each work group performs a local reduction on axis 0 in a window of
     size `(sub_group_size_,work_group_size // sub_group_size)`."""
@@ -705,7 +712,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # position of the window in the grid of windows, and by the local position of
         # the work item in the 2D index):
         col_idx = (
-            dpex.get_group_id(one_idx) * sub_group_size + local_col_idx
+            (dpex.get_group_id(one_idx) * sub_group_size) + local_col_idx
             )
 
         # We must be careful to not read items outside of the array !
@@ -731,13 +738,19 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # a similar memory access pattern than seen at the previous step.
         n_active_sub_groups = n_sub_groups_per_work_group
         for i in range(n_local_iterations):
+
             # At each iteration, half of the remaining work items with the highest id
             # are discarded.
             n_active_sub_groups = n_active_sub_groups // two_as_a_long
             work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
             if (
                 (local_row_idx < n_active_sub_groups) and
-                (col_idx < n_cols) and
+                # HACK: this condition save some memory access and was added thinking
+                # it might be good for performance. However on CPU it causes wrong
+                # results in some tests.
+                # TODO: create a minimal reproducer and report to `numba_dpex`. Remove
+                # the hack once it is fixed.
+                (_is_cpu or (col_idx < n_cols)) and
                 (work_item_row_idx < sum_axis_size)
             ):
                 local_values[local_row_idx, local_col_idx] += (
