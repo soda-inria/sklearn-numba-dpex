@@ -468,9 +468,11 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         dtype=compute_dtype,
     )
 
+    elementwise_divide_by_n_samples_fn = _divide_by(compute_dtype(n_samples))
+
     divide_by_n_samples_kernel = make_apply_elementwise_func(
         (n_features,),
-        _divide_by(compute_dtype(n_samples)),
+        elementwise_divide_by_n_samples_fn,
         max_work_group_size,
         compute_dtype,
     )

@@ -130,8 +130,10 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
+    n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
+
     global_size = (
-        math.ceil(math.ceil(n_samples / window_n_centroids) / centroids_window_height)
+        math.ceil(n_windows_for_sample / centroids_window_height)
         * centroids_window_height,
         window_n_centroids,
     )

@@ -234,8 +234,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
+    n_windows_for_samples = math.ceil(n_samples / window_n_candidates)
+
     global_size = (
-        math.ceil(math.ceil(n_samples / window_n_candidates) / candidates_window_height)
+        math.ceil(n_windows_for_samples / candidates_window_height)
         * candidates_window_height,
         window_n_candidates,
     )

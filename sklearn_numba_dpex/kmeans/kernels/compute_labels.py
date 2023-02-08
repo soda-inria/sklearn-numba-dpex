@@ -170,9 +170,12 @@ def make_label_assignment_fixed_window_kernel(
 
         assignments_idx[sample_idx] = min_idx
 
+    n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
+
     global_size = (
-        math.ceil(math.ceil(n_samples / window_n_centroids) / centroids_window_height)
+        math.ceil(n_windows_for_sample / centroids_window_height)
         * centroids_window_height,
         window_n_centroids,
     )
+
     return assignment[global_size, work_group_shape]
