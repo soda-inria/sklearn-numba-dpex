@@ -28,71 +28,85 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
 
 
 @pytest.mark.parametrize(
-    "array_constr",
-    [np.asarray, dpt.asarray, dpnp.asarray],
-    ids=["numpy", "dpctl", "dpnp"],
+    "array_constr,test_attributes_auto_convert",
+    [
+        (np.asarray, False),
+        (dpt.asarray, False),
+        (dpnp.asarray, False),
+        (dpt.asarray, True),
+    ],
+    ids=["numpy", "dpctl", "dpnp", "dpctl+convert"],
 )
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_kmeans_same_results(dtype, array_constr):
+def test_kmeans_same_results(dtype, array_constr, test_attributes_auto_convert):
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X = X.astype(dtype)
     X_array = array_constr(X, dtype=dtype)
 
-    kmeans_vanilla = KMeans(
+    kmeans_truth = KMeans(
         random_state=random_seed, algorithm="lloyd", max_iter=2, n_init=2, init="random"
     )
-    kmeans_engine = clone(kmeans_vanilla)
+    kmeans_engine = clone(kmeans_truth)
 
-    # Fit a reference model with the default scikit-learn engine:
-    kmeans_vanilla.fit(X)
+    if test_attributes_auto_convert:
+        vanilla_engine = "sklearn_numba_dpex"
+        attribute_conversion = "sklearn_types"
+        X_vanilla = X_array
+    else:
+        vanilla_engine = attribute_conversion = None
+        X_vanilla = X
+    with config_context(
+        engine_provider=vanilla_engine, engine_attributes=attribute_conversion
+    ):
+        kmeans_truth.fit(X_vanilla)
 
     with config_context(engine_provider="sklearn_numba_dpex"):
         kmeans_engine.fit(X_array)
 
     # ensure same results
-    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_array_equal(kmeans_truth.labels_, asnumpy(kmeans_engine.labels_))
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+        kmeans_truth.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
     )
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+    assert_allclose(kmeans_truth.inertia_, kmeans_engine.inertia_)
 
     # test fit_predict
-    y_labels = kmeans_vanilla.fit_predict(X)
+    y_labels = kmeans_truth.fit_predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.fit_predict(X_array)
     assert_array_equal(y_labels, asnumpy(y_labels_engine))
-    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_array_equal(kmeans_truth.labels_, asnumpy(kmeans_engine.labels_))
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+        kmeans_truth.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
     )
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+    assert_allclose(kmeans_truth.inertia_, kmeans_engine.inertia_)
 
     # test fit_transform
-    y_transform = kmeans_vanilla.fit_transform(X)
+    y_transform = kmeans_truth.fit_transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.fit_transform(X_array)
     assert_allclose(y_transform, asnumpy(y_transform_engine))
-    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
+    assert_array_equal(kmeans_truth.labels_, asnumpy(kmeans_engine.labels_))
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+        kmeans_truth.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
     )
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+    assert_allclose(kmeans_truth.inertia_, kmeans_engine.inertia_)
 
     # # test predict method (returns labels)
-    y_labels = kmeans_vanilla.predict(X)
+    y_labels = kmeans_truth.predict(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_labels_engine = kmeans_engine.predict(X_array)
     assert_array_equal(y_labels, asnumpy(y_labels_engine))
 
     # test score method (returns negative inertia for each sample)
-    y_scores = kmeans_vanilla.score(X)
+    y_scores = kmeans_truth.score(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_scores_engine = kmeans_engine.score(X_array)
     assert_allclose(y_scores, y_scores_engine)
 
     # test transform method (returns euclidean distances)
-    y_transform = kmeans_vanilla.transform(X)
+    y_transform = kmeans_truth.transform(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         y_transform_engine = kmeans_engine.transform(X_array)
     assert_allclose(y_transform, asnumpy(y_transform_engine))
@@ -194,25 +208,25 @@ def test_relocate_empty_clusters(dtype):
     # With this initialization, all points will be assigned to the first center
     init_centers = np.array([-10.0, -10.0, -10.0]).reshape(-1, 1)
 
-    kmeans_vanilla = KMeans(
+    kmeans_truth = KMeans(
         n_clusters=3, n_init=1, max_iter=1, init=init_centers, algorithm="lloyd"
     )
-    kmeans_engine = clone(kmeans_vanilla)
+    kmeans_engine = clone(kmeans_truth)
 
-    kmeans_vanilla.fit(X)
+    kmeans_truth.fit(X)
     with config_context(engine_provider="sklearn_numba_dpex"):
         kmeans_engine.fit(X)
 
     expected_n_iter = 1
     expected_labels = [0, 0, 0, 0, 0, 0, 0, 2, 2, 1]
-    assert kmeans_vanilla.n_iter_ == expected_n_iter
+    assert kmeans_truth.n_iter_ == expected_n_iter
     assert kmeans_engine.n_iter_ == expected_n_iter
-    assert_array_equal(kmeans_vanilla.labels_, asnumpy(kmeans_engine.labels_))
-    assert_array_equal(kmeans_vanilla.labels_, expected_labels)
+    assert_array_equal(kmeans_truth.labels_, asnumpy(kmeans_engine.labels_))
+    assert_array_equal(kmeans_truth.labels_, expected_labels)
     assert_allclose(
-        kmeans_vanilla.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
+        kmeans_truth.cluster_centers_, asnumpy(kmeans_engine.cluster_centers_)
     )
-    assert_allclose(kmeans_vanilla.inertia_, kmeans_engine.inertia_)
+    assert_allclose(kmeans_truth.inertia_, kmeans_engine.inertia_)
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
