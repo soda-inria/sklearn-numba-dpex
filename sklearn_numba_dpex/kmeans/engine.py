@@ -7,6 +7,7 @@ import dpctl
 import dpctl.tensor as dpt
 import dpnp
 import numpy as np
+import scipy.sparse as sp
 import sklearn
 import sklearn.utils.validation as sklearn_validation
 from sklearn.cluster._kmeans import KMeansCythonEngine
@@ -105,15 +106,24 @@ class KMeansEngine(KMeansCythonEngine):
             )
         self._is_in_testing_mode = _is_in_testing_mode == "1"
 
+    def accepts(self, X, y, sample_weight):
+
+        if (algorithm := self.estimator.algorithm) not in ("lloyd", "auto", "full"):
+            if self._is_in_testing_mode:
+                raise NotSupportedByEngineError(
+                    "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
+                    f" algorithm, {algorithm} is not supported."
+                )
+            else:
+                return False
+
+        if sp.issparse(X):
+            return self._is_in_testing_mode
+
+        return True
+
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
-
-        algorithm = estimator.algorithm
-        if algorithm not in ("lloyd", "auto", "full"):
-            raise NotSupportedByEngineError(
-                "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
-                f" algorithm, {algorithm} is not supported."
-            )
 
         X = self._validate_data(X)
         estimator._check_params_vs_input(X)
@@ -220,9 +230,9 @@ class KMeansEngine(KMeansCythonEngine):
             return super().is_same_clustering(labels, best_labels, n_clusters)
         return is_same_clustering(labels, best_labels, n_clusters)
 
-    def get_nb_distinct_clusters(self, best_labels):
+    def count_distinct_clusters(self, best_labels):
         if self._is_in_testing_mode:
-            return super().get_nb_distinct_clusters(best_labels)
+            return super().count_distinct_clusters(best_labels)
         return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
     def prepare_prediction(self, X, sample_weight):

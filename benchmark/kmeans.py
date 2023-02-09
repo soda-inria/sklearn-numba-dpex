@@ -167,7 +167,6 @@ if __name__ == "__main__":
     from sklearn.preprocessing import MinMaxScaler
 
     from sklearn_numba_dpex.testing import override_attr_context
-    import sklearn_numba_dpex.kmeans.engine as skdpex_kmeans_engine_module
     from sklearn_numba_dpex.kmeans.engine import KMeansEngine
 
     # TODO: expose CLI args.
@@ -228,22 +227,16 @@ if __name__ == "__main__":
     try:
         from sklearnex import config_context as sklearnex_config_context
         from ext_helpers.daal4py import DAAL4PYEngine
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         warnings.warn(
             "scikit-learn-intelex can't be found. Benchmark will be skipped.",
             RuntimeWarning,
         )
     else:
-        with override_attr_context(
-            skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine
-        ), sklearnex_config_context(target_offload="cpu"):
-            kmeans_timer.timeit(
-                name="daal4py lloyd CPU", engine_provider="sklearn_numba_dpex"
-            )
+        with sklearnex_config_context(target_offload="cpu"):
+            kmeans_timer.timeit(name="daal4py lloyd CPU", engine_provider=DAAL4PYEngine)
 
-        with override_attr_context(
-            skdpex_kmeans_engine_module, KMeansEngine=DAAL4PYEngine
-        ), sklearnex_config_context(target_offload="gpu"):
+        with sklearnex_config_context(target_offload="gpu"):
             kmeans_timer.timeit(
                 name="daal4py lloyd GPU",
                 engine_provider="sklearn_numba_dpex",
@@ -252,26 +245,22 @@ if __name__ == "__main__":
 
     try:
         from ext_helpers.kmeans_dpcpp import KMeansDPCPPEngine
-    except ImportError:
+    except (ModuleNotFoundError, ImportError):
         warnings.warn(
             "kmeans_dpcpp can't be found. Benchmark will be skipped.", RuntimeWarning
         )
     else:
-        with override_attr_context(
-            skdpex_kmeans_engine_module, KMeansEngine=KMeansDPCPPEngine
-        ), override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="cpu")):
+        with override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="cpu")):
             kmeans_timer.timeit(
                 name="kmeans_dpcpp lloyd CPU",
-                engine_provider="sklearn_numba_dpex",
+                engine_provider=KMeansDPCPPEngine,
                 is_slow=True,
             )
 
-        with override_attr_context(
-            skdpex_kmeans_engine_module, KMeansEngine=KMeansDPCPPEngine
-        ), override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="gpu")):
+        with override_attr_context(KMeansDPCPPEngine, _CONFIG=dict(device="gpu")):
             kmeans_timer.timeit(
                 name="kmeans_dpcpp lloyd GPU",
-                engine_provider="sklearn_numba_dpex",
+                engine_provider=KMeansDPCPPEngine,
             )
 
     with override_attr_context(KMeansEngine, _CONFIG=dict(device="cpu")):
