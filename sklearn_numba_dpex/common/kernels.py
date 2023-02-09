@@ -583,15 +583,6 @@ def _prepare_sum_reduction_2d_axis0(
         check_power_of_2(n_sub_groups_per_work_group)
 
     else:
-        # HACK: this kernel unexpectedly mis-behave when work group has size >= 8 on
-        # CPU, so we force low group sizes.
-        work_group_size = sub_group_size = min(device.sub_group_sizes)
-        # TODO: there seem to be a bug that causes the last group not to be executed
-        # for some group sizes. The kernel for `sum(axis=1)` is very similar
-        # and does not show this unexpected behavior, so it suggets a bug in the JIT.
-        # Find a reproducer and submit it in the issue tracker. Or is it a misuse of
-        # group sizes for CPU ?
-
         # Round work_group_size to the maximum smaller power-of-two multiple of
         # `sub_group_size`
         n_sub_groups_per_work_group = get_maximum_power_of_2_smaller_than(
@@ -745,11 +736,12 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             # At each iteration, half of the remaining work items with the highest id
             # are discarded.
             n_active_sub_groups = n_active_sub_groups // two_as_a_long
-            work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
+            # work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
             if (
-                (local_row_idx < n_active_sub_groups) and
-                (col_idx < n_cols) and
-                (work_item_row_idx < sum_axis_size)
+                (local_row_idx < n_active_sub_groups)
+                # and
+                # (col_idx < n_cols) and
+                # (work_item_row_idx < sum_axis_size)
             ):
                 local_values[local_row_idx, local_col_idx] += (
                     local_values[local_row_idx + n_active_sub_groups, local_col_idx]
