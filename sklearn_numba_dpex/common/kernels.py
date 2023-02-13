@@ -405,14 +405,9 @@ def _prepare_sum_reduction_2d_axis1(
         result_sum_axis_size * work_group_size,
     )
 
-    return (
-        work_group_shape,
-        (
-            (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-            reduction_block_size,
-        ),
-        (get_result_shape, get_global_size),
-    )  # shape_update_fn
+    kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
+    shape_update_fn = (get_result_shape, get_global_size)
+    return (work_group_shape, (kernels, reduction_block_size), shape_update_fn)
 
 
 def _make_partial_sum_reduction_2d_axis1_kernel(
@@ -591,14 +586,12 @@ def _prepare_sum_reduction_2d_axis0(
         n_sub_groups_per_work_group = n_sub_groups_per_work_group
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
-    _is_cpu = device.has_aspect_cpu
-
     (
         work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis0_kernel(
-        n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype, _is_cpu
+        n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
     )
 
     if fused_elementwise_func is None:
@@ -610,7 +603,6 @@ def _prepare_sum_reduction_2d_axis0(
             sub_group_size,
             fused_elementwise_func_,
             dtype,
-            _is_cpu,
         )
 
     get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, n_cols)
@@ -619,18 +611,13 @@ def _prepare_sum_reduction_2d_axis0(
         sub_group_size * math.ceil(n_cols / sub_group_size),
     )
 
-    return (
-        work_group_shape,
-        (
-            (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-            reduction_block_size,
-        ),
-        (get_result_shape, get_global_size),
-    )  # shape_update_fn
+    kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
+    shape_update_fn = (get_result_shape, get_global_size)
+    return (work_group_shape, (kernels, reduction_block_size), shape_update_fn)
 
 
 def _make_partial_sum_reduction_2d_axis0_kernel(
-    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype, _is_cpu
+    n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype
 ):
     """When axis=0, each work group performs a local reduction on axis 0 in a window of
     size `(sub_group_size_,work_group_size // sub_group_size)`."""
@@ -714,7 +701,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # the work item in the 2D index):
         col_idx = (
             (dpex.get_group_id(one_idx) * sub_group_size) + local_col_idx
-            )
+        )
 
         # We must be careful to not read items outside of the array !
         sum_axis_size = summands.shape[zero_idx]
@@ -746,8 +733,8 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
             if (
                 (local_row_idx < n_active_sub_groups) and
-                (_is_cpu or ((col_idx < n_cols) and
-                             (work_item_row_idx < sum_axis_size)))
+                (col_idx < n_cols) and
+                (work_item_row_idx < sum_axis_size)
             ):
                 local_values[local_row_idx, local_col_idx] += (
                     local_values[local_row_idx + n_active_sub_groups, local_col_idx]

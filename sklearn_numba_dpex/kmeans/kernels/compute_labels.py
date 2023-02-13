@@ -30,7 +30,6 @@ def make_label_assignment_fixed_window_kernel(
         required_memory_constant=window_n_centroids * dtype_itemsize,
     )
 
-    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
     if work_group_size != input_work_group_size:
@@ -70,8 +69,6 @@ def make_label_assignment_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, centroids_window_width)
-
     inf = dtype(math.inf)
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
@@ -92,7 +89,7 @@ def make_label_assignment_fixed_window_kernel(
             + local_col_idx
         )
 
-        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
+        centroids_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
         window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )

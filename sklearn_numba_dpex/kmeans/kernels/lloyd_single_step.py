@@ -119,8 +119,8 @@ def make_lloyd_single_step_fixed_window_kernel(
     # information and apply it here.
 
     # NB: for more details about the privatization strategy the following variables
-    # refer too, please read the inline commenting that address it with more details in
-    # the kernel definition.
+    # refer too, please read the inline commenting that address it in the kernel
+    # definition.
 
     # Ensure that the memory allocated for privatization will not saturate the global
     # memory cache size. For this purpose we limit the number of private copies to
@@ -130,7 +130,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     ) // n_cluster_bytes
 
     # Each set of `sub_group_size` consecutive work items is assigned one private
-    # copy, and several such set can be assigned to the same private copy. Thus, at
+    # copy, and several such sets can be assigned to the same private copy. Thus, at
     # most `n_subgroups` private copies are needed.
     # Moreover, collisions can only occur between sub groups that execute concurrently.
     # Thus, at most `nb_concurrent_sub_groups` private copies are needed.
@@ -199,7 +199,14 @@ def make_lloyd_single_step_fixed_window_kernel(
         sub_group_idx = dpex.get_global_id(zero_idx)
         local_row_idx = dpex.get_local_id(zero_idx)
         local_col_idx = dpex.get_local_id(one_idx)
+
+        # Let's start by remapping the 2D grid of work items to a 1D grid that reflect
+        # how contiguous work items address one contiguoue sample_idx:
         sample_idx = (sub_group_idx * sub_group_size) + local_col_idx
+        # NB: The 2D work group shape makes it easier (and less expensive) to map
+        # the local memory arrays to the array of centroids. Do not get confused by the
+        # fact that this shape is unrelated to how the kernel is parallelized on the
+        # samples, where each work item applies to one sample.
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
