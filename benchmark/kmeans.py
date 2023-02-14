@@ -25,16 +25,16 @@ class KMeansLloydTimeit:
         Number of iterations to run in each test.
 
     skip_cpu: bool
-        If true, will skip the timeit calls for cpu implementations. Defaults to false.
+        If True, will skip the timeit calls for cpu implementations. Defaults to False.
 
     skip_gpu: bool
-        If true, will skip the timeit calls for gpu implementations. Defaults to false.
+        If True, will skip the timeit calls for gpu implementations. Defaults to False.
 
     skip_slow: bool
-        If true, will skip the timeit calls that are marked as slow. Defaults to false.
+        If True, will skip the timeit calls that are marked as slow. Defaults to False.
 
     run_consistency_checks : bool
-        If true, will check if all candidates on the test bench return the same
+        If True, will check if all candidates on the test bench return the same
         results.
     """
 
