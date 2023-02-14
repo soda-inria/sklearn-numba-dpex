@@ -160,7 +160,7 @@ conda create --yes --name sklearn-dev \
                    "numpy==$DPEX_NUMPY_VERSION" \
                    scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
-git clone https://github.com/ogrisel/scikit-learn -b "feature/engine-api"
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api"
 cd scikit-learn
 git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 python setup.py bdist_wheel

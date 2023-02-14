@@ -73,8 +73,14 @@ class KMeansEngine(KMeansCythonEngine):
     # in the benchmark script.
     # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG: Dict[str, Any] = dict()
-
+    
     engine_name = "kmeans"
+
+    @staticmethod
+    def convert_to_sklearn_types(name, value):
+        if name in ["cluster_centers_", "labels_"]:
+            return dpt.asnumpy(value)
+        return value
 
     def __init__(self, estimator):
         self.device = self._CONFIG.get("device", _DeviceUnset)
