@@ -13,6 +13,8 @@ from sklearn.cluster._kmeans import KMeansCythonEngine
 # register a distinct entry point that can load a distinct engine outside of setup.py
 # (impossible ?)
 class DAAL4PYEngine(KMeansCythonEngine):
+    engine_name = "kmeans"
+
     def prepare_fit(self, X, y=None, sample_weight=None):
         if sample_weight is not None and any(sample_weight != sample_weight[0]):
             raise NotSupportedByEngineError(
