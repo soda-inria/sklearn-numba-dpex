@@ -73,7 +73,7 @@ class KMeansEngine(KMeansCythonEngine):
     # in the benchmark script.
     # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG: Dict[str, Any] = dict()
-    
+
     engine_name = "kmeans"
 
     @staticmethod
