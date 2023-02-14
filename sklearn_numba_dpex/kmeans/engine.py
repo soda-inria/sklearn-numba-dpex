@@ -74,6 +74,8 @@ class KMeansEngine(KMeansCythonEngine):
     # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG: Dict[str, Any] = dict()
 
+    engine_name = "kmeans"
+
     @staticmethod
     def convert_to_sklearn_types(name, value):
         if name in ["cluster_centers_", "labels_"]:
