@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-1299e21c883616aedd48495f77429f3d235cfaa4
+ARG BASE_IMAGE_VERSION=latest-3a7f783934955c5caaf61d41cce613804100c72a
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -81,18 +81,18 @@ ARG LLVM_SPIRV_INSTALL_DIR=/opt/llvm-spirv
 # Bump it if necessary.
 
 ARG CMAKE_VERSION=3.25
-ARG CMAKE_VERSION_BUILD=1
+ARG CMAKE_VERSION_BUILD=2
 
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.1dev1
+ARG DPCTL_GIT_BRANCH=0.14.1dev2
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
 ARG DPNP_GIT_BRANCH=0.11.0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.19.0
+ARG NUMBA_DPEX_GIT_BRANCH=0.20.0dev3
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the

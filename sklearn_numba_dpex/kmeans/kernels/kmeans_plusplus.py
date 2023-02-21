@@ -195,7 +195,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     candidates_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
                 accumulate_sq_distances(
                     sample_idx,
@@ -209,7 +209,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
                 first_feature_idx += candidates_window_height
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
             _save_sq_distances(
                 sample_idx,
@@ -223,7 +223,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
             first_candidate_idx += window_n_candidates
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
