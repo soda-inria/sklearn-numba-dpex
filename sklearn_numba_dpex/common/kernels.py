@@ -112,6 +112,36 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
     return broadcast_division[global_size, work_group_size]
 
 
+def make_check_all_equal_kernel(shape, work_group_size):
+    n_items = math.prod(shape)
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
+    zero_idx = np.uint32(0)
+    one_idx = np.uint32(1)
+
+    @dpex.kernel
+    def check_all_equal_kernel(left, right, all_equal):
+        item_idx = dpex.get_global_id(0)
+
+        if item_idx >= n_items:
+            return
+
+        current_all_equal_value = all_equal[zero_idx]
+
+        if current_all_equal_value == zero_idx:
+            return
+
+        if left[item_idx] != right[item_idx]:
+            all_equal[zero_idx] = zero_idx
+
+    def check_all_equal(left, right, all_equal):
+        left = dpt.reshape(left, (-1,))
+        right = dpt.reshape(right, (-1,))
+        all_equal[zero_idx] = one_idx
+        check_all_equal_kernel[global_size, work_group_size](left, right, all_equal)
+
+    return check_all_equal
+
+
 @lru_cache
 def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size, dtype):
     """
@@ -434,6 +464,9 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     reduction_block_size = 2 * work_group_size
     work_group_shape = (1, work_group_size)
 
+    local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+    global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+
     @dpex.kernel
     # fmt: off
     def partial_sum_reduction(
@@ -499,18 +532,16 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
         local_values = dpex.local.array(work_group_size, dtype=dtype)
 
-        # We must be careful to not read items outside of the array !
-        if augend_idx >= sum_axis_size:
-            local_values[local_work_id] = zero
-        elif addend_idx >= sum_axis_size:
-            local_values[local_work_id] = (
-                fused_elementwise_func(summands[row_idx, augend_idx])
-            )
-        else:
-            local_values[local_work_id] = (
-                fused_elementwise_func(summands[row_idx, augend_idx]) +
-                fused_elementwise_func(summands[row_idx, addend_idx])
-            )
+        _prepare_local_memory(
+            local_work_id,
+            row_idx,
+            augend_idx,
+            addend_idx,
+            sum_axis_size,
+            summands,
+            # OUT
+            local_values
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -525,26 +556,62 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             # are discarded.
             n_active_work_items = n_active_work_items // two_as_a_long
             work_item_idx = first_value_idx + local_work_id + n_active_work_items
-            if (
-                (local_work_id < n_active_work_items) and
-                (work_item_idx < sum_axis_size)
-            ):
-                # Yet again, the remaining work items choose two values to sum such
-                # that contiguous work items read and write into contiguous slots of
-                # `local_values`.
-                local_values[local_work_id] += (
-                    local_values[local_work_id + n_active_work_items]
-                )
+
+            # Yet again, the remaining work items choose two values to sum such that
+            # contiguous work items read and write into contiguous slots of
+            # `local_values`.
+            local_sum_and_set_items_if(
+                (
+                    (local_work_id < n_active_work_items) and
+                    (work_item_idx < sum_axis_size)
+                ),
+                local_work_id,
+                local_work_id,
+                local_work_id + n_active_work_items,
+                local_values,
+                # OUT
+                local_values
+            )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # At this point local_values[0] + local_values[1] is equal to the sum of all
         # elements in summands that have been covered by the work group, we write it
         # into global memory
-        if local_work_id == zero_idx:
-            result[row_idx, local_work_group_id_in_row] = (
-                local_values[zero_idx] + local_values[one_idx]
+        global_sum_and_set_items_if(
+            local_work_id == zero_idx,
+            (row_idx, local_work_group_id_in_row),
+            zero_idx,
+            one_idx,
+            local_values,
+            # OUT
+            result
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_work_id,          # PARAM
+        row_idx,                # PARAM
+        augend_idx,             # PARAM
+        addend_idx,             # PARAM
+        sum_axis_size,          # PARAM
+        summands,               # IN
+        local_values,           # OUT
+    ):
+        # fmt: on
+        # We must be careful to not read items outside of the array !
+        if augend_idx >= sum_axis_size:
+            local_values[local_work_id] = zero
+        elif addend_idx >= sum_axis_size:
+            local_values[local_work_id] = fused_elementwise_func(
+                summands[row_idx, augend_idx]
             )
+        else:
+            local_values[local_work_id] = fused_elementwise_func(
+                summands[row_idx, augend_idx]
+            ) + fused_elementwise_func(summands[row_idx, addend_idx])
 
     return work_group_shape, reduction_block_size, partial_sum_reduction
 
@@ -633,6 +700,9 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     reduction_block_size = 2 * n_sub_groups_per_work_group
     work_group_shape = (n_sub_groups_per_work_group, sub_group_size)
 
+    local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+    global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
     @dpex.kernel
@@ -703,19 +773,18 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             (dpex.get_group_id(one_idx) * sub_group_size) + local_col_idx
         )
 
-        # We must be careful to not read items outside of the array !
         sum_axis_size = summands.shape[zero_idx]
-        if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
-            local_values[local_row_idx, local_col_idx] = zero
-        elif addend_row_idx >= sum_axis_size:
-            local_values[local_row_idx, local_col_idx] = (
-                fused_elementwise_func(summands[augend_row_idx, col_idx])
-                )
-        else:
-            local_values[local_row_idx, local_col_idx] = (
-                fused_elementwise_func(summands[augend_row_idx, col_idx]) +
-                fused_elementwise_func(summands[addend_row_idx, col_idx])
-                )
+        _prepare_local_memory(
+            local_row_idx,
+            local_col_idx,
+            col_idx,
+            augend_row_idx,
+            addend_row_idx,
+            sum_axis_size,
+            summands,
+            # OUT
+            local_values
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -731,27 +800,84 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             # are discarded.
             n_active_sub_groups = n_active_sub_groups // two_as_a_long
             work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
-            if (
-                (local_row_idx < n_active_sub_groups) and
-                (col_idx < n_cols) and
-                (work_item_row_idx < sum_axis_size)
-            ):
-                local_values[local_row_idx, local_col_idx] += (
-                    local_values[local_row_idx + n_active_sub_groups, local_col_idx]
-                )
+
+            local_sum_and_set_items_if(
+                (
+                    (local_row_idx < n_active_sub_groups) and
+                    (col_idx < n_cols) and
+                    (work_item_row_idx < sum_axis_size)
+                ),
+                (local_row_idx, local_col_idx),
+                (local_row_idx, local_col_idx),
+                (local_row_idx + n_active_sub_groups, local_col_idx),
+                local_values,
+                # OUT
+                local_values
+            )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # At this point local_values[0, :] + local_values[1, :] is equal to the sum of
         # all elements in summands that have been covered by the work group, we write
         # it into global memory
-        if (local_row_idx == zero_idx) and (col_idx < n_cols):
-            result[local_block_id_in_col, col_idx] = (
-                local_values[zero_idx, local_col_idx] +
-                local_values[one_idx, local_col_idx]
+        global_sum_and_set_items_if(
+            (local_row_idx == zero_idx) and (col_idx < n_cols),
+            (local_block_id_in_col, col_idx),
+            (zero_idx, local_col_idx),
+            (one_idx, local_col_idx),
+            local_values,
+            result
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_row_idx,      # PARAM
+        local_col_idx,      # PARAM
+        col_idx,            # PARAM
+        augend_row_idx,     # PARAM
+        addend_row_idx,     # PARAM
+        sum_axis_size,      # PARAM
+        summands,           # IN
+        local_values,    # OUT
+    ):
+        # fmt: on
+        # We must be careful to not read items outside of the array !
+        sum_axis_size = summands.shape[zero_idx]
+        if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
+            local_values[local_row_idx, local_col_idx] = zero
+        elif addend_row_idx >= sum_axis_size:
+            local_values[local_row_idx, local_col_idx] = fused_elementwise_func(
+                summands[augend_row_idx, col_idx]
             )
+        else:
+            local_values[local_row_idx, local_col_idx] = fused_elementwise_func(
+                summands[augend_row_idx, col_idx]
+            ) + fused_elementwise_func(summands[addend_row_idx, col_idx])
 
     return work_group_shape, reduction_block_size, partial_sum_reduction
+
+
+# HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+def _make_sum_and_set_items_if_kernel_func():
+    @dpex.func
+    # fmt: off
+    def set_sum_of_items_kernel_func(
+            condition,          # PARAM
+            result_idx,         # PARAM
+            addend_idx,         # PARAM
+            augend_idx,         # PARAN
+            summands,           # IN
+            result              # OUT
+            ):
+        # fmt: on
+        if not condition:
+            return
+
+        result[result_idx] = summands[addend_idx] + summands[augend_idx]
+
+    return set_sum_of_items_kernel_func
 
 
 @lru_cache
@@ -805,55 +931,127 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_argmin = dpex.local.array(work_group_size, dtype=local_argmin_dtype)
         local_values = dpex.local.array(work_group_size, dtype=dtype)
 
-        first_value_idx = group_id * work_group_size * two_as_a_long
-        x_idx = first_value_idx + local_work_id
-        y_idx = first_value_idx + work_group_size + local_work_id
-
-        if x_idx >= current_size:
-            local_values[local_work_id] = inf
-        else:
-            if has_previous_result:
-                x_idx = previous_result[x_idx]
-
-            if y_idx >= current_size:
-                local_argmin[local_work_id] = x_idx
-                local_values[local_work_id] = values[x_idx]
-
-            else:
-                if has_previous_result:
-                    y_idx = previous_result[y_idx]
-
-                x = values[x_idx]
-                y = values[y_idx]
-                if x < y or (x == y and x_idx < y_idx):
-                    local_argmin[local_work_id] = x_idx
-                    local_values[local_work_id] = x
-                else:
-                    local_argmin[local_work_id] = y_idx
-                    local_values[local_work_id] = y
+        _prepare_local_memory(
+            local_work_id,
+            group_id,
+            current_size,
+            has_previous_result,
+            previous_result,
+            values,
+            # OUT
+            local_argmin,
+            local_values,
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         n_active_work_items = work_group_size
         for i in range(n_local_iterations):
             n_active_work_items = n_active_work_items // two_as_a_long
-            if local_work_id < n_active_work_items:
-                local_x_idx = local_work_id
-                local_y_idx = local_work_id + n_active_work_items
-
-                x = local_values[local_x_idx]
-                y = local_values[local_y_idx]
-
-                if x > y:
-                    local_values[local_x_idx] = y
-                    local_argmin[local_x_idx] = local_argmin[local_y_idx]
-
+            _local_iteration(
+                local_work_id,
+                n_active_work_items,
+                # OUT
+                local_values,
+                local_argmin
+            )
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        if first_work_id:
-            if local_values[zero_idx] <= local_values[one_idx]:
-                argmin_indices[group_id] = local_argmin[zero_idx]
-            else:
-                argmin_indices[group_id] = local_argmin[one_idx]
+        _register_result(
+            first_work_id,
+            group_id,
+            local_argmin,
+            local_values,
+            # OUT
+            argmin_indices
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_work_id,              # PARAM
+        group_id,                   # PARAM
+        current_size,               # PARAM
+        has_previous_result,        # PARAM
+        previous_result,            # IN
+        values,                     # IN
+        local_argmin,               # OUT
+        local_values,               # OUT
+    ):
+        # fmt: on
+        first_value_idx = group_id * work_group_size * two_as_a_long
+        x_idx = first_value_idx + local_work_id
+
+        if x_idx >= current_size:
+            local_values[local_work_id] = inf
+            return
+
+        if has_previous_result:
+            x_idx = previous_result[x_idx]
+
+        y_idx = first_value_idx + work_group_size + local_work_id
+
+        if y_idx >= current_size:
+            local_argmin[local_work_id] = x_idx
+            local_values[local_work_id] = values[x_idx]
+            return
+
+        if has_previous_result:
+            y_idx = previous_result[y_idx]
+
+        x = values[x_idx]
+        y = values[y_idx]
+        if x < y or (x == y and x_idx < y_idx):
+            local_argmin[local_work_id] = x_idx
+            local_values[local_work_id] = x
+            return
+
+        local_argmin[local_work_id] = y_idx
+        local_values[local_work_id] = y
+
+    # HACK 906
+    @dpex.func
+    # fmt: off
+    def _local_iteration(
+        local_work_id,              # PARAM
+        n_active_work_items,        # PARAM
+        local_values,               # INOUT
+        local_argmin                # OUT
+    ):
+        # fmt: on
+        if local_work_id >= n_active_work_items:
+            return
+
+        local_x_idx = local_work_id
+        local_y_idx = local_work_id + n_active_work_items
+
+        x = local_values[local_x_idx]
+        y = local_values[local_y_idx]
+
+        if x <= y:
+            return
+
+        local_values[local_x_idx] = y
+        local_argmin[local_x_idx] = local_argmin[local_y_idx]
+
+    # HACK 906
+    @dpex.func
+    # fmt: off
+    def _register_result(
+        first_work_id,          # PARAM
+        group_id,               # PARAM
+        local_argmin,           # IN
+        local_values,           # IN
+        argmin_indices          # OUT
+    ):
+
+        if not first_work_id:
+            return
+
+        if local_values[zero_idx] <= local_values[one_idx]:
+            argmin_indices[group_id] = local_argmin[zero_idx]
+        else:
+            argmin_indices[group_id] = local_argmin[one_idx]
 
     # As many partial reductions as necessary are chained until only one element
     # remains.argmin_indices

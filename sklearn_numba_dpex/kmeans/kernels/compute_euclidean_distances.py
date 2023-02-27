@@ -118,17 +118,38 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            if sample_idx < n_samples:
-                for i in range(window_n_centroids):
-                    centroid_idx = first_centroid_idx + i
-                    if centroid_idx < n_clusters:
-                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = (
-                            math.sqrt(sq_distances[i])
-                        )
+            _save_distance(
+                sample_idx,
+                first_centroid_idx,
+                euclidean_distances_t,
+                # OUT
+                sq_distances
+            )
 
             first_centroid_idx += window_n_centroids
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    # fmt: off
+    def _save_distance(
+        sample_idx,                 # PARAM
+        first_centroid_idx,         # PARAM
+        euclidean_distances_t,      # IN
+        sq_distances                # OUT
+    ):
+        # fmt: on
+        if sample_idx >= n_samples:
+            return
+
+        for i in range(window_n_centroids):
+            centroid_idx = first_centroid_idx + i
+
+            if centroid_idx < n_clusters:
+                euclidean_distances_t[centroid_idx, sample_idx] = (
+                    math.sqrt(sq_distances[i])
+                )
 
     n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
 

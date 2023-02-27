@@ -161,11 +161,20 @@ def make_label_assignment_fixed_window_kernel(
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        # No update step, only store min_idx in the output array
-        if sample_idx >= n_samples:
-            return
+        _setitem_if(
+            sample_idx < n_samples,
+            sample_idx,
+            min_idx,
+            # OUT
+            assignments_idx,
+        )
 
-        assignments_idx[sample_idx] = min_idx
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    def _setitem_if(condition, index, value, array):
+        if condition:
+            array[index] = value
+        return condition
 
     n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
 

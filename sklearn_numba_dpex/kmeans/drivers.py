@@ -18,6 +18,7 @@ from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
+    make_check_all_equal_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_kernel,
     make_sum_reduction_2d_kernel,
@@ -153,6 +154,10 @@ def lloyd(
         dtype=compute_dtype,
     )
 
+    check_all_equal_kernel = make_check_all_equal_kernel(
+        (n_samples,), max_work_group_size
+    )
+
     # Allocate the necessary memory in the device global memory
     new_centroids_t = dpt.empty_like(centroids_t, device=device)
     centroids_half_l2_norm = dpt.empty(n_clusters, dtype=compute_dtype, device=device)
@@ -163,7 +168,18 @@ def lloyd(
     sq_dist_to_nearest_centroid = per_sample_inertia = dpt.empty(
         n_samples, dtype=compute_dtype, device=device
     )
-    assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
+
+    assignments_idx_new = dpt.empty(n_samples, dtype=np.uint32, device=device)
+    check_strict_convergence = tol == 0
+    # See the main loop for a more elaborate note about checking "strict convergence"
+    if check_strict_convergence:
+        assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
+        # allocation of one scalar where we store the result of array comparisons
+        check_equal_result = dpt.empty(1, dtype=np.uint32, device=device)
+        strict_convergence = False
+    else:
+        assignments_idx = assignments_idx_new
+
     new_centroids_t_private_copies = dpt.empty(
         (n_centroids_private_copies, n_features, n_clusters),
         dtype=compute_dtype,
@@ -203,7 +219,7 @@ def lloyd(
             centroids_t,
             centroids_half_l2_norm,
             # OUT:
-            assignments_idx,
+            assignments_idx_new,
             new_centroids_t_private_copies,
             cluster_sizes_private_copies,
         )
@@ -226,7 +242,7 @@ def lloyd(
                 X_t,
                 sample_weight,
                 new_centroids_t,
-                assignments_idx,
+                assignments_idx_new,
                 # OUT:
                 per_sample_inertia,
             )
@@ -249,7 +265,7 @@ def lloyd(
                     centroids_t,
                     centroids_half_l2_norm,
                     # OUT:
-                    assignments_idx,
+                    assignments_idx_new,
                 )
 
             # if verbose is True and if sample_weight is uniform, distances to
@@ -262,7 +278,7 @@ def lloyd(
                     X_t,
                     dpt.ones_like(sample_weight),
                     centroids_t,
-                    assignments_idx,
+                    assignments_idx_new,
                     # OUT:
                     sq_dist_to_nearest_centroid,
                 )
@@ -273,7 +289,7 @@ def lloyd(
                 sample_weight,
                 new_centroids_t,
                 cluster_sizes,
-                assignments_idx,
+                assignments_idx_new,
                 empty_clusters_list,
                 sq_dist_to_nearest_centroid,
                 per_sample_inertia,
@@ -282,17 +298,6 @@ def lloyd(
 
         # Change `new_centroids_t` inplace
         broadcast_division_kernel(new_centroids_t, cluster_sizes)
-
-        compute_centroid_shifts_kernel(
-            centroids_t,
-            new_centroids_t,
-            # OUT:
-            centroid_shifts,
-        )
-
-        centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
-        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
-        centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
 
         # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
         # and keep an additional copy of centroids that is updated only if the
@@ -313,14 +318,57 @@ def lloyd(
         # refers. For this reason, this strategy is not compatible with sklearn
         # unit tests, that consider new_centroids_t (the array after the update)
         # to be the best centroids at each iteration.
-
         centroids_t, new_centroids_t = (new_centroids_t, centroids_t)
+
+        # ???: if two successive assignations have been computed equal, it's called
+        # "strict convergence" and means that the algorithm has converged and can't get
+        # better (since same assignments will produce the same centroid updates, which
+        # will produce the same assignments, and so on..). scikit-learn decides to
+        # check for strict convergence at each iteration, but that sounds expensive
+        # since it requires an additional pass on each sample label every time.
+        # Providing the user chooses a sensible value for `tol`, wouldn't the cost of
+        # this check be in general greater than what the benefits ?
+
+        # Following this reasoning, unlike scikit-learn, we choose to enforce this
+        # behavior if and only if `tol == 0`, because in this case, it is easy to see
+        # that lloyd can indeed fail to stop at the right time due to numerical errors.
+        # Moreover, this is enough to pass scikit-learn unit tests. When `tol > 0`, we
+        # rely on the user setting an appropriate tolerance threshold.
+
+        # TODO: open an issue at `scikit-learn` and propose to adopt this behavior
+        # instead ?
+
+        if check_strict_convergence:
+            assignments_idx, assignments_idx_new = (
+                assignments_idx_new,
+                assignments_idx,
+            )
+            check_all_equal_kernel(
+                assignments_idx_new, assignments_idx, check_equal_result
+            )
+            are_assignments_equal, *_ = check_equal_result
+            if are_assignments_equal:
+                strict_convergence = True
+                break
+
+        compute_centroid_shifts_kernel(
+            centroids_t,
+            new_centroids_t,
+            # OUT:
+            centroid_shifts,
+        )
+
+        centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+        centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
 
         n_iteration += 1
 
     if verbose:
         converged_at = n_iteration - 1
-        if centroid_shifts_sum == 0:  # NB: possible if tol = 0
+        if (check_strict_convergence and strict_convergence) or (
+            centroid_shifts_sum == 0  # NB: possible if tol = 0
+        ):
             print(f"Converged at iteration {converged_at}: strict convergence.")
 
         elif centroid_shifts_sum <= tol:
@@ -478,7 +526,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     )
 
     # At the time of writing this code, dpnp does not support functions (like `==`
-    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # operator) that would help computing `X_mean_is_zeroed` in a simpler
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_of_squares_kernel = make_sum_reduction_2d_kernel(
@@ -539,7 +587,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
     # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
-    tol = (dpt.asnumpy(variance)[0] / n_features) * tol
+    tol = (dpt.asnumpy(variance)[0] / (n_features * n_samples)) * tol
 
     # check if sample_weight is uniform
     # At the time of writing this code, dpnp does not support functions (like `==`

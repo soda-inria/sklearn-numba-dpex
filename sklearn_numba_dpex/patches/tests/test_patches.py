@@ -1,5 +1,6 @@
 import subprocess
 
+import dpctl
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
@@ -86,3 +87,82 @@ def test_spirv_fix():
                 kmeans.fit(X_array)
         finally:
             _load_numba_dpex_with_patches()
+
+
+def test_hack_906():
+    """This test will raise when all hacks tagged with HACK 906 can be reverted.
+
+    The hack is used several time in the codebase to work around a bug in the JIT
+    compiler that affects sequences of instructions containing a conditional write
+    operation in an array followed by a barrier.
+
+    For kernels that contain such patterns, the output is sometimes wrong. See
+    https://github.com/IntelPython/numba-dpex/issues/906 for more information and
+    updates on the issue resolution.
+
+    The hack consist in wrapping instructions that are suspected of triggering the
+    bug (basically all write operations in kernels that also contain a barrier) in
+    `dpex.func` device functions.
+
+    This hack makes the code significantly harder to read and should be reverted ASAP.
+    """
+
+    dtype = np.float32
+
+    @dpex.kernel
+    def kernel(result):
+        local_idx = dpex.get_local_id(0)
+        local_values = dpex.local.array((1,), dtype=dtype)
+
+        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+        if local_idx < 1:
+            local_values[0] = 1
+
+        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+        if local_idx < 1:
+            result[0] = 10
+
+    result = dpt.zeros(sh=(1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
+    kernel[32, 32](result)
+
+    rationale = """If this test fails, it means that the bug reported at
+    https://github.com/IntelPython/numba-dpex/issues/906 has been fixed, and all the
+    hacks tags with `# HACK 906` that were used to work around it can now be removed.
+    This test can also be removed.
+    """
+
+    assert dpt.asnumpy(result)[0] != 10, rationale
+
+    # Test that highlight how the hack works
+    @dpex.kernel
+    def kernel(result):
+        local_idx = dpex.get_local_id(0)
+        local_values = dpex.local.array((1,), dtype=dtype)
+
+        _local_setitem_if((local_idx < 1), 0, 1, local_values)
+
+        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+        _global_setitem_if((local_idx < 1), 0, 10, result)
+
+    # HACK: must define twice to work around the bug highlighted in test_regression_fix
+    _local_setitem_if = make_setitem_if_kernel_func()
+    _global_setitem_if = make_setitem_if_kernel_func()
+
+    result = dpt.zeros(sh=(1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
+    kernel[32, 32](result)
+
+    assert dpt.asnumpy(result)[0] == 10
+
+
+# HACK 906
+def make_setitem_if_kernel_func():
+    @dpex.func
+    def _setitem_if(condition, index, value, array):
+        if condition:
+            array[index] = value
+        return condition
+
+    return _setitem_if

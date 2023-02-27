@@ -328,6 +328,33 @@ def make_lloyd_single_step_fixed_window_kernel(
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
 
+        _update_result_data(
+            sample_idx,
+            min_idx,
+            sub_group_idx,
+            X_t,
+            sample_weight,
+            # OUT
+            assignments_idx,
+            cluster_sizes_private_copies,
+            new_centroids_t_private_copies,
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    @dpex.func
+    # fmt: off
+    def _update_result_data(
+        sample_idx,                         # PARAM
+        min_idx,                            # PARAM
+        sub_group_idx,                      # PARAM
+        X_t,                                # IN
+        sample_weight,                      # IN
+        assignments_idx,                    # OUT
+        cluster_sizes_private_copies,       # OUT
+        new_centroids_t_private_copies,     # OUT
+    ):
+        # fmt: on
+
         # NB: this check can't be moved at the top at the kernel, because if a work item
         # exits early with a `return` it will never reach the barriers, thus causing a
         # deadlock. Early returns are only possible when there are no barriers within
@@ -384,6 +411,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 (privatization_idx, feature_idx, min_idx),
                 X_t[feature_idx, sample_idx] * weight,
             )
+
     return (
         n_centroids_private_copies,
         fused_lloyd_single_step[global_size, work_group_shape],
