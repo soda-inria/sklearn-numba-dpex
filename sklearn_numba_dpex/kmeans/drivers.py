@@ -18,7 +18,6 @@ from sklearn_numba_dpex.common.kernels import (
     make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
-    make_check_all_equal_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_kernel,
     make_sum_reduction_2d_kernel,
@@ -69,8 +68,6 @@ def lloyd(
     # further on different hardware.
     centroids_private_copies_max_cache_occupancy = 0.7
 
-    verbose = bool(verbose)
-
     # Create a set of kernels
     (
         n_centroids_private_copies,
@@ -79,7 +76,12 @@ def lloyd(
         n_samples,
         n_features,
         n_clusters,
-        return_assignments=bool(verbose),
+        # NB: the assignments are needed if verbose=True, and for strict convergence
+        # checking. If systematic strict convergence checking is disabled in the future,
+        # if could be set to False when verbose=False (thus marginally improving
+        # performance).
+        return_assignments=True,
+        check_strict_convergence=True,
         sub_group_size=sub_group_size,
         global_mem_cache_size=global_mem_cache_size,
         centroids_private_copies_max_cache_occupancy=centroids_private_copies_max_cache_occupancy,  # noqa
@@ -154,10 +156,6 @@ def lloyd(
         dtype=compute_dtype,
     )
 
-    check_all_equal_kernel = make_check_all_equal_kernel(
-        (n_samples,), max_work_group_size
-    )
-
     # Allocate the necessary memory in the device global memory
     new_centroids_t = dpt.empty_like(centroids_t, device=device)
     centroids_half_l2_norm = dpt.empty(n_clusters, dtype=compute_dtype, device=device)
@@ -169,7 +167,7 @@ def lloyd(
         n_samples, dtype=compute_dtype, device=device
     )
 
-    assignments_idx_new = dpt.empty(n_samples, dtype=np.uint32, device=device)
+    new_assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
     assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
 
     new_centroids_t_private_copies = dpt.empty(
@@ -187,8 +185,10 @@ def lloyd(
     # n_empty_clusters_ is a scalar handled in kernels via a one-element array.
     n_empty_clusters = dpt.empty(1, dtype=np.int32, device=device)
 
-    # allocation of one scalar where we store the result of array comparisons
-    check_equal_result = dpt.empty(1, dtype=np.uint32, device=device)
+    # allocation of one scalar where we store the result of strict convergence check
+    strict_convergence_status = dpt.empty(1, dtype=np.uint32, device=device)
+
+    verbose = bool(verbose)
 
     # The loop
     n_iteration = 0
@@ -209,14 +209,18 @@ def lloyd(
         reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
         n_empty_clusters[0] = np.int32(0)
 
+        strict_convergence_status[0] = np.uint32(0)
+
         # TODO: implement special case where only one copy is needed
         fused_lloyd_fixed_window_single_step_kernel(
             X_t,
             sample_weight,
             centroids_t,
             centroids_half_l2_norm,
+            assignments_idx,
             # OUT:
-            assignments_idx_new,
+            new_assignments_idx,
+            strict_convergence_status,
             new_centroids_t_private_copies,
             cluster_sizes_private_copies,
         )
@@ -239,7 +243,7 @@ def lloyd(
                 X_t,
                 sample_weight,
                 new_centroids_t,
-                assignments_idx_new,
+                new_assignments_idx,
                 # OUT:
                 per_sample_inertia,
             )
@@ -254,17 +258,6 @@ def lloyd(
             # inertia by default during the first pass on data in case there's an
             # empty cluster.
 
-            # if verbose is True, then assignments to closest centroids already have
-            # been computed in the main kernel
-            if not verbose:
-                assignment_fixed_window_kernel(
-                    X_t,
-                    centroids_t,
-                    centroids_half_l2_norm,
-                    # OUT:
-                    assignments_idx_new,
-                )
-
             # if verbose is True and if sample_weight is uniform, distances to
             # closest centroids already have been computed in the main kernel
             if not verbose or not use_uniform_weights:
@@ -275,7 +268,7 @@ def lloyd(
                     X_t,
                     dpt.ones_like(sample_weight),
                     centroids_t,
-                    assignments_idx_new,
+                    new_assignments_idx,
                     # OUT:
                     sq_dist_to_nearest_centroid,
                 )
@@ -286,7 +279,7 @@ def lloyd(
                 sample_weight,
                 new_centroids_t,
                 cluster_sizes,
-                assignments_idx_new,
+                new_assignments_idx,
                 empty_clusters_list,
                 sq_dist_to_nearest_centroid,
                 per_sample_inertia,
@@ -322,7 +315,9 @@ def lloyd(
         # better (since same assignments will produce the same centroid updates, which
         # will produce the same assignments, and so on..). scikit-learn decides to
         # check for strict convergence at each iteration, but that sounds expensive
-        # since it requires an additional pass on each sample label every time.
+        # since for each iteration it requires writing assignments in memory and
+        # comparing it to the previous assignments.
+
         # Providing the user chooses a sensible value for `tol`, wouldn't the cost of
         # this check be in general greater than what the benefits ?
 
@@ -338,14 +333,12 @@ def lloyd(
 
         # See: https://github.com/scikit-learn/scikit-learn/issues/25716
 
-        assignments_idx, assignments_idx_new = (
-            assignments_idx_new,
+        assignments_idx, new_assignments_idx = (
+            new_assignments_idx,
             assignments_idx,
         )
-        check_all_equal_kernel(assignments_idx_new, assignments_idx, check_equal_result)
-        are_assignments_equal, *_ = check_equal_result
-        if are_assignments_equal:
-            strict_convergence = True
+        strict_convergence, *_ = strict_convergence_status
+        if strict_convergence:
             break
 
         compute_centroid_shifts_kernel(

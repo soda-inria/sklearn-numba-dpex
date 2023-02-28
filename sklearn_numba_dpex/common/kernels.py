@@ -112,36 +112,6 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
     return broadcast_division[global_size, work_group_size]
 
 
-def make_check_all_equal_kernel(shape, work_group_size):
-    n_items = math.prod(shape)
-    global_size = math.ceil(n_items / work_group_size) * work_group_size
-    zero_idx = np.uint32(0)
-    one_idx = np.uint32(1)
-
-    @dpex.kernel
-    def check_all_equal_kernel(left, right, all_equal):
-        item_idx = dpex.get_global_id(0)
-
-        if item_idx >= n_items:
-            return
-
-        current_all_equal_value = all_equal[zero_idx]
-
-        if current_all_equal_value == zero_idx:
-            return
-
-        if left[item_idx] != right[item_idx]:
-            all_equal[zero_idx] = zero_idx
-
-    def check_all_equal(left, right, all_equal):
-        left = dpt.reshape(left, (-1,))
-        right = dpt.reshape(right, (-1,))
-        all_equal[zero_idx] = one_idx
-        check_all_equal_kernel[global_size, work_group_size](left, right, all_equal)
-
-    return check_all_equal
-
-
 @lru_cache
 def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size, dtype):
     """

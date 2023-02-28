@@ -37,6 +37,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_features,
     n_clusters,
     return_assignments,
+    check_strict_convergence,
     sub_group_size,
     global_mem_cache_size,
     centroids_private_copies_max_cache_occupancy,
@@ -146,6 +147,7 @@ def make_lloyd_single_step_fixed_window_kernel(
 
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
+    zero_as_uint32 = np.uint32(0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -166,7 +168,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
+        previous_assignments_idx,          # IN             (n_samples,)
         assignments_idx,                   # OUT            (n_samples,)
+        strict_convergence_status,         # OUT            (1,)
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
@@ -334,8 +338,10 @@ def make_lloyd_single_step_fixed_window_kernel(
             sub_group_idx,
             X_t,
             sample_weight,
+            previous_assignments_idx,
             # OUT
             assignments_idx,
+            strict_convergence_status,
             cluster_sizes_private_copies,
             new_centroids_t_private_copies,
         )
@@ -349,7 +355,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         sub_group_idx,                      # PARAM
         X_t,                                # IN
         sample_weight,                      # IN
+        previous_assignments_idx,           # IN
         assignments_idx,                    # OUT
+        strict_convergence_status,          # OUT
         cluster_sizes_private_copies,       # OUT
         new_centroids_t_private_copies,     # OUT
     ):
@@ -364,6 +372,12 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         if return_assignments:
             assignments_idx[sample_idx] = min_idx
+
+        if check_strict_convergence:
+            current_strict_convergence_status = strict_convergence_status[zero_idx]
+            if (current_strict_convergence_status != zero_as_uint32):
+                if (previous_assignments_idx[sample_idx] != min_idx):
+                    strict_convergence_status[zero_idx] = zero_as_uint32
 
         # STEP 2: update centroids.
 
