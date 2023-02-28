@@ -35,15 +35,11 @@ def make_label_assignment_fixed_window_kernel(
     if work_group_size != input_work_group_size:
         work_group_size = centroids_window_height * sub_group_size
 
-    if (work_group_size == input_work_group_size) and (
-        (centroids_window_height * sub_group_size) != work_group_size
-    ):
+    elif centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
-
-    work_group_shape = (centroids_window_height, window_n_centroids)
 
     (
         initialize_window_of_centroids,
@@ -69,9 +65,10 @@ def make_label_assignment_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
+    centroids_window_shape = (centroids_window_height, window_n_centroids)
+
     inf = dtype(math.inf)
     zero_idx = np.int64(0)
-    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -82,14 +79,10 @@ def make_label_assignment_fixed_window_kernel(
         assignments_idx,          # OUT            (n_samples,)
     ):
         # fmt: on
-        local_row_idx = dpex.get_local_id(zero_idx)
-        local_col_idx = dpex.get_local_id(one_idx)
-        sample_idx = (
-            (dpex.get_global_id(zero_idx) * sub_group_size)
-            + local_col_idx
-        )
+        sample_idx = dpex.get_global_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
 
-        centroids_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
+        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
         window_of_centroids_half_l2_norms = dpex.local.array(
             shape=window_n_centroids, dtype=dtype
         )
@@ -100,15 +93,14 @@ def make_label_assignment_fixed_window_kernel(
         min_idx = zero_idx
         min_sample_pseudo_inertia = inf
 
-        window_loading_feature_offset = local_row_idx
-        window_loading_centroid_idx = local_col_idx
+        window_loading_centroid_idx = local_work_id % window_n_centroids
+        window_loading_feature_offset = local_work_id // window_n_centroids
 
         for centroid_window_idx in range(n_windows_for_centroids):
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
 
             initialize_window_of_centroids(
-                local_row_idx,
-                local_col_idx,
+                local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 is_last_centroid_window,
@@ -176,12 +168,5 @@ def make_label_assignment_fixed_window_kernel(
             array[index] = value
         return condition
 
-    n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
-
-    global_size = (
-        math.ceil(n_windows_for_sample / centroids_window_height)
-        * centroids_window_height,
-        window_n_centroids,
-    )
-
-    return assignment[global_size, work_group_shape]
+    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
+    return assignment[global_size, work_group_size]

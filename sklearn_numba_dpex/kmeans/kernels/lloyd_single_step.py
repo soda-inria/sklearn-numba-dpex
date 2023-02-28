@@ -73,15 +73,14 @@ def make_lloyd_single_step_fixed_window_kernel(
 
     centroids_window_height = work_group_size // sub_group_size
 
-    if (work_group_size == input_work_group_size) and (
-        (centroids_window_height * sub_group_size) != work_group_size
-    ):
+    if work_group_size != input_work_group_size:
+        work_group_size = centroids_window_height * sub_group_size
+
+    elif centroids_window_height * sub_group_size != work_group_size:
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
-
-    work_group_shape = (centroids_window_height, window_n_centroids)
 
     (
         initialize_window_of_centroids,
@@ -107,11 +106,10 @@ def make_lloyd_single_step_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    n_subgroups = math.ceil(n_samples / window_n_centroids)
-    global_size = (
-        math.ceil(n_subgroups / centroids_window_height) * centroids_window_height,
-        window_n_centroids,
-    )
+    centroids_window_shape = (centroids_window_height, window_n_centroids)
+
+    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
+    n_subgroups = global_size // sub_group_size
 
     n_cluster_items = n_clusters * (n_features + 1)
     n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
@@ -142,11 +140,14 @@ def make_lloyd_single_step_fixed_window_kernel(
     # - https://github.com/IntelPython/dpctl/issues/1033
     # - https://stackoverflow.com/a/6490897
     n_centroids_private_copies = int(
-        min(n_subgroups, n_centroids_private_copies, device.max_compute_units)
+        min(
+            n_subgroups,
+            n_centroids_private_copies,
+            device.max_compute_units * min(device.sub_group_sizes),
+        )
     )
 
     zero_idx = np.int64(0)
-    one_idx = np.int64(1)
     zero_as_uint32 = np.uint32(0)
     inf = dtype(math.inf)
 
@@ -200,24 +201,15 @@ def make_lloyd_single_step_fixed_window_kernel(
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
         """
-        sub_group_idx = dpex.get_global_id(zero_idx)
-        local_row_idx = dpex.get_local_id(zero_idx)
-        local_col_idx = dpex.get_local_id(one_idx)
-
-        # Let's start by remapping the 2D grid of work items to a 1D grid that reflect
-        # how contiguous work items address one contiguoue sample_idx:
-        sample_idx = (sub_group_idx * sub_group_size) + local_col_idx
-        # NB: The 2D work group shape makes it easier (and less expensive) to map
-        # the local memory arrays to the array of centroids. Do not get confused by the
-        # fact that this shape is unrelated to how the kernel is parallelized on the
-        # samples, where each work item applies to one sample.
+        sample_idx = dpex.get_global_id(zero_idx)
+        local_work_id = dpex.get_local_id(zero_idx)
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
         # loaded and used by all work items in the work group to compute partial
         # results. The array slides over the features in the outer loop, and over the
         # samples in the inner loop.
-        centroids_window = dpex.local.array(shape=work_group_shape, dtype=dtype)
+        centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
 
         # This array in shared memory is used as a sliding array over the centroids.
         # It contains values of centroids_half_l2_norm for each centroid in the sliding
@@ -241,8 +233,8 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         # Those variables are used in the inner loop during loading of the window of
         # centroids
-        window_loading_feature_offset = local_row_idx
-        window_loading_centroid_idx = local_col_idx
+        window_loading_centroid_idx = local_work_id % window_n_centroids
+        window_loading_feature_offset = local_work_id // window_n_centroids
 
         # STEP 1: compute the closest centroid
         # Outer loop: iterate on successive windows of size window_n_centroids that
@@ -259,8 +251,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             # are modified in place.
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(
-                local_row_idx,
-                local_col_idx,
+                local_work_id,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 is_last_centroid_window,
@@ -335,7 +326,6 @@ def make_lloyd_single_step_fixed_window_kernel(
         _update_result_data(
             sample_idx,
             min_idx,
-            sub_group_idx,
             X_t,
             sample_weight,
             previous_assignments_idx,
@@ -352,7 +342,6 @@ def make_lloyd_single_step_fixed_window_kernel(
     def _update_result_data(
         sample_idx,                         # PARAM
         min_idx,                            # PARAM
-        sub_group_idx,                      # PARAM
         X_t,                                # IN
         sample_weight,                      # IN
         previous_assignments_idx,           # IN
@@ -409,8 +398,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
-        privatization_idx = sub_group_idx % n_centroids_private_copies
-
+        privatization_idx = (sample_idx // sub_group_size) % n_centroids_private_copies
         weight = sample_weight[sample_idx]
 
         dpex.atomic.add(
@@ -428,5 +416,5 @@ def make_lloyd_single_step_fixed_window_kernel(
 
     return (
         n_centroids_private_copies,
-        fused_lloyd_single_step[global_size, work_group_shape],
+        fused_lloyd_single_step[global_size, work_group_size],
     )
