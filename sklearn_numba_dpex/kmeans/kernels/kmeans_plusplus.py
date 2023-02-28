@@ -115,7 +115,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         work_group_size, device, required_local_memory_per_item=np.dtype(dtype).itemsize
     )
 
-    candidates_window_width = window_n_candidates
     candidates_window_height = work_group_size // sub_group_size
 
     if work_group_size != input_work_group_size:
@@ -147,7 +146,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     last_candidate_window_idx = n_windows_for_candidates - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    candidates_window_shape = (candidates_window_height, candidates_window_width)
+    candidates_window_shape = (candidates_window_height, window_n_candidates)
 
     zero_idx = np.int64(0)
 
@@ -161,11 +160,11 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         sq_distances_t,                    # OUT            (n_candidates, n_samples)
     ):
         # fmt: on
+
         sample_idx = dpex.get_global_id(zero_idx)
         local_work_id = dpex.get_local_id(zero_idx)
 
         candidates_window = dpex.local.array(shape=candidates_window_shape, dtype=dtype)
-
         sq_distances = dpex.private.array(shape=window_n_candidates, dtype=dtype)
 
         first_candidate_idx = zero_idx
@@ -212,23 +211,42 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            if sample_idx < n_samples:
-                sample_weight_ = sample_weight[sample_idx]
-                closest_dist_sq_ = closest_dist_sq[sample_idx]
-                for i in range(window_n_candidates):
-                    candidate_idx = first_candidate_idx + i
-                    if candidate_idx < n_candidates:
-                        sq_distance_i = min(
-                            sq_distances[i] * sample_weight_,
-                            closest_dist_sq_
-                        )
-                        sq_distances_t[first_candidate_idx + i, sample_idx] = (
-                            sq_distance_i
-                        )
+            _save_sq_distances(
+                sample_idx,
+                first_candidate_idx,
+                sq_distances,
+                sample_weight,
+                closest_dist_sq,
+                # OUT
+                sq_distances_t
+            )
 
             first_candidate_idx += window_n_candidates
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _save_sq_distances(
+        sample_idx,             # PARAM
+        first_candidate_idx,    # PARAM
+        sq_distances,           # IN
+        sample_weight,          # IN
+        closest_dist_sq,        # IN
+        sq_distances_t,         # OUT
+    ):
+        # fmt: on
+        if sample_idx >= n_samples:
+            return
+
+        sample_weight_ = sample_weight[sample_idx]
+        closest_dist_sq_ = closest_dist_sq[sample_idx]
+        for i in range(window_n_candidates):
+            candidate_idx = first_candidate_idx + i
+            if candidate_idx < n_candidates:
+                sq_distance_i = min(sq_distances[i] * sample_weight_, closest_dist_sq_)
+                sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return kmeansplusplus_single_step[global_size, work_group_size]

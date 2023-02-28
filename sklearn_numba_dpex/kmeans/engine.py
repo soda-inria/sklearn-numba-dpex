@@ -224,7 +224,9 @@ class KMeansEngine(KMeansCythonEngine):
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
             assignments_idx = dpt.asnumpy(assignments_idx).astype(np.int32)
-            best_centroids_t = np.asfortranarray(dpt.asnumpy(best_centroids_t))
+            best_centroids_t = np.asfortranarray(dpt.asnumpy(best_centroids_t)).astype(
+                self.estimator._output_dtype
+            )
 
         # ???: rather that returning whatever dtype the driver returns (which might
         # depends on device support for float64), shouldn't we cast to a dtype that
@@ -287,7 +289,9 @@ class KMeansEngine(KMeansCythonEngine):
         )
         euclidean_distances = get_euclidean_distances(X.T, cluster_centers)
         if self._is_in_testing_mode:
-            euclidean_distances = dpt.asnumpy(euclidean_distances)
+            euclidean_distances = dpt.asnumpy(euclidean_distances).astype(
+                self.estimator._output_dtype
+            )
         return euclidean_distances
 
     def _validate_data(self, X, reset=True):
@@ -308,6 +312,12 @@ class KMeansEngine(KMeansCythonEngine):
             accepted_dtypes = [np.float64, np.float32]
         else:
             accepted_dtypes = [np.float32]
+
+        if self._is_in_testing_mode and reset:
+            if (X_dtype := X.dtype) not in accepted_dtypes:
+                self.estimator._output_dtype = np.float64
+            else:
+                self.estimator._output_dtype = X_dtype
 
         with _validate_with_array_api(device):
             try:

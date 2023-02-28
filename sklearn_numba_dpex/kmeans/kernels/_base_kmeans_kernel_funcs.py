@@ -219,9 +219,9 @@ class _KMeansKernelFuncFactory:
         def _initialize_window_of_centroids(
             local_work_id,                      # PARAM
             first_centroid_idx,                 # PARAM
-            centroids_half_l2_norm,             # IN
-            window_of_centroids_half_l2_norms,  # OUT
-            results,                            # OUT
+            centroids_half_l2_norm,             # IN       (self.n_clusters,)
+            window_of_centroids_half_l2_norms,  # OUT      (window_n_centroids,)
+            results,                            # OUT      (window_n_centroids,)
         ):
             # fmt: on
             _initialize_results(results)

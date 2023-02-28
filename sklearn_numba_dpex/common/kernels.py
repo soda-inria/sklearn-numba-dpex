@@ -7,9 +7,7 @@
 # RW  operations in memory. A wrong dispatch strategy could slash memory bandwith and
 # reduce performance. Using 2D or 3D grid correctly might on the other hand improve
 # performance since it saves costly indexing operations (like //)
-#    - investigate if flat 1D-like indexing also works for ND kernels, thus saving the
-# need to compute coordinates for each dimension for element-wise operations.
-#    - or using numba + dpnp to directly leverage kernels that are shipped in dpnp to
+#    - using numba + dpnp to directly leverage kernels that are shipped in dpnp to
 # replace numpy methods.
 # However, in light of our main goal that is bringing a GPU KMeans to scikit-learn, the
 # importance of those TODOs is currently seen as secondary, since the execution time of
@@ -47,80 +45,59 @@ zero_idx = np.int64(0)
 # https://github.com/soda-inria/sklearn-numba-dpex/pull/82 when
 # fixed.
 @lru_cache
-def make_elementwise_binary_op_1d_kernel(size, op, work_group_size, dtype):
-    """This kernel is mostly necessary to work around lack of support for this
-    operation in dpnp, see https://github.com/IntelPython/dpnp/issues/1238"""
-    op = dpex.func(op())
+def make_apply_elementwise_func(shape, func, work_group_size, dtype):
+    func_ = dpex.func(func())
+    n_items = math.prod(shape)
 
     @dpex.kernel
     # fmt: off
-    def elementwise_ops(
-        data,                    # INOUT    (size,)
-        operand_right            # IN       (1,)
+    def elementwise_ops_kernel(
+        data,                    # INOUT    (n_items,)
     ):
         # fmt: on
-
         item_idx = dpex.get_global_id(zero_idx)
-        if item_idx >= size:
+        if item_idx >= n_items:
             return
 
-        operand_left = data[item_idx]
-        data[item_idx] = op(operand_left, operand_right[0])
+        item = data[item_idx]
+        data[item_idx] = func_(item)
 
-    global_size = math.ceil(size / work_group_size) * work_group_size
-    return elementwise_ops[global_size, work_group_size]
+    global_size = math.ceil(n_items / work_group_size) * work_group_size
+
+    def elementwise_ops(data):
+        data = dpt.reshape(data, (-1,))
+        elementwise_ops_kernel[global_size, work_group_size](data)
+
+    return elementwise_ops
 
 
 @lru_cache
-def make_initialize_to_zeros_2d_kernel(size0, size1, work_group_size, dtype):
+def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
 
-    n_items = size0 * size1
+    n_items = math.prod(shape)
     global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
-    # Optimized for C-contiguous arrays
     @dpex.kernel
-    def initialize_to_zeros(data):
+    def initialize_to_zeros_kernel(data):
         item_idx = dpex.get_global_id(zero_idx)
 
         if item_idx >= n_items:
             return
 
-        row_idx = item_idx // size1
-        col_idx = item_idx % size1
-        data[row_idx, col_idx] = zero
+        data[item_idx] = zero
 
-    return initialize_to_zeros[global_size, work_group_size]
-
-
-@lru_cache
-def make_initialize_to_zeros_3d_kernel(size0, size1, size2, work_group_size, dtype):
-
-    n_items = size0 * size1 * size2
-    stride0 = size1 * size2
-    global_size = math.ceil(n_items / work_group_size) * work_group_size
-    zero = dtype(0.0)
-
-    # Optimized for C-contiguous arrays
-    @dpex.kernel
     def initialize_to_zeros(data):
-        item_idx = dpex.get_global_id(zero_idx)
+        data = dpt.reshape(data, (-1,))
+        initialize_to_zeros_kernel[global_size, work_group_size](data)
 
-        if item_idx >= n_items:
-            return
-
-        i = item_idx // stride0
-        stride0_idx = item_idx % stride0
-        j = stride0_idx // size2
-        k = stride0_idx % size2
-        data[i, j, k] = zero
-
-    return initialize_to_zeros[global_size, work_group_size]
+    return initialize_to_zeros
 
 
 @lru_cache
-def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
+    n_rows, n_cols = shape
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
 
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
@@ -129,12 +106,12 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
     def broadcast_division(dividend_array, divisor_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
         divisor = divisor_vector[col_idx]
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             dividend_array[row_idx, col_idx] = (
                 dividend_array[row_idx, col_idx] / divisor
             )
@@ -143,15 +120,16 @@ def make_broadcast_division_1d_2d_axis0_kernel(size0, size1, work_group_size):
 
 
 @lru_cache
-def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dtype):
+def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size, dtype):
     """
     ops must be a function that will be interpreted as a dpex.func and is subject to
     the same rules. It is expected to take two scalar arguments and return one scalar
     value. lambda functions are advised against since the cache will not work with lamda
     functions. sklearn_numba_dpex.common._utils expose some pre-defined `ops`.
     """
+    n_rows, n_cols = shape
 
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
     ops = dpex.func(ops())
 
     # NB: the left operand is modified inplace, the right operand is only read into.
@@ -161,10 +139,10 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
     def broadcast_ops(left_operand_array, right_operand_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             left_operand_array[row_idx, col_idx] = ops(
                 left_operand_array[row_idx, col_idx], right_operand_vector[row_idx]
             )
@@ -173,8 +151,9 @@ def make_broadcast_ops_1d_2d_axis1_kernel(size0, size1, ops, work_group_size, dt
 
 
 @lru_cache
-def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
-    global_size = math.ceil(size1 / work_group_size) * work_group_size
+def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
+    n_rows, n_cols = shape
+    global_size = math.ceil(n_cols / work_group_size) * work_group_size
     zero = dtype(0.0)
     two = dtype(2.0)
 
@@ -189,12 +168,12 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
         # fmt: on
         col_idx = dpex.get_global_id(zero_idx)
 
-        if col_idx >= size1:
+        if col_idx >= n_cols:
             return
 
         l2_norm = zero
 
-        for row_idx in range(size0):
+        for row_idx in range(n_rows):
             item = data[row_idx, col_idx]
             l2_norm += item * item
 
@@ -205,10 +184,8 @@ def make_half_l2_norm_2d_axis0_kernel(size0, size1, work_group_size, dtype):
 
 # TODO: this kernel could be abstracted away to support other commutative binary
 # operators than sum.
-@lru_cache
 def make_sum_reduction_2d_kernel(
-    size0,
-    size1,
+    shape,
     device,
     dtype,
     work_group_size="max",
@@ -300,45 +277,39 @@ def make_sum_reduction_2d_kernel(
 
     .. [3] https://shreeraman-ak.medium.com/parallel-reduction-with-cuda-d0ae10c1ae2c
     """
-    if is_1d := not size1:
+    if is_1d := (len(shape) == 1):
         axis = 1
-        size1 = size0
-        size0 = 1
+        shape1 = shape[0]
+        shape0 = 1
+    else:
+        shape0, shape1 = shape
 
-    # NB: the shape of the work group is different in each of those two cases. Summing
-    # efficiently requires to adapt to very different IO patterns depending on the sum
-    # axis, which motivates the need for different kernels with different work group
-    # sizes for each cases. As a consequence, the shape of the intermediate results
-    # in the main driver loop, and the `global_size` (total number of work items fired
-    # per call) for each kernel call, are also different, and are variabilized with
-    # the lambda functions `get_result_shape` and `get_global_size`.
     if axis == 0:
-        work_group_size, kernels = _prepare_sum_reduction_2d_axis0(
-            size1,
+        work_group_size, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis0(
+            shape1,
             work_group_size,
             sub_group_size,
             fused_elementwise_func,
             dtype,
             device,
         )
-        get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, size1)
-        get_global_size = (
-            lambda result_sum_axis_size: result_sum_axis_size
-            * work_group_size
-            * math.ceil(size1 / sub_group_size)
-        )
     else:  # axis == 1
-        work_group_size, kernels = _prepare_sum_reduction_2d_axis1(
-            size0, work_group_size, fused_elementwise_func, dtype, device
-        )
-        get_result_shape = lambda result_sum_axis_size: (size0, result_sum_axis_size)
-        get_global_size = (
-            lambda result_sum_axis_size: result_sum_axis_size * work_group_size * size0
+        work_group_size, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis1(
+            shape0, work_group_size, fused_elementwise_func, dtype, device
         )
 
     # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
     if work_group_size == 1:
         raise NotImplementedError("work_group_size==1 is not supported.")
+
+    # NB: the size of the work group is different in each of those two cases. Summing
+    # efficiently requires to adapt to very different IO patterns depending on the sum
+    # axis, which motivates the need for different kernels with different work group
+    # sizes for each cases. As a consequence, the shape of the intermediate results
+    # in the main driver loop, and the `global_size` (total number of work items fired
+    # per call) for each kernel call, are also different, and are variabilized with
+    # the functions `get_result_shape` and `get_global_size`.
+    get_result_shape, get_global_size = shape_update_fn
 
     # `fused_elementwise_func` is applied elementwise during the first pass on
     # data, in the first kernel execution only, using `fused_func_kernel`. Subsequent
@@ -353,7 +324,7 @@ def make_sum_reduction_2d_kernel(
     # single work item should iterates one time on the remaining values to finish the
     # reduction?
     kernel = fused_func_kernel
-    sum_axis_size = size0 if axis == 0 else size1
+    sum_axis_size = shape0 if axis == 0 else shape1
     next_input_size = sum_axis_size
     while next_input_size > 1:
         result_sum_axis_size = math.ceil(next_input_size / reduction_block_size)
@@ -396,6 +367,7 @@ def make_sum_reduction_2d_kernel(
     return sum_reduction
 
 
+@lru_cache
 def _prepare_sum_reduction_2d_axis1(
     n_rows, work_group_size, fused_elementwise_func, dtype, device
 ):
@@ -420,6 +392,7 @@ def _prepare_sum_reduction_2d_axis1(
         work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     (
+        work_group_size,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis1_kernel(
@@ -429,17 +402,20 @@ def _prepare_sum_reduction_2d_axis1(
     if fused_elementwise_func is None:
         partial_sum_reduction_nofunc = partial_sum_reduction
     else:
-        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis1_kernel(
+        *_, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis1_kernel(
             n_rows, work_group_size, fused_elementwise_func_, dtype
         )
 
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-        reduction_block_size,
+    get_result_shape = lambda result_sum_axis_size: (n_rows, result_sum_axis_size)
+    get_global_size = lambda result_sum_axis_size: (
+        n_rows * work_group_size * result_sum_axis_size
     )
 
+    kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
+    shape_update_fn = (get_result_shape, get_global_size)
+    return (work_group_size, (kernels, reduction_block_size), shape_update_fn)
 
-@lru_cache
+
 def _make_partial_sum_reduction_2d_axis1_kernel(
     n_rows, work_group_size, fused_elementwise_func, dtype
 ):
@@ -461,8 +437,12 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     # Number of iteration in each execution of the kernel:
     n_local_iterations = np.int64(math.log2(work_group_size) - 1)
-    local_values_size = work_group_size
     reduction_block_size = 2 * work_group_size
+
+    # HACK: must define twice to work around the bug highlighted in
+    # test_regression_fix
+    local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+    global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
     @dpex.kernel
     # fmt: off
@@ -500,7 +480,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # To sum up, this work group `group_id` will sum items with coordinates
         # (`row_idx`, `col_idx`), with `col_idx` ranging from `first_value_idx`
         # (first item in the window) to `first_value_idx + work_group_size - 1` (last
-        # item in the window)
+        # item in the window).
 
         # The current work item is indexed locally within the group of work items, with
         # index `local_work_id` that can range from `0` (first item in the work group)
@@ -534,20 +514,18 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         augend_idx = first_value_idx + local_work_id
         addend_idx = first_value_idx + work_group_size + local_work_id
 
-        local_values = dpex.local.array(local_values_size, dtype=dtype)
+        local_values = dpex.local.array(work_group_size, dtype=dtype)
 
-        # We must be careful to not read items outside of the array !
-        if augend_idx >= sum_axis_size:
-            local_values[local_work_id] = zero
-        elif addend_idx >= sum_axis_size:
-            local_values[local_work_id] = (
-                fused_elementwise_func(summands[row_idx, augend_idx])
-            )
-        else:
-            local_values[local_work_id] = (
-                fused_elementwise_func(summands[row_idx, augend_idx]) +
-                fused_elementwise_func(summands[row_idx, addend_idx])
-            )
+        _prepare_local_memory(
+            local_work_id,
+            row_idx,
+            augend_idx,
+            addend_idx,
+            sum_axis_size,
+            summands,
+            # OUT
+            local_values
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -562,30 +540,67 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             # are discarded.
             n_active_work_items = n_active_work_items // two_as_a_long
             work_item_idx = first_value_idx + local_work_id + n_active_work_items
-            if (
-                (local_work_id < n_active_work_items) and
-                (work_item_idx < sum_axis_size)
-            ):
-                # Yet again, the remaining work items choose two values to sum such
-                # that contiguous work items read and write into contiguous slots of
-                # `local_values`.
-                local_values[local_work_id] += (
-                    local_values[local_work_id + n_active_work_items]
-                )
+
+            # Yet again, the remaining work items choose two values to sum such that
+            # contiguous work items read and write into contiguous slots of
+            # `local_values`.
+            local_sum_and_set_items_if(
+                (
+                    (local_work_id < n_active_work_items) and
+                    (work_item_idx < sum_axis_size)
+                ),
+                local_work_id,
+                local_work_id,
+                local_work_id + n_active_work_items,
+                local_values,
+                # OUT
+                local_values
+            )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # At this point local_values[0] + local_values[1] is equal to the sum of all
         # elements in summands that have been covered by the work group, we write it
         # into global memory
-        if local_work_id == zero_idx:
-            result[row_idx, local_work_group_id_in_row] = (
-                local_values[zero_idx] + local_values[one_idx]
+        global_sum_and_set_items_if(
+            local_work_id == zero_idx,
+            (row_idx, local_work_group_id_in_row),
+            zero_idx,
+            one_idx,
+            local_values,
+            # OUT
+            result
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_work_id,          # PARAM
+        row_idx,                # PARAM
+        augend_idx,             # PARAM
+        addend_idx,             # PARAM
+        sum_axis_size,          # PARAM
+        summands,               # IN
+        local_values,           # OUT
+    ):
+        # fmt: on
+        # We must be careful to not read items outside of the array !
+        if augend_idx >= sum_axis_size:
+            local_values[local_work_id] = zero
+        elif addend_idx >= sum_axis_size:
+            local_values[local_work_id] = fused_elementwise_func(
+                summands[row_idx, augend_idx]
             )
+        else:
+            local_values[local_work_id] = fused_elementwise_func(
+                summands[row_idx, augend_idx]
+            ) + fused_elementwise_func(summands[row_idx, addend_idx])
 
-    return reduction_block_size, partial_sum_reduction
+    return work_group_size, reduction_block_size, partial_sum_reduction
 
 
+@lru_cache
 def _prepare_sum_reduction_2d_axis0(
     n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype, device
 ):
@@ -621,6 +636,7 @@ def _prepare_sum_reduction_2d_axis0(
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
     (
+        work_group_size,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis0_kernel(
@@ -630,17 +646,24 @@ def _prepare_sum_reduction_2d_axis0(
     if fused_elementwise_func is None:
         partial_sum_reduction_nofunc = partial_sum_reduction
     else:
-        _, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
-            n_cols, work_group_size, sub_group_size, fused_elementwise_func_, dtype
+        *_, partial_sum_reduction_nofunc = _make_partial_sum_reduction_2d_axis0_kernel(
+            n_cols,
+            work_group_size,
+            sub_group_size,
+            fused_elementwise_func_,
+            dtype,
         )
 
-    return work_group_size, (
-        (partial_sum_reduction, partial_sum_reduction_nofunc),  # kernels
-        reduction_block_size,
+    get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, n_cols)
+    get_global_size = lambda result_sum_axis_size: (
+        result_sum_axis_size * work_group_size * math.ceil(n_cols / sub_group_size)
     )
 
+    kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
+    shape_update_fn = (get_result_shape, get_global_size)
+    return (work_group_size, (kernels, reduction_block_size), shape_update_fn)
 
-@lru_cache
+
 def _make_partial_sum_reduction_2d_axis0_kernel(
     n_cols, work_group_size, sub_group_size, fused_elementwise_func, dtype
 ):
@@ -657,6 +680,11 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
     local_values_size = (n_sub_groups_per_work_group, sub_group_size)
     reduction_block_size = 2 * n_sub_groups_per_work_group
+
+    # HACK: must define twice to work around the bug highlighted in
+    # test_regression_fix
+    local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
+    global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
@@ -735,21 +763,20 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # the work item in the 2D index):
         col_idx = (
             (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
-            )
+        )
 
-        # We must be careful to not read items outside of the array !
         sum_axis_size = summands.shape[zero_idx]
-        if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
-            local_values[local_row_idx, local_col_idx] = zero
-        elif addend_row_idx >= sum_axis_size:
-            local_values[local_row_idx, local_col_idx] = (
-                fused_elementwise_func(summands[augend_row_idx, col_idx])
-                )
-        else:
-            local_values[local_row_idx, local_col_idx] = (
-                fused_elementwise_func(summands[augend_row_idx, col_idx]) +
-                fused_elementwise_func(summands[addend_row_idx, col_idx])
-                )
+        _prepare_local_memory(
+            local_row_idx,
+            local_col_idx,
+            col_idx,
+            augend_row_idx,
+            addend_row_idx,
+            sum_axis_size,
+            summands,
+            # OUT
+            local_values
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
@@ -764,27 +791,84 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             # are discarded.
             n_active_sub_groups = n_active_sub_groups // two_as_a_long
             work_item_row_idx = first_row_idx + local_row_idx + n_active_sub_groups
-            if (
-                (local_row_idx < n_active_sub_groups) and
-                (col_idx < n_cols) and
-                (work_item_row_idx < sum_axis_size)
-            ):
-                local_values[local_row_idx, local_col_idx] += (
-                    local_values[local_row_idx + n_active_sub_groups, local_col_idx]
-                )
+
+            local_sum_and_set_items_if(
+                (
+                    (local_row_idx < n_active_sub_groups) and
+                    (col_idx < n_cols) and
+                    (work_item_row_idx < sum_axis_size)
+                ),
+                (local_row_idx, local_col_idx),
+                (local_row_idx, local_col_idx),
+                (local_row_idx + n_active_sub_groups, local_col_idx),
+                local_values,
+                # OUT
+                local_values
+            )
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
         # At this point local_values[0, :] + local_values[1, :] is equal to the sum of
         # all elements in summands that have been covered by the work group, we write
         # it into global memory
-        if (local_row_idx == zero_idx) and (col_idx < n_cols):
-            result[local_block_id_in_col, col_idx] = (
-                local_values[zero_idx, local_col_idx] +
-                local_values[one_idx, local_col_idx]
-            )
+        global_sum_and_set_items_if(
+            (local_row_idx == zero_idx) and (col_idx < n_cols),
+            (local_block_id_in_col, col_idx),
+            (zero_idx, local_col_idx),
+            (one_idx, local_col_idx),
+            local_values,
+            result
+        )
 
-    return reduction_block_size, partial_sum_reduction
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_row_idx,      # PARAM
+        local_col_idx,      # PARAM
+        col_idx,            # PARAM
+        augend_row_idx,     # PARAM
+        addend_row_idx,     # PARAM
+        sum_axis_size,      # PARAM
+        summands,           # IN
+        local_values,    # OUT
+    ):
+        # fmt: on
+        # We must be careful to not read items outside of the array !
+        sum_axis_size = summands.shape[zero_idx]
+        if (col_idx >= n_cols) or (augend_row_idx >= sum_axis_size):
+            local_values[local_row_idx, local_col_idx] = zero
+        elif addend_row_idx >= sum_axis_size:
+            local_values[local_row_idx, local_col_idx] = fused_elementwise_func(
+                summands[augend_row_idx, col_idx]
+            )
+        else:
+            local_values[local_row_idx, local_col_idx] = fused_elementwise_func(
+                summands[augend_row_idx, col_idx]
+            ) + fused_elementwise_func(summands[addend_row_idx, col_idx])
+
+    return work_group_size, reduction_block_size, partial_sum_reduction
+
+
+# HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+def _make_sum_and_set_items_if_kernel_func():
+    @dpex.func
+    # fmt: off
+    def set_sum_of_items_kernel_func(
+            condition,          # PARAM
+            result_idx,         # PARAM
+            addend_idx,         # PARAM
+            augend_idx,         # PARAN
+            summands,           # IN
+            result              # OUT
+            ):
+        # fmt: on
+        if not condition:
+            return
+
+        result[result_idx] = summands[addend_idx] + summands[augend_idx]
+
+    return set_sum_of_items_kernel_func
 
 
 @lru_cache
@@ -838,55 +922,127 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_argmin = dpex.local.array(work_group_size, dtype=local_argmin_dtype)
         local_values = dpex.local.array(work_group_size, dtype=dtype)
 
-        first_value_idx = group_id * work_group_size * two_as_a_long
-        x_idx = first_value_idx + local_work_id
-        y_idx = first_value_idx + work_group_size + local_work_id
-
-        if x_idx >= current_size:
-            local_values[local_work_id] = inf
-        else:
-            if has_previous_result:
-                x_idx = previous_result[x_idx]
-
-            if y_idx >= current_size:
-                local_argmin[local_work_id] = x_idx
-                local_values[local_work_id] = values[x_idx]
-
-            else:
-                if has_previous_result:
-                    y_idx = previous_result[y_idx]
-
-                x = values[x_idx]
-                y = values[y_idx]
-                if x < y or (x == y and x_idx < y_idx):
-                    local_argmin[local_work_id] = x_idx
-                    local_values[local_work_id] = x
-                else:
-                    local_argmin[local_work_id] = y_idx
-                    local_values[local_work_id] = y
+        _prepare_local_memory(
+            local_work_id,
+            group_id,
+            current_size,
+            has_previous_result,
+            previous_result,
+            values,
+            # OUT
+            local_argmin,
+            local_values,
+        )
 
         dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
         n_active_work_items = work_group_size
         for i in range(n_local_iterations):
             n_active_work_items = n_active_work_items // two_as_a_long
-            if local_work_id < n_active_work_items:
-                local_x_idx = local_work_id
-                local_y_idx = local_work_id + n_active_work_items
-
-                x = local_values[local_x_idx]
-                y = local_values[local_y_idx]
-
-                if x > y:
-                    local_values[local_x_idx] = y
-                    local_argmin[local_x_idx] = local_argmin[local_y_idx]
-
+            _local_iteration(
+                local_work_id,
+                n_active_work_items,
+                # OUT
+                local_values,
+                local_argmin
+            )
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-        if first_work_id:
-            if local_values[zero_idx] <= local_values[one_idx]:
-                argmin_indices[group_id] = local_argmin[zero_idx]
-            else:
-                argmin_indices[group_id] = local_argmin[one_idx]
+        _register_result(
+            first_work_id,
+            group_id,
+            local_argmin,
+            local_values,
+            # OUT
+            argmin_indices
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _prepare_local_memory(
+        local_work_id,              # PARAM
+        group_id,                   # PARAM
+        current_size,               # PARAM
+        has_previous_result,        # PARAM
+        previous_result,            # IN
+        values,                     # IN
+        local_argmin,               # OUT
+        local_values,               # OUT
+    ):
+        # fmt: on
+        first_value_idx = group_id * work_group_size * two_as_a_long
+        x_idx = first_value_idx + local_work_id
+
+        if x_idx >= current_size:
+            local_values[local_work_id] = inf
+            return
+
+        if has_previous_result:
+            x_idx = previous_result[x_idx]
+
+        y_idx = first_value_idx + work_group_size + local_work_id
+
+        if y_idx >= current_size:
+            local_argmin[local_work_id] = x_idx
+            local_values[local_work_id] = values[x_idx]
+            return
+
+        if has_previous_result:
+            y_idx = previous_result[y_idx]
+
+        x = values[x_idx]
+        y = values[y_idx]
+        if x < y or (x == y and x_idx < y_idx):
+            local_argmin[local_work_id] = x_idx
+            local_values[local_work_id] = x
+            return
+
+        local_argmin[local_work_id] = y_idx
+        local_values[local_work_id] = y
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
+    @dpex.func
+    # fmt: off
+    def _local_iteration(
+        local_work_id,              # PARAM
+        n_active_work_items,        # PARAM
+        local_values,               # INOUT
+        local_argmin                # OUT
+    ):
+        # fmt: on
+        if local_work_id >= n_active_work_items:
+            return
+
+        local_x_idx = local_work_id
+        local_y_idx = local_work_id + n_active_work_items
+
+        x = local_values[local_x_idx]
+        y = local_values[local_y_idx]
+
+        if x <= y:
+            return
+
+        local_values[local_x_idx] = y
+        local_argmin[local_x_idx] = local_argmin[local_y_idx]
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
+    @dpex.func
+    # fmt: off
+    def _register_result(
+        first_work_id,          # PARAM
+        group_id,               # PARAM
+        local_argmin,           # IN
+        local_values,           # IN
+        argmin_indices          # OUT
+    ):
+
+        if not first_work_id:
+            return
+
+        if local_values[zero_idx] <= local_values[one_idx]:
+            argmin_indices[group_id] = local_argmin[zero_idx]
+        else:
+            argmin_indices[group_id] = local_argmin[one_idx]
 
     # As many partial reductions as necessary are chained until only one element
     # remains.argmin_indices

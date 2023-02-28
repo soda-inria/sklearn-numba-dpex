@@ -18,11 +18,10 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 ):
 
     window_n_centroids = sub_group_size
-    centroids_window_width = window_n_centroids + 1
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
-        work_group_size, device, centroids_window_width * np.dtype(dtype).itemsize
+        work_group_size, device, window_n_centroids * np.dtype(dtype).itemsize
     )
 
     centroids_window_height = work_group_size // sub_group_size
@@ -56,7 +55,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, centroids_window_width)
+    centroids_window_shape = (centroids_window_height, window_n_centroids)
 
     zero_idx = np.int64(0)
 
@@ -115,17 +114,38 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
                 dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-            if sample_idx < n_samples:
-                for i in range(window_n_centroids):
-                    centroid_idx = first_centroid_idx + i
-                    if centroid_idx < n_clusters:
-                        euclidean_distances_t[first_centroid_idx + i, sample_idx] = (
-                            math.sqrt(sq_distances[i])
-                        )
+            _save_distance(
+                sample_idx,
+                first_centroid_idx,
+                sq_distances,
+                # OUT
+                euclidean_distances_t
+            )
 
             first_centroid_idx += window_n_centroids
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _save_distance(
+        sample_idx,                 # PARAM
+        first_centroid_idx,         # PARAM
+        sq_distances,               # IN
+        euclidean_distances_t       # OUT
+    ):
+        # fmt: on
+        if sample_idx >= n_samples:
+            return
+
+        for i in range(window_n_centroids):
+            centroid_idx = first_centroid_idx + i
+
+            if centroid_idx < n_clusters:
+                euclidean_distances_t[centroid_idx, sample_idx] = (
+                    math.sqrt(sq_distances[i])
+                )
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
     return compute_distances[global_size, work_group_size]

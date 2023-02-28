@@ -191,8 +191,7 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     if from_cpu_to_device:
         return states.to_device(device)
 
-    else:
-        return states
+    return states
 
 
 @lru_cache
