@@ -434,6 +434,8 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     reduction_block_size = 2 * work_group_size
     work_group_shape = (1, work_group_size)
 
+    # HACK: must define twice to work around the bug highlighted in
+    # test_regression_fix
     local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
     global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
@@ -670,6 +672,8 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     reduction_block_size = 2 * n_sub_groups_per_work_group
     work_group_shape = (n_sub_groups_per_work_group, sub_group_size)
 
+    # HACK: must define twice to work around the bug highlighted in
+    # test_regression_fix
     local_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
     global_sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
@@ -979,7 +983,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_argmin[local_work_id] = y_idx
         local_values[local_work_id] = y
 
-    # HACK 906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
     @dpex.func
     # fmt: off
     def _local_iteration(
@@ -1004,8 +1008,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_values[local_x_idx] = y
         local_argmin[local_x_idx] = local_argmin[local_y_idx]
 
-    # HACK 906
-    @dpex.func
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa    @dpex.func
     # fmt: off
     def _register_result(
         first_work_id,          # PARAM

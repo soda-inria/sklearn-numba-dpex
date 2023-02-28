@@ -157,7 +157,7 @@ def test_need_to_workaround_numba_dpex_906():
     assert dpt.asnumpy(result)[0] == 10
 
 
-# HACK 906
+# HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
 def make_setitem_if_kernel_func():
     @dpex.func
     def _setitem_if(condition, index, value, array):
