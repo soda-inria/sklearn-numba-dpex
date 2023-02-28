@@ -169,7 +169,7 @@ def make_label_assignment_fixed_window_kernel(
             assignments_idx,
         )
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     def _setitem_if(condition, index, value, array):
         if condition:

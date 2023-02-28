@@ -89,7 +89,7 @@ def test_spirv_fix():
             _load_numba_dpex_with_patches()
 
 
-def test_hack_906():
+def test_need_to_workaround_numba_dpex_906():
     """This test will raise when all hacks tagged with HACK 906 can be reverted.
 
     The hack is used several time in the codebase to work around a bug in the JIT

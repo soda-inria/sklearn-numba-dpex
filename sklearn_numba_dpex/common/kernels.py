@@ -588,7 +588,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             result
         )
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _prepare_local_memory(
@@ -829,7 +829,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             result
         )
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _prepare_local_memory(
@@ -859,7 +859,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
-# HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+# HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
 def _make_sum_and_set_items_if_kernel_func():
     @dpex.func
     # fmt: off
@@ -965,7 +965,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
             argmin_indices
         )
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _prepare_local_memory(

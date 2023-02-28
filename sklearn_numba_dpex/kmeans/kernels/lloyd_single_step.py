@@ -340,7 +340,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             new_centroids_t_private_copies,
         )
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _update_result_data(

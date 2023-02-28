@@ -170,15 +170,7 @@ def lloyd(
     )
 
     assignments_idx_new = dpt.empty(n_samples, dtype=np.uint32, device=device)
-    check_strict_convergence = tol == 0
-    # See the main loop for a more elaborate note about checking "strict convergence"
-    if check_strict_convergence:
-        assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
-        # allocation of one scalar where we store the result of array comparisons
-        check_equal_result = dpt.empty(1, dtype=np.uint32, device=device)
-        strict_convergence = False
-    else:
-        assignments_idx = assignments_idx_new
+    assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
 
     new_centroids_t_private_copies = dpt.empty(
         (n_centroids_private_copies, n_features, n_clusters),
@@ -195,8 +187,13 @@ def lloyd(
     # n_empty_clusters_ is a scalar handled in kernels via a one-element array.
     n_empty_clusters = dpt.empty(1, dtype=np.int32, device=device)
 
+    # allocation of one scalar where we store the result of array comparisons
+    check_equal_result = dpt.empty(1, dtype=np.uint32, device=device)
+
     # The loop
     n_iteration = 0
+    # See the main loop for a more elaborate note about checking "strict convergence"
+    strict_convergence = False
     centroid_shifts_sum = np.inf
 
     # TODO: Investigate possible speedup with a custom dpctl queue with a custom
@@ -329,27 +326,27 @@ def lloyd(
         # Providing the user chooses a sensible value for `tol`, wouldn't the cost of
         # this check be in general greater than what the benefits ?
 
-        # Following this reasoning, unlike scikit-learn, we choose to enforce this
-        # behavior if and only if `tol == 0`, because in this case, it is easy to see
-        # that lloyd can indeed fail to stop at the right time due to numerical errors.
-        # Moreover, this is enough to pass scikit-learn unit tests. When `tol > 0`, we
-        # rely on the user setting an appropriate tolerance threshold.
+        # When `tol == 0` it is easy to see that lloyd can indeed fail to stop at the
+        # right time due to numerical errors, and that strict convergence checking is
+        # good. For the general case, it seems detrimental to performance, for little
+        # gain except in case of, maybe, extremely imbalanced input data distribution.
+        # Thus, shouldnt strict convergence checking be enabled only if `tol == 0` ?
+        # (which is, moreover, the only case where strict convergence really is tested
+        # in scikit learn)
 
-        # TODO: open an issue at `scikit-learn` and propose to adopt this behavior
-        # instead ?
+        # For now the exact same behavior than scikit-learn's is mimicked.
 
-        if check_strict_convergence:
-            assignments_idx, assignments_idx_new = (
-                assignments_idx_new,
-                assignments_idx,
-            )
-            check_all_equal_kernel(
-                assignments_idx_new, assignments_idx, check_equal_result
-            )
-            are_assignments_equal, *_ = check_equal_result
-            if are_assignments_equal:
-                strict_convergence = True
-                break
+        # See: https://github.com/scikit-learn/scikit-learn/issues/25716
+
+        assignments_idx, assignments_idx_new = (
+            assignments_idx_new,
+            assignments_idx,
+        )
+        check_all_equal_kernel(assignments_idx_new, assignments_idx, check_equal_result)
+        are_assignments_equal, *_ = check_equal_result
+        if are_assignments_equal:
+            strict_convergence = True
+            break
 
         compute_centroid_shifts_kernel(
             centroids_t,
@@ -366,9 +363,7 @@ def lloyd(
 
     if verbose:
         converged_at = n_iteration - 1
-        if (check_strict_convergence and strict_convergence) or (
-            centroid_shifts_sum == 0  # NB: possible if tol = 0
-        ):
+        if strict_convergence or (centroid_shifts_sum == 0):  # NB: possible if tol = 0
             print(f"Converged at iteration {converged_at}: strict convergence.")
 
         elif centroid_shifts_sum <= tol:

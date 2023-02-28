@@ -230,7 +230,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _save_sq_distances(

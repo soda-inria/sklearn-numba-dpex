@@ -121,23 +121,23 @@ def make_compute_euclidean_distances_fixed_window_kernel(
             _save_distance(
                 sample_idx,
                 first_centroid_idx,
-                euclidean_distances_t,
+                sq_distances,
                 # OUT
-                sq_distances
+                euclidean_distances_t
             )
 
             first_centroid_idx += window_n_centroids
 
             dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_hack_906
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func
     # fmt: off
     def _save_distance(
         sample_idx,                 # PARAM
         first_centroid_idx,         # PARAM
-        euclidean_distances_t,      # IN
-        sq_distances                # OUT
+        sq_distances,               # IN
+        euclidean_distances_t       # OUT
     ):
         # fmt: on
         if sample_idx >= n_samples:
