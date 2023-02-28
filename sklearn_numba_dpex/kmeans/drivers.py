@@ -209,7 +209,7 @@ def lloyd(
         reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
         n_empty_clusters[0] = np.int32(0)
 
-        strict_convergence_status[0] = np.uint32(0)
+        strict_convergence_status[0] = np.uint32(1)
 
         # TODO: implement special case where only one copy is needed
         fused_lloyd_fixed_window_single_step_kernel(
