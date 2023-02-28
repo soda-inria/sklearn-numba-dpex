@@ -481,6 +481,7 @@ def test_error_raised_on_invalid_group_sizes():
         )
 
     return_assignments = False
+    check_strict_convergence = False
     global_mem_cache_size = 123456789
     centroids_private_copies_max_cache_occupancy = 0.7
 
@@ -490,6 +491,7 @@ def test_error_raised_on_invalid_group_sizes():
             n_features,
             n_clusters,
             return_assignments,
+            check_strict_convergence,
             sub_group_size,
             global_mem_cache_size,
             centroids_private_copies_max_cache_occupancy,

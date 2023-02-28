@@ -1008,7 +1008,8 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_values[local_x_idx] = y
         local_argmin[local_x_idx] = local_argmin[local_y_idx]
 
-    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa    @dpex.func
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
+    @dpex.func
     # fmt: off
     def _register_result(
         first_work_id,          # PARAM
