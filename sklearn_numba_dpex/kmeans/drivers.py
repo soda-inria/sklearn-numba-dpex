@@ -209,8 +209,6 @@ def lloyd(
         reset_centroids_private_copies_kernel(new_centroids_t_private_copies)
         n_empty_clusters[0] = np.int32(0)
 
-        strict_convergence_status[0] = np.uint32(1)
-
         # TODO: implement special case where only one copy is needed
         fused_lloyd_fixed_window_single_step_kernel(
             X_t,
@@ -337,9 +335,14 @@ def lloyd(
             new_assignments_idx,
             assignments_idx,
         )
-        strict_convergence, *_ = strict_convergence_status
-        if strict_convergence:
-            break
+
+        n_iteration += 1
+
+        if n_iteration > 1:
+            strict_convergence, *_ = strict_convergence_status
+            if strict_convergence:
+                break
+            strict_convergence_status[0] = np.uint32(1)
 
         compute_centroid_shifts_kernel(
             centroids_t,
@@ -351,8 +354,6 @@ def lloyd(
         centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
         # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
         centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
-
-        n_iteration += 1
 
     if verbose:
         converged_at = n_iteration - 1
