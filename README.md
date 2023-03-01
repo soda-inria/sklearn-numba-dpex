@@ -115,17 +115,22 @@ dependencies (`numba-dpex` and `intel::dpcpp_linux-64`) distributed on the
 
 ```bash
 export CONDA_DPEX_ENV_NAME=my-dpex-env
+```
+
+(where you can replace the name of the environment `my-dpex-env` with a name of your
+liking) followed by
+
+```bash
+export CONDA_DPEX_ENV_NAME=my-dpex-env
 conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             `# NB: different versions of `sklearn_numba_dpex` can require to pin` \
-             `# different versions, builds or channels here.` \
              numba-dpex=0.20.0dev3=py310hfc4b9b4_4 "intel::dpcpp_linux-64"
 ```
 
-(where you can replace the name of the environment `my-dpex-env` with a name of your
-liking)
+Note that different versions of `sklearn_numba_dpex` can require to pin different
+versions, builds or channels in this last command.
 
 An additional command is currently required to work around missing Intel CPU OpenCL
 runtime activation. To resolve it, one needs to set environment variables for the
