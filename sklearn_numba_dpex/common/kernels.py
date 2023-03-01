@@ -1032,7 +1032,9 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         n_groups = math.ceil(n_groups / (2 * work_group_size))
         sizes = (n_groups * work_group_size, work_group_size)
         result = dpt.empty(n_groups, dtype=np.int32, device=device)
-        kernels_and_empty_tensors_tuples.append((partial_argmin_reduction, sizes, previous_result, result))
+        kernels_and_empty_tensors_tuples.append(
+            (partial_argmin_reduction, sizes, previous_result, result)
+        )
         previous_result = result
 
     def argmin_reduction(values):
