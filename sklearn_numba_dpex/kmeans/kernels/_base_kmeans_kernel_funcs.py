@@ -259,11 +259,14 @@ class _KMeansKernelFuncFactory:
             # items load adjacent values.
             loading_feature_idx = first_feature_idx + window_loading_feature_offset
 
+            # TODO: the following condition can be cheaper to compute if we know that
+            # it's the last window or not.
             if (loading_feature_idx < n_features) and (
                 loading_centroid_idx < n_clusters
              ):
                 value = current_centroids_t[loading_feature_idx, loading_centroid_idx]
             else:
+                # TODO: this branching is not necessary ?
                 value = zero
 
             centroids_window[
@@ -293,6 +296,9 @@ class _KMeansKernelFuncFactory:
             for window_feature_idx in range(window_n_features):
 
                 feature_idx = window_feature_idx + first_feature_idx
+                # TODO: the following condition can be cheaper to compute if we know
+                # that it's the last window or not. Also, it should be at the outside of
+                # the loop.
                 if sample_idx < n_samples:
                     # performance for the line thereafter relies on L1 cache
                     X_value = X_t[feature_idx, sample_idx]
@@ -302,6 +308,12 @@ class _KMeansKernelFuncFactory:
                 # For this given feature, loop on all centroids in the current
                 # window and accumulate the partial results
                 for window_centroid_idx in range(window_n_centroids):
+                    # TODO: here, reading the values in the sliding windows once then
+                    # shifting within the private memory of the sub groups would be more
+                    # efficient, but `numba_dpex` lacks the corresponding intrinsics.
+                    # Those intrinsics are defined in the SYCL spec and exist in
+                    # `numba.cuda` so there's hope it also happens for `numba_dpex`.
+                    # see https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html#_shift_left_and_shift_right  # noqa
                     centroid_value = (
                         centroids_window[window_feature_idx, window_centroid_idx]
                     )

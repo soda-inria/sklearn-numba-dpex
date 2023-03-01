@@ -271,7 +271,7 @@ def make_sum_reduction_2d_kernel(
     might not be cached.
 
     `sklearn_numba_dpex.common._utils` exposes some pre-defined functions
-    suitable to be passed as `fused_elementwise_func`,
+    suitable to be passed as `fused_elementwise_func`.
 
     Notes
     -----
@@ -590,6 +590,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
                 ),
                 (local_row_idx, local_col_idx),
                 (local_row_idx, local_col_idx),
+                # TODO: avoid compute the sum if the condition is not met ?
                 (local_row_idx + n_active_sub_groups, local_col_idx),
                 local_values,
                 # OUT
@@ -821,6 +822,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 ),
                 local_work_id,
                 local_work_id,
+                # TODO: avoid compute the sum if the condition is not met ?
                 local_work_id + n_active_work_items,
                 local_values,
                 # OUT
