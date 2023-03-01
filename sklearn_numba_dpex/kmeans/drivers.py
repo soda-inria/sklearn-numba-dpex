@@ -1,4 +1,3 @@
-import math
 import warnings
 
 import dpctl
@@ -511,7 +510,6 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         (n_features,),
         elementwise_divide_by_n_samples_fn,
         max_work_group_size,
-        compute_dtype,
     )
 
     # At the time of writing this code, dpnp does not support functions (like `==`
@@ -547,7 +545,6 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
             (n_features, n_samples),
             ops=_minus,
             work_group_size=max_work_group_size,
-            dtype=compute_dtype,
         )
 
         # Change `X_t` inplace
@@ -559,7 +556,6 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
                 (n_features, n_clusters),
                 ops=_minus,
                 work_group_size=max_work_group_size,
-                dtype=compute_dtype,
             )
             # Change `init` inplace
             broadcast_init_minus_X_mean(init, X_mean)
@@ -608,7 +604,6 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
 
     n_features, n_samples = X_t.shape
     n_clusters = best_centers_t.shape[1]
-    compute_dtype = X_t.dtype.type
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
@@ -618,7 +613,6 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
         (n_features, n_clusters),
         ops=_plus,
         work_group_size=max_work_group_size,
-        dtype=compute_dtype,
     )
     # Change `best_centers_t` inplace
     broadcast_init_plus_X_mean(best_centers_t, X_mean)
@@ -639,7 +633,6 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
             (n_features, n_samples),
             ops=_plus,
             work_group_size=max_work_group_size,
-            dtype=compute_dtype,
         )
         # Change X_t inplace
         broadcast_X_plus_X_mean(X_t, X_mean)
@@ -827,13 +820,6 @@ def kmeans_plusplus(
         compute_dtype,
     )
 
-    sample_center_candidates_kernel = make_sample_center_candidates_kernel(
-        n_samples,
-        n_local_trials,
-        max_work_group_size,
-        compute_dtype,
-    )
-
     (
         kmeansplusplus_single_step_fixed_window_kernel
     ) = make_kmeansplusplus_single_step_fixed_window_kernel(
@@ -874,18 +860,16 @@ def kmeans_plusplus(
         device=cpu_device if from_cpu_to_device else device,
     )
     if from_cpu_to_device:
-        new_work_group_size = cpu_device.max_work_group_size
-        new_global_size = (
-            math.ceil(
-                sample_center_candidates_kernel.global_size[0] / new_work_group_size
-            )
-            * new_work_group_size
-        )
-        sample_center_candidates_kernel = sample_center_candidates_kernel.configure(
-            sycl_queue=random_state.sycl_queue,
-            global_size=[new_global_size],
-            local_size=[new_work_group_size],
-        )
+        sampling_work_group_size = cpu_device.max_work_group_size
+    else:
+        sampling_work_group_size = max_work_group_size
+
+    sample_center_candidates_kernel = make_sample_center_candidates_kernel(
+        n_samples,
+        n_local_trials,
+        sampling_work_group_size,
+        compute_dtype,
+    )
 
     centers_t = dpt.empty(
         sh=(n_features, n_clusters), dtype=compute_dtype, device=device

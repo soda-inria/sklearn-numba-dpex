@@ -99,7 +99,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
                     centroids_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
                 accumulate_sq_distances(
                     sample_idx,
                     first_feature_idx,
@@ -112,7 +112,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
                 first_feature_idx += centroids_window_height
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
             _save_distance(
                 sample_idx,
@@ -124,7 +124,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func

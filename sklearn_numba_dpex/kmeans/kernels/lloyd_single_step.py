@@ -281,7 +281,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -299,7 +299,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
                 # operations in the current iteration to be over for all work items.
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
@@ -318,7 +318,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
