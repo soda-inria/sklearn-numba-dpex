@@ -14,16 +14,18 @@ from sklearn_numba_dpex.common._utils import (
 )
 from sklearn_numba_dpex.common.kernels import (
     make_apply_elementwise_func,
-    make_argmin_reduction_1d_kernel,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
     make_half_l2_norm_2d_axis0_kernel,
     make_initialize_to_zeros_kernel,
-    make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.common.random import (
     create_xoroshiro128pp_states,
     get_random_raw,
+)
+from sklearn_numba_dpex.common.reductions import (
+    make_argmin_reduction_1d_kernel,
+    make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.kmeans.kernels import (
     make_centroid_shifts_kernel,

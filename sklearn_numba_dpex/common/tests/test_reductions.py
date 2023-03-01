@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from sklearn.utils._testing import assert_allclose
 
-from sklearn_numba_dpex.common.kernels import (
+from sklearn_numba_dpex.common.reductions import (
     make_argmin_reduction_1d_kernel,
     make_sum_reduction_2d_kernel,
 )
