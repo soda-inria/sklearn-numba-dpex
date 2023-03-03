@@ -312,7 +312,7 @@ def make_sum_reduction_2d_kernel(
         shape0, shape1 = shape
 
     if axis == 0:
-        work_group_size, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis0(
+        work_group_shape, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis0(
             shape1,
             work_group_size,
             sub_group_size,
@@ -321,15 +321,15 @@ def make_sum_reduction_2d_kernel(
             device,
         )
     else:  # axis == 1
-        work_group_size, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis1(
+        work_group_shape, kernels, shape_update_fn = _prepare_sum_reduction_2d_axis1(
             shape0, work_group_size, fused_elementwise_func, dtype, device
         )
 
     # XXX: The kernels seem to work fine with work_group_size==1 on GPU but fail on CPU.
-    if work_group_size == 1:
+    if math.prod(work_group_shape) == 1:
         raise NotImplementedError("work_group_size==1 is not supported.")
 
-    # NB: the size of the work group is different in each of those two cases. Summing
+    # NB: the shape of the work group is different in each of those two cases. Summing
     # efficiently requires to adapt to very different IO patterns depending on the sum
     # axis, which motivates the need for different kernels with different work group
     # sizes for each cases. As a consequence, the shape of the intermediate results
@@ -363,7 +363,7 @@ def make_sum_reduction_2d_kernel(
         result_shape = get_result_shape(result_sum_axis_size)
         result = dpt.empty(result_shape, dtype=dtype, device=device)
 
-        sizes = (get_global_size(result_sum_axis_size), work_group_size)
+        sizes = (get_global_size(result_sum_axis_size), work_group_shape)
 
         kernels_and_empty_tensors_pairs.append((kernel, sizes, result))
         kernel = nofunc_kernel
@@ -418,7 +418,8 @@ def _prepare_sum_reduction_2d_axis0(
                 f"sub_group_size={sub_group_size} and "
                 f"work_group_size={work_group_size}"
             )
-        check_power_of_2(work_group_size // sub_group_size)
+        n_sub_groups_per_work_group = work_group_size // sub_group_size
+        check_power_of_2(n_sub_groups_per_work_group)
 
     else:
         # Round work_group_size to the maximum smaller power-of-two multiple of
@@ -429,7 +430,7 @@ def _prepare_sum_reduction_2d_axis0(
         work_group_size = n_sub_groups_per_work_group * sub_group_size
 
     (
-        work_group_size,
+        work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis0_kernel(
@@ -449,12 +450,13 @@ def _prepare_sum_reduction_2d_axis0(
 
     get_result_shape = lambda result_sum_axis_size: (result_sum_axis_size, n_cols)
     get_global_size = lambda result_sum_axis_size: (
-        result_sum_axis_size * work_group_size * math.ceil(n_cols / sub_group_size)
+        sub_group_size * math.ceil(n_cols / sub_group_size),
+        result_sum_axis_size * n_sub_groups_per_work_group,
     )
 
     kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
     shape_update_fn = (get_result_shape, get_global_size)
-    return (work_group_size, (kernels, reduction_block_size), shape_update_fn)
+    return (work_group_shape, (kernels, reduction_block_size), shape_update_fn)
 
 
 def _make_partial_sum_reduction_2d_axis0_kernel(
@@ -473,6 +475,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
     local_values_size = (n_sub_groups_per_work_group, sub_group_size)
     reduction_block_size = 2 * n_sub_groups_per_work_group
+    work_group_shape = (sub_group_size, n_sub_groups_per_work_group)
 
     _sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
@@ -490,28 +493,24 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # The work groups are mapped to window of items in the input `summands` of size
         # `(reduction_block_size, sub_group_size)`,
         # where `reduction_block_size = 2 * n_sub_groups_per_work_group` such that the
-        # windows never overlap and create a grid that cover all the items. The work
-        # groups are indexed following a column-major order.
+        # windows never overlap and create a grid that cover all the items. Each
+        # work group is responsible for summing all items in the window it spans over
+        # axis 0, resulting in a output of shape `(1, sub_group_size)`.
 
-        # `n_blocks_per_col` windows are necessary to cover one column of the input
-        # array
-        n_blocks_per_col = result.shape[zero_idx]
+        # NB: the axis in the following dpex calls are reversed, so the kernel further
+        # reads like a SYCL kernel that maps 2D group size with a row-major order,
+        # despite that `numba_dpex` chose to mimic the column-major order style of
+        # mapping 2D group sizes in cuda.
 
-        # The group of work items `group_id` is responsible for summing all items in
-        # the window it spans over axis 0, resulting in a output of shape
-        # `(1, sub_group_size)`
-        group_id = dpex.get_group_id(zero_idx)
-
-        # The work groups are indexed in column-major order. From this let's deduce the
+        # The work groups are indexed in row-major order. From this let's deduce the
         # position of the window within the column...
-        local_block_id_in_col = group_id % n_blocks_per_col
+        local_block_id_in_col = dpex.get_group_id(one_idx)
 
         # Let's map the current work item to an index in a 2D grid, where the
         # `work_group_size` work items are mapped in row-major order to the array
         # of size `(n_sub_groups_per_work_group, sub_group_size)`.
-        local_work_id = dpex.get_local_id(zero_idx)      # 1D idx
-        local_row_idx = local_work_id // sub_group_size  # 2D idx, first coordinate
-        local_col_idx = local_work_id % sub_group_size   # 2D idx, second coordinate
+        local_row_idx = dpex.get_local_id(one_idx)     # 2D idx, first coordinate
+        local_col_idx = dpex.get_local_id(zero_idx)    # 2D idx, second coordinate
 
         # This way, each row in the 2D index can be seen as mapped to two rows in the
         # corresponding window of items of the input `summands`, with the first row of
@@ -552,7 +551,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # position of the window in the grid of windows, and by the local position of
         # the work item in the 2D index):
         col_idx = (
-            (group_id // n_blocks_per_col) * sub_group_size + local_col_idx
+            (dpex.get_group_id(zero) * sub_group_size) + local_col_idx
         )
 
         sum_axis_size = summands.shape[zero_idx]
@@ -637,7 +636,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
                 summands[augend_row_idx, col_idx]
             ) + fused_elementwise_func(summands[addend_row_idx, col_idx])
 
-    return work_group_size, reduction_block_size, partial_sum_reduction
+    return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
 @lru_cache
@@ -665,7 +664,7 @@ def _prepare_sum_reduction_2d_axis1(
         work_group_size = get_maximum_power_of_2_smaller_than(work_group_size)
 
     (
-        work_group_size,
+        work_group_shape,
         reduction_block_size,
         partial_sum_reduction,
     ) = _make_partial_sum_reduction_2d_axis1_kernel(
@@ -681,12 +680,13 @@ def _prepare_sum_reduction_2d_axis1(
 
     get_result_shape = lambda result_sum_axis_size: (n_rows, result_sum_axis_size)
     get_global_size = lambda result_sum_axis_size: (
-        n_rows * work_group_size * result_sum_axis_size
+        result_sum_axis_size * work_group_size,
+        n_rows,
     )
 
     kernels = (partial_sum_reduction, partial_sum_reduction_nofunc)
     shape_update_fn = (get_result_shape, get_global_size)
-    return (work_group_size, (kernels, reduction_block_size), shape_update_fn)
+    return (work_group_shape, (kernels, reduction_block_size), shape_update_fn)
 
 
 def _make_partial_sum_reduction_2d_axis1_kernel(
@@ -711,6 +711,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     # Number of iteration in each execution of the kernel:
     n_local_iterations = np.int64(math.log2(work_group_size) - 1)
     reduction_block_size = 2 * work_group_size
+    work_group_shape = (work_group_size, 1)
 
     _sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
@@ -723,31 +724,29 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # fmt: on
         # Each work group processes a window of the `summands` input array with
         # shape `(1, reduction_block_size)` with `reduction_block_size = 2 *
-        # work_group_size`. The windows never overlap and create a grid that
+        # work_group_size`, and is responsible for summing all values in the window
+        # it spans. The windows never overlap and create a grid that
         # cover all the values of the `summands` array.
 
-        # `n_work_groups_per_row` windows are necessary to cover one row of the
-        # input array.
-        n_work_groups_per_row = result.shape[minus_one_idx]
-
-        # The group of work items identified by `group_id` is responsible for
-        # summing all values in the window it spans.
-        group_id = dpex.get_group_id(zero_idx)
+        # NB: the axis in the following dpex calls are reversed, so the kernel further
+        # reads like a SYCL kernel that maps 2D group size with a row-major order,
+        # despite that `numba_dpex` chose to mimic the column-major order style of
+        # mapping 2D group sizes in cuda.
 
         # The work groups are indexed in row-major order, from that let's deduce the
-        # row of `summands` to process by work items in `group_id`.
-        row_idx = group_id // n_work_groups_per_row
+        # row of `summands` to process by work items in `group_id`...
+        row_idx = dpex.get_group_id(one_idx)
 
         # ... and the position of the window within this row, ranging from 0
         # (first window in the row) to `n_work_groups_per_row - 1` (last window
         # in the row):
-        local_work_group_id_in_row = group_id % n_work_groups_per_row
+        local_work_group_id_in_row = dpex.get_group_id(zero_idx)
 
         # Since all windows have size `reduction_block_size`, the position of the first
         # item in the window is given by:
         first_value_idx = local_work_group_id_in_row * reduction_block_size
 
-        # To sum up, this work group `group_id` will sum items with coordinates
+        # To sum up, this current work group will sum items with coordinates
         # (`row_idx`, `col_idx`), with `col_idx` ranging from `first_value_idx`
         # (first item in the window) to `first_value_idx + work_group_size - 1` (last
         # item in the window).
@@ -867,7 +866,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 summands[row_idx, augend_idx]
             ) + fused_elementwise_func(summands[row_idx, addend_idx])
 
-    return work_group_size, reduction_block_size, partial_sum_reduction
+    return work_group_shape, reduction_block_size, partial_sum_reduction
 
 
 # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
