@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
+import dpctl.tensor as dpt
+from numba_dpex import USMNdArray
+
 _native_dpex_typeof_helper = None
 _native_Packer_unpack_usm_array = None
 
@@ -39,29 +42,54 @@ def _load_numba_dpex_with_patches(with_patches=True):
     _SYCL_OBJECTS_UNPACK_CACHE = WeakKeyDictionary()
 
     def _monkey_patch_unpack_usm_array(self, val):
+        if not isinstance(val, dpt.usm_ndarray):
+            return _native_Packer_unpack_usm_array(self, val)
+
         # We work around the fact that `val` is not hashable and can't get used as a
         # key of the `WeakKeyDictionary` by pairing it with an instance of an object
         # that is hashable and whose garbage collection is paired to `val`'s.
-        id_val = id(val)
-        object_id = _SYCL_OBJECTS_IDS.setdefault(id_val, _ObjectId(id=id(val)))
-        _SYCL_OBJECTS_IDS[object_id] = val
-        return _SYCL_OBJECTS_UNPACK_CACHE.setdefault(
-            object_id, _native_Packer_unpack_usm_array(self, val)
-        )
+        id_val = _get_usm_ndarray_identifier(val)
+        try:
+            object_id = _SYCL_OBJECTS_IDS[id_val]
+        except KeyError:
+            _SYCL_OBJECTS_IDS[id_val] = object_id = _ObjectId(id=id_val)
+            _SYCL_OBJECTS_IDS[object_id] = val
 
-    _SYCL_OBJECTS_NUMBA_TYPE_CACHE = dict()
+        try:
+            ret = _SYCL_OBJECTS_UNPACK_CACHE[object_id]
+        except KeyError:
+            _SYCL_OBJECTS_UNPACK_CACHE[
+                object_id
+            ] = ret = _native_Packer_unpack_usm_array(self, val)
+
+        return ret
+
+    _SYCL_OBJECTS_NUMBA_TYPE_CACHE = WeakKeyDictionary()
 
     def _monkey_patch_typeof_helper(val, array_class_type):
-        array_class_type_cache = _SYCL_OBJECTS_NUMBA_TYPE_CACHE.setdefault(
-            array_class_type, WeakKeyDictionary()
-        )
+        if (array_class_type is not USMNdArray) or not isinstance(val, dpt.usm_ndarray):
+            return _native_dpex_typeof_helper(val, array_class_type)
+
         # NB: the same trick than for _monkey_patch_unpack_usm_array is used here
-        id_val = id(val)
-        object_id = _SYCL_OBJECTS_IDS.setdefault(id_val, _ObjectId(id=id(val)))
-        _SYCL_OBJECTS_IDS[object_id] = val
-        return array_class_type_cache.setdefault(
-            object_id, _native_dpex_typeof_helper(val, array_class_type)
-        )
+        id_val = _get_usm_ndarray_identifier(val)
+        try:
+            object_id = _SYCL_OBJECTS_IDS[id_val]
+        except KeyError:
+            _SYCL_OBJECTS_IDS[id_val] = object_id = _ObjectId(id=id_val)
+            _SYCL_OBJECTS_IDS[object_id] = val
+
+        try:
+            ret = _SYCL_OBJECTS_NUMBA_TYPE_CACHE[object_id]
+        except KeyError:
+            _SYCL_OBJECTS_NUMBA_TYPE_CACHE[
+                object_id
+            ] = ret = _native_dpex_typeof_helper(val, array_class_type)
+
+        return ret
 
     Packer._unpack_usm_array = _monkey_patch_unpack_usm_array
     typeof._typeof_helper = _monkey_patch_typeof_helper
+
+
+def _get_usm_ndarray_identifier(array):
+    return f"{id(array.usm_data)}{array.dtype}{array.shape}"
