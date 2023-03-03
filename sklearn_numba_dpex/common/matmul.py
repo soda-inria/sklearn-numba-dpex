@@ -109,14 +109,14 @@ def make_matmul_2d_kernel(
     n_sliding_windows_for_cols = math.ceil(n_cols / square_window_side)
 
     # The last sliding window contain out-of-bound items. The following constants
-    # will be use to prevent out-of-bounds compute and memory access.
+    # will be used to prevent out-of-bounds compute and memory access.
     last_sliding_window_idx = n_sliding_windows_for_cols - 1
     last_sliding_window_width = (n_cols % square_window_side) or square_window_side
 
     # Given the size of the grid of windows is `grid_n_rows * grid_n_cols`, and that
-    # each window contain (square_window_side * square_window_side = work_group_size)
-    # work items, the total number of work items is:
-    global_size = grid_n_rows * grid_n_cols * work_group_size
+    # each window contain (square_window_side, square_window_side) = work_group_size
+    # work items, the total grid of work items is:
+    global_size = (grid_n_cols * square_window_side, grid_n_rows * square_window_side)
 
     @dpex.kernel
     # fmt: off
@@ -126,22 +126,13 @@ def make_matmul_2d_kernel(
             result     # OUT     (X_n_rows, Y_t_n_rows)
     ):
         # fmt: on
-        local_work_id = dpex.get_local_id(0)
-
-        # Map the 1D work group size to 2D indices that index the work items in a window
-        # size (square_window_side * square_window_side):
-
-        # Locally...
-        local_row_idx = local_work_id // square_window_side
-        local_col_idx = local_work_id % square_window_side
+        local_row_idx = dpex.get_local_id(1)
+        local_col_idx = dpex.get_local_id(0)
 
         # ...and globally.
-        group_id = dpex.get_group_id(0)
+        result_row_idx = dpex.get_global_id(1)
 
-        group_first_row_idx = (group_id // grid_n_cols) * square_window_side
-        group_first_col_idx = (group_id % grid_n_cols) * square_window_side
-
-        result_row_idx = group_first_row_idx + local_row_idx
+        group_first_col_idx = dpex.get_group_id(0) * square_window_side
         result_col_idx = group_first_col_idx + local_col_idx
 
         # Allocate shared memory for the two sliding windows on `X` and `Y_t`
@@ -283,4 +274,4 @@ def make_matmul_2d_kernel(
         if item_is_in_bounds:
             result[result_row_idx, result_col_idx] = out_fused_elementwise_fn(output)
 
-    return matmul[global_size, work_group_size]
+    return matmul[global_size, window_shape]
