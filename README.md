@@ -121,12 +121,11 @@ export CONDA_DPEX_ENV_NAME=my-dpex-env
 liking) followed by
 
 ```bash
-export CONDA_DPEX_ENV_NAME=my-dpex-env
 conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             numba-dpex=0.20.0dev3=py310hfc4b9b4_4 "intel::dpcpp_linux-64"
+             numba-dpex=0.20.0=py310hfc4b9b4_1 "intel::dpcpp_linux-64"
 ```
 
 Note that different versions of `sklearn_numba_dpex` can require to pin different
@@ -165,7 +164,7 @@ conda create --yes --name sklearn-dev \
                    "numpy==$DPEX_NUMPY_VERSION" \
                    scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
-git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api"
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
 git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 python setup.py bdist_wheel
@@ -228,7 +227,7 @@ Once you have loaded into the container, follow those instructions to install th
 `feature/engine-api` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api"
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api --depth 1"
 cd scikit-learn
 git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 pip install -e .
