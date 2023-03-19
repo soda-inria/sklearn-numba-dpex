@@ -67,7 +67,7 @@ def test_matmul_2d(test_input_shapes, work_group_size, sub_group_size, dtype):
         sub_group_size = min(device.sub_group_sizes)
 
     matmul_2d_kernel = make_matmul_2d_kernel(
-        X_n_rows, Y_t_n_rows, n_cols, work_group_size, sub_group_size, dtype, device
+        X_n_rows, Y_t_n_rows, n_cols, dtype, device, work_group_size, sub_group_size
     )
 
     result = dpt.zeros((X_n_rows, Y_t_n_rows), dtype, order="C", device=device)
@@ -103,5 +103,5 @@ def test_matmul_raise_on_invalid_size_parameters(
 ):
     with expected_error:
         make_matmul_2d_kernel(
-            2, 2, 2, work_group_size, sub_group_size, np.float32, dpctl.SyclDevice()
+            2, 2, 2, np.float32, dpctl.SyclDevice(), work_group_size, sub_group_size
         )
