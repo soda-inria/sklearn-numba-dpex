@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-3a7f783934955c5caaf61d41cce613804100c72a
+ARG BASE_IMAGE_VERSION=latest-7c9bd09e184c4d60b6776c5a3a407cef123d6315
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -39,7 +39,7 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
-ARG L0_LOADER_DEB_VERSION=1.8.12
+ARG L0_LOADER_DEB_VERSION=1.9.9
 ARG L0_LOADER_DEB_PLATFORM=u18.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
@@ -80,19 +80,19 @@ ARG LLVM_SPIRV_INSTALL_DIR=/opt/llvm-spirv
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
-ARG CMAKE_VERSION=3.25
-ARG CMAKE_VERSION_BUILD=2
+ARG CMAKE_VERSION=3.26
+ARG CMAKE_VERSION_BUILD=0
 
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.1dev2
+ARG DPCTL_GIT_BRANCH=0.14.2
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.11.0
+ARG DPNP_GIT_BRANCH=0.11.1
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.20.0dev3
+ARG NUMBA_DPEX_GIT_BRANCH=0.20.0
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
@@ -114,11 +114,14 @@ ARG L0_LOADER_DEB_VERSION
 ARG L0_LOADER_DEB_PLATFORM
 ARG L0_LOADER_DEB_ARCH=amd64
 ARG L0_LOADER_DEB_NAME=level-zero_${L0_LOADER_DEB_VERSION}+${L0_LOADER_DEB_PLATFORM}_${L0_LOADER_DEB_ARCH}.deb
+ARG L0_LOADER_DEVEL_DEB_NAME=level-zero-devel_${L0_LOADER_DEB_VERSION}+${L0_LOADER_DEB_PLATFORM}_${L0_LOADER_DEB_ARCH}.deb
 ARG L0_LOADER_DEB_URL=https://github.com/oneapi-src/level-zero/releases/download
 ARG L0_LOADER_DOWNLOAD_DIR=$TMPDIR/l0_loader
 RUN mkdir -p $L0_LOADER_DOWNLOAD_DIR \
     && wget -P $L0_LOADER_DOWNLOAD_DIR $L0_LOADER_DEB_URL/v${L0_LOADER_DEB_VERSION}/$L0_LOADER_DEB_NAME \
+    && wget -P $L0_LOADER_DOWNLOAD_DIR $L0_LOADER_DEB_URL/v${L0_LOADER_DEB_VERSION}/$L0_LOADER_DEVEL_DEB_NAME \
     && dpkg -i $L0_LOADER_DOWNLOAD_DIR/$L0_LOADER_DEB_NAME \
+    && dpkg -i $L0_LOADER_DOWNLOAD_DIR/$L0_LOADER_DEVEL_DEB_NAME \
     && rm -Rf $L0_LOADER_DOWNLOAD_DIR
 
 

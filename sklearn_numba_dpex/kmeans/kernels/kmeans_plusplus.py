@@ -250,6 +250,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         closest_dist_sq_ = closest_dist_sq[sample_idx]
         for i in range(window_n_candidates):
             candidate_idx = first_candidate_idx + i
+            # ?
             if candidate_idx < n_candidates:
                 sq_distance_i = min(sq_distances[i] * sample_weight_, closest_dist_sq_)
                 sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
