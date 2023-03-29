@@ -148,7 +148,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         for i in range(window_n_centroids):
             centroid_idx = first_centroid_idx + i
 
-            # ?
             if centroid_idx < n_clusters:
                 euclidean_distances_t[centroid_idx, sample_idx] = (
                     math.sqrt(sq_distances[i])

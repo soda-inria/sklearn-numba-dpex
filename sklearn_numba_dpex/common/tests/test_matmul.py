@@ -79,23 +79,25 @@ def test_matmul_2d(test_input_shapes, work_group_size, sub_group_size, dtype):
 
 
 no_error = nullcontext()
-expected_square_error = pytest.raises(
+expected_power_of_two = pytest.raises(
     ValueError,
-    match="Expected work_group_size to be a square of a multiple of sub_group_size",
+    match=(
+        r"Expected `work_group_size / \(sub_group_size \* sub_group_size\)` to be a "
+        r"power of two, "
+    ),
 )
 
 
 @pytest.mark.parametrize(
     "work_group_size, sub_group_size, expected_error",
     [
-        # work_group_size is required to be a square of a multiple of sub_group_size
+        # `work_group_size / (sub_group_size * sub_group_size)` is required to be a
+        # power of two
         (8 * 8, 8, no_error),
-        (22 * 22, 11, no_error),
-        # error if work_group_size is a perfect square, but not of a multiple of
-        # sub_group_size
-        (3 * 3, 13, expected_square_error),
-        # error if work_group_size is not a perfect square at all
-        (3 * 5, 5, expected_square_error),
+        (16 * 7, 4, expected_power_of_two),
+        (12 * 12, 4, expected_power_of_two),
+        (3 * 3, 13, expected_power_of_two),
+        (3 * 5, 5, expected_power_of_two),
     ],
 )
 def test_matmul_raise_on_invalid_size_parameters(

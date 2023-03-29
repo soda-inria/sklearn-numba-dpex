@@ -316,7 +316,6 @@ class _KMeansKernelFuncFactory:
                     # performance for the line thereafter relies on L1 cache
                     X_value = X_t[feature_idx, sample_idx]
                 else:
-                    # ???
                     X_value = zero
 
                 # For this given feature, loop on all centroids in the current

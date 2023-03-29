@@ -115,19 +115,6 @@ def make_matmul_2d_kernel(
     # values in registries, but more iterations in main loop.
     private_Y_t_sliding_window_width = 4  # must divide `sub_group_size`
 
-    # Automatically set `private_Y_t_sliding_window_width` to `sub_group_size` if
-    # is `sub_group_size < private_Y_t_sliding_window_width`
-    if sub_group_size < private_Y_t_sliding_window_width:
-        private_Y_t_sliding_window_width = sub_group_size
-
-    elif _mod_value := (sub_group_size % private_Y_t_sliding_window_width):
-        raise ValueError(
-            "Expected `sub_group_size` to be divisible by "
-            f"{private_Y_t_sliding_window_width}, but got "
-            f"`sub_group_size == {sub_group_size}`, with `{sub_group_size} % "
-            f"{private_Y_t_sliding_window_width} = {_mod_value}"
-        )
-
     # NB: The following implementation not only works for the best parameters found so
     # far but for other combinations too, to enable exhaustive grid searches on all
     # devices.
@@ -160,7 +147,7 @@ def make_matmul_2d_kernel(
         )
 
     elif work_group_size != (
-        base_nb_results_per_work_item * sub_group_size * sub_group_size
+        (2**base_nb_results_per_work_item_log2) * sub_group_size * sub_group_size
     ):
         raise ValueError(
             "Expected `work_group_size / (sub_group_size * sub_group_size)` to be a "
@@ -170,6 +157,19 @@ def make_matmul_2d_kernel(
         )
     else:
         base_nb_results_per_work_item = int(base_nb_results_per_work_item)
+
+    # Automatically set `private_Y_t_sliding_window_width` to `sub_group_size` if
+    # is `sub_group_size < private_Y_t_sliding_window_width`
+    if sub_group_size < private_Y_t_sliding_window_width:
+        private_Y_t_sliding_window_width = sub_group_size
+
+    elif _mod_value := (sub_group_size % private_Y_t_sliding_window_width):
+        raise ValueError(
+            "Expected `sub_group_size` to be divisible by "
+            f"{private_Y_t_sliding_window_width}, but got "
+            f"`sub_group_size == {sub_group_size}`, with `{sub_group_size} % "
+            f"{private_Y_t_sliding_window_width} = {_mod_value}`"
+        )
 
     if multiply_fn is None:
 
