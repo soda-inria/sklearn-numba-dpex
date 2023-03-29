@@ -74,7 +74,8 @@ def make_matmul_2d_kernel(
     `arithmetic_intensity` multipliers,...) can be found, those parameters might depend
     on the device. Is it possible to find parameters that reasonably suit all devices ?
     - Investigating `SPIR-V` code compiled by `numba-dpex` to look for possible
-    issues with the JIT.
+    issues with the JIT. Are groups dispatched in increasing order of `group_id` ? Do
+    consecutive `local_id`s index consecutive work items in the same subgroups ?
     - Re-ordering work groups (and maybe work items within work groups) to improve
     cache locality. This as been attempted but have shown no results, while up to a
     10% improvements is claimed to be possible with this trick.
@@ -542,7 +543,9 @@ def make_matmul_2d_kernel(
                 result_col_idx = result_first_col_idx
                 for j in range(private_result_array_width):
                     if result_col_idx < Y_t_n_rows:
-                        result[result_row_idx, result_col_idx] = private_result[i, j]
+                        result[result_row_idx, result_col_idx] = (
+                            out_fused_elementwise_fn(private_result[i, j])
+                        )
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
