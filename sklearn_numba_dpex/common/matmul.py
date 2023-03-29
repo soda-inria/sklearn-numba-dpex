@@ -62,6 +62,8 @@ def make_matmul_2d_kernel(
     sliding on rows might be better. It seems it can enable prettier memory access
     patterns both for reading and writing in shared memory. However attempts at
     this approach have only shown worse performances so far.
+    - This suggests that some assumptions on local memory might be wrong, is local
+    memory C-contiguous ?
     - coalescing accesses in global memory: it is unclear wether `numba_dpex/SYCL` can
     effectively coalesce reads of contiguous addresses in global memory, it might not
     if it's not able to tell at compile time that the input has a contiguous structure
@@ -86,8 +88,10 @@ def make_matmul_2d_kernel(
     # a stable heuristic is yet to be found.
     # TODO: find an heuristic for adapting the performance parameters to the device
     # rather than hardcoding defaults.
-    work_group_size = work_group_size or 128
-    sub_group_size = sub_group_size or 128
+    if work_group_size in [None, "max"]:
+        work_group_size = 128
+    if sub_group_size is None:
+        sub_group_size = 4
 
     # Arithmetic intensity refers to how much compute a single work item is set to
     # perform relatively to how much RW operations it needs to execute.
