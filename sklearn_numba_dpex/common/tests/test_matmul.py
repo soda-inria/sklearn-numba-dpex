@@ -15,9 +15,67 @@ def _arange_reshaped(shape, dtype):
     return np.arange(n_items, dtype=dtype).reshape(shape)
 
 
+def _random_reshaped(shape, dtype, rng):
+    n_items = shape[0] * shape[1]
+    return rng.random(n_items, dtype=dtype).reshape(shape)
+
+
+def _test_matmul_2d(
+    test_input_shapes, array_fn, work_group_size, sub_group_size, dtype
+):
+    X_shape, Y_shape = test_input_shapes
+
+    if array_fn == "arange":
+        X = _arange_reshaped(X_shape, dtype)
+        Y = _arange_reshaped(Y_shape, dtype)
+    elif array_fn == "random":
+        rng = np.random.default_rng(seed=123)
+        X = _random_reshaped(X_shape, dtype, rng)
+        Y = _random_reshaped(Y_shape, dtype, rng)
+    else:
+        raise ValueError(
+            "Expected `array_fn` to take values `arange` or `random`, but got "
+            f"{array_fn}."
+        )
+
+    X_n_rows = X_shape[0]
+    Y_t_n_rows = Y_shape[1]
+
+    assert (n_cols := X_shape[1]) == Y_shape[0]
+
+    expected_result = np.matmul(X, Y)
+
+    X = dpt.asarray(X, order="C")
+    Y_t = dpt.asarray(Y.T, order="C")
+
+    device = X.device.sycl_device
+
+    if sub_group_size is None:
+        sub_group_size = min(device.sub_group_sizes)
+
+    matmul_2d_kernel = make_matmul_2d_kernel(
+        X_n_rows,
+        Y_t_n_rows,
+        n_cols,
+        dtype,
+        device,
+        work_group_size=work_group_size,
+        sub_group_size=sub_group_size,
+    )
+
+    result = dpt.zeros((X_n_rows, Y_t_n_rows), dtype, order="C", device=device)
+
+    matmul_2d_kernel(X, Y_t, result)
+
+    result = dpt.asnumpy(result)
+    assert_allclose(expected_result, result)
+
+
+@pytest.mark.parametrize("array_fn", ["arange", "random"])
 @pytest.mark.parametrize(
     "work_group_size, sub_group_size", [(1, 1), (4, 2), (16, 4), ("max", None)]
 )
+@pytest.mark.parametrize("dtype", np.float32)
 @pytest.mark.parametrize(
     "test_input_shapes",
     [
@@ -44,38 +102,32 @@ def _arange_reshaped(shape, dtype):
         ((5, 10), (10, 4)),
     ],
 )
+def test_matmul_2d_small(
+    test_input_shapes, array_fn, work_group_size, sub_group_size, dtype
+):
+    _test_matmul_2d(test_input_shapes, array_fn, work_group_size, sub_group_size, dtype)
+
+
+@pytest.mark.parametrize("array_fn", ["arange", "random"])
 @pytest.mark.parametrize("dtype", float_dtype_params)
-def test_matmul_2d(test_input_shapes, work_group_size, sub_group_size, dtype):
-    X_shape, Y_shape = test_input_shapes
-
-    X = _arange_reshaped(X_shape, dtype)
-    Y = _arange_reshaped(Y_shape, dtype)
-
-    X_n_rows = X_shape[0]
-    Y_t_n_rows = Y_shape[1]
-
-    assert (n_cols := X_shape[1]) == Y_shape[0]
-
-    expected_result = np.matmul(X, Y)
-
-    X = dpt.asarray(X, order="C")
-    Y_t = dpt.asarray(Y.T, order="C")
-
-    device = X.device.sycl_device
-
-    if sub_group_size is None:
-        sub_group_size = min(device.sub_group_sizes)
-
-    matmul_2d_kernel = make_matmul_2d_kernel(
-        X_n_rows, Y_t_n_rows, n_cols, dtype, device, work_group_size, sub_group_size
+@pytest.mark.parametrize(
+    "test_input_shapes",
+    [
+        # use prime numbers to ensure to test boundary management
+        ((1999, 661), (661, 563)),
+        ((1999, 1999), (1999, 1999)),
+        ((661, 1999), (1999, 563)),
+    ],
+)
+def test_matmul_2d_large(test_input_shapes, array_fn, dtype):
+    # test with default params only
+    _test_matmul_2d(
+        test_input_shapes,
+        array_fn,
+        work_group_size=None,
+        sub_group_size=None,
+        dtype=dtype,
     )
-
-    result = dpt.zeros((X_n_rows, Y_t_n_rows), dtype, order="C", device=device)
-
-    matmul_2d_kernel(X, Y_t, result)
-
-    result = dpt.asnumpy(result)
-    assert_allclose(expected_result, result)
 
 
 no_error = nullcontext()
@@ -105,5 +157,11 @@ def test_matmul_raise_on_invalid_size_parameters(
 ):
     with expected_error:
         make_matmul_2d_kernel(
-            2, 2, 2, np.float32, dpctl.SyclDevice(), work_group_size, sub_group_size
+            2,
+            2,
+            2,
+            np.float32,
+            dpctl.SyclDevice(),
+            work_group_size=work_group_size,
+            sub_group_size=sub_group_size,
         )
