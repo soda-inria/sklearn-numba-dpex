@@ -292,6 +292,7 @@ class _KMeansKernelFuncFactory:
             centroids_window,    # IN
             result,              # OUT
         ):
+            # TODO: manually unroll this loop ?
             # fmt: on
             for window_feature_idx in range(window_n_features):
 
