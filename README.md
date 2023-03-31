@@ -227,7 +227,7 @@ Once you have loaded into the container, follow those instructions to install th
 `feature/engine-api` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api --depth 1"
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
 git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 pip install -e .
