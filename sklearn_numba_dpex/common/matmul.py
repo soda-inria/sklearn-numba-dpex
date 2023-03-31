@@ -291,12 +291,37 @@ def make_matmul_2d_kernel(
     grid_n_groups = global_grid_n_rows * global_grid_n_cols
     global_size = grid_n_groups * work_group_size
 
+    # TODO: the following code can be leveraged to improve cache locality. However, it
+    # does not seem to improve the timings.
+
+    # get_remapped_group_id_func = make_get_super_id_func(
+    #     grid_n_groups,
+    #     private_result_array_height,
+    #     private_result_array_width,
+    #     global_grid_n_rows,
+    #     global_grid_n_cols,
+    # )
+
+    # get_remapped_work_item_id_func = make_get_super_id_func(
+    #     work_group_size,
+    #     private_result_array_height,
+    #     private_result_array_width,
+    #     nb_work_items_for_X_window,
+    #     nb_work_items_for_Y_t_window,
+    #     sub_group_size=sub_group_size,
+    # )
+
     @dpex.kernel
     # fmt: off
     def matmul(
             X,                          # IN      (X_n_rows, n_cols)
             Y_t,                        # IN      (Y_t_n_rows, n_cols)
-            result                      # OUT     (X_n_rows, Y_t_n_rows)
+            result,                     # OUT     (X_n_rows, Y_t_n_rows)
+            # WIP: improve cache locality ?
+            # group_id_mapping_row,
+            # group_id_mapping_col,
+            # work_id_mapping_row,
+            # work_id_mapping_col
     ):
         # fmt: on
         work_item_idx = dpex.get_local_id(zero_idx)
@@ -311,7 +336,9 @@ def make_matmul_2d_kernel(
         # of results covered by this work group
         group_row_idx = group_idx // global_grid_n_cols
         group_col_idx = group_idx % global_grid_n_cols
-
+        # TODO: improve cache locality ?
+        # group_row_idx = group_id_mapping_row[group_idx]
+        # group_col_idx = group_id_mapping_col[group_idx]
         group_first_row_idx = (
             group_row_idx * result_window_height
         )
@@ -350,6 +377,10 @@ def make_matmul_2d_kernel(
         first_private_loaded_sliding_Y_t_value_idx = (
             work_item_idx % nb_work_items_for_Y_t_window
         )
+        # TODO: improve cache locality ?
+        # first_private_loaded_sliding_X_value_idx = work_id_mapping_row[work_item_idx]
+        # first_private_loaded_sliding_Y_t_value_idx = work_id_mapping_col[
+        #     work_item_idx]
 
         _initialize_private_result(private_result)
 
@@ -514,7 +545,37 @@ def make_matmul_2d_kernel(
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
-    return matmul[global_size, work_group_size]
+    matmul_callable = matmul[global_size, work_group_size]
+
+    # TODO: improve cache locality ?
+    # import dpctl.tensor as dpt
+
+    # group_id_mapping_row, group_id_mapping_col = zip(
+    #     *(get_remapped_group_id_func(group_id) for group_id in range(grid_n_groups))
+    # )
+    # group_id_mapping_row = dpt.asarray(group_id_mapping_row, dtype=np.int32)
+    # group_id_mapping_col = dpt.asarray(group_id_mapping_col, dtype=np.int32)
+
+    # work_id_mapping_row, work_id_mapping_col = zip(
+    #     *(get_remapped_work_item_id_func(item_id)
+    #       for item_id in range(work_group_size))
+    # )
+    # work_id_mapping_row = dpt.asarray(work_id_mapping_row, dtype=np.int32)
+    # work_id_mapping_col = dpt.asarray(work_id_mapping_col, dtype=np.int32)
+
+    def _matmul(X, Y_t, result):
+        matmul_callable(
+            X,
+            Y_t,
+            result,
+            # TODO: improve cache locality ?
+            # group_id_mapping_row,
+            # group_id_mapping_col,
+            # work_id_mapping_row,
+            # work_id_mapping_col,
+        )
+
+    return _matmul
 
 
 def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multiply_fn):
@@ -560,6 +621,10 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
             private_result[i, 3] += multiply_fn(
                 private_loaded_X_value, private_Y_t_sliding_window[3, j]
             )
+            # private_result[i, 0] += 1
+            # private_result[i, 1] += 1
+            # private_result[i, 2] += 1
+            # private_result[i, 3] += 1
 
     elif private_result_array_width == 8:
 
@@ -593,3 +658,156 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
             )
 
     return _accumulate_step_unrolled
+
+
+# TODO: improve cache locality ?
+def make_get_super_id_func(
+    n_items,
+    item_weight_row,
+    item_weight_col,
+    global_n_rows,
+    global_n_cols,
+    sub_group_size=None,
+):
+    """Return a function that can either be used within a kernel, or used behorehand
+    to pre-compute a mapping from native ids to remapped ids that ensure best cache
+    properties for the matmul kernel."""
+
+    item_weight_lcm = math.lcm(item_weight_row, item_weight_col)
+    local_n_rows = item_weight_lcm // item_weight_row
+    local_n_cols = item_weight_lcm // item_weight_col
+    if sub_group_size is not None:
+        mult = sub_group_size // local_n_rows
+        if (mult * local_n_rows) != sub_group_size:
+            raise ValueError
+        local_n_rows = local_n_rows * mult
+        local_n_cols = local_n_cols * mult
+
+    max_grid_dim_size = max(
+        global_n_rows // local_n_rows,
+        global_n_cols // local_n_cols,
+    )
+
+    groups_tree_depth = math.ceil(math.log2(max_grid_dim_size))
+
+    init_node_side_n_rows = int(2 ** (groups_tree_depth - 1) * local_n_rows)
+    init_node_side_n_cols = int(2 ** (groups_tree_depth - 1) * local_n_cols)
+    init_current_max_covered_rows = int((2**groups_tree_depth) * local_n_rows)
+    init_current_max_covered_cols = int((2**groups_tree_depth) * local_n_cols)
+
+    init_needs_boundaries_check = n_items != (
+        init_current_max_covered_cols * init_current_max_covered_rows
+    )
+
+    def get_super_item_id(item_id):
+        item_id_in_node = item_id
+        super_item_id_row = 0
+        super_item_id_col = 0
+        current_max_covered_rows = global_n_rows
+        current_max_covered_cols = global_n_cols
+        boundaries_check = init_needs_boundaries_check
+        nb_items_in_node = n_items
+
+        current_node_side_n_rows = init_node_side_n_rows
+        current_node_side_n_cols = init_node_side_n_cols
+
+        for _ in range(groups_tree_depth):
+            if (not boundaries_check) or (
+                (current_max_covered_rows == init_current_max_covered_rows)
+                and (current_max_covered_cols == init_current_max_covered_cols)
+            ):
+                nb_items_in_node = nb_items_in_node // 4
+                child_id = item_id_in_node // nb_items_in_node
+                item_id_in_node = item_id_in_node % nb_items_in_node
+                if (child_id == 1) or (child_id == 3):
+                    super_item_id_col += current_node_side_n_cols
+                if (child_id == 2) or (child_id == 3):
+                    super_item_id_row += current_node_side_n_rows
+                current_max_covered_rows = current_node_side_n_rows
+                current_max_covered_cols = current_node_side_n_cols
+
+            elif (current_max_covered_rows < current_node_side_n_rows) and (
+                current_max_covered_rows < current_node_side_n_cols
+            ):
+                pass
+
+            elif current_max_covered_rows < current_node_side_n_rows:
+                nb_items_in_node_0 = current_max_covered_rows * current_node_side_n_cols
+                if item_id_in_node < nb_items_in_node_0:
+                    nb_items_in_node = nb_items_in_node_0
+                    current_max_covered_cols = current_node_side_n_cols
+                else:
+                    super_item_id_col += current_node_side_n_cols
+                    item_id_in_node -= nb_items_in_node_0
+                    current_max_covered_cols -= current_node_side_n_cols
+                    nb_items_in_node -= nb_items_in_node_0
+
+            elif current_max_covered_cols < current_node_side_n_cols:
+                nb_items_in_node_0 = current_max_covered_cols * current_node_side_n_rows
+                if item_id_in_node < nb_items_in_node_0:
+                    nb_items_in_node = nb_items_in_node_0
+                    current_max_covered_rows = current_node_side_n_rows
+                else:
+                    super_item_id_row += current_node_side_n_rows
+                    item_id_in_node -= nb_items_in_node_0
+                    current_max_covered_rows -= current_node_side_n_rows
+                    nb_items_in_node -= nb_items_in_node_0
+
+            else:
+                nb_items_in_node_0 = current_node_side_n_rows * current_node_side_n_cols
+
+                if item_id_in_node < nb_items_in_node_0:
+                    boundaries_check = False
+                    nb_items_in_node = nb_items_in_node_0
+
+                else:
+                    nb_items_in_nodes_01 = (
+                        current_max_covered_cols * current_node_side_n_rows
+                    )
+
+                    if item_id_in_node < nb_items_in_nodes_01:
+                        super_item_id_col += current_node_side_n_cols
+                        item_id_in_node -= nb_items_in_node_0
+                        current_max_covered_rows = current_node_side_n_rows
+                        current_max_covered_cols -= current_node_side_n_cols
+                        nb_items_in_node = nb_items_in_nodes_01 - nb_items_in_node_0
+                        boundaries_check = (
+                            current_max_covered_cols == current_node_side_n_cols
+                        )
+
+                    else:
+                        nb_items_in_nodes_02 = (
+                            current_max_covered_rows * current_node_side_n_cols
+                        )
+                        nb_items_in_nodes_012 = (
+                            nb_items_in_nodes_01
+                            + nb_items_in_nodes_02
+                            - nb_items_in_node_0
+                        )
+
+                        if item_id_in_node < nb_items_in_nodes_012:
+                            super_item_id_row += current_node_side_n_rows
+                            item_id_in_node -= nb_items_in_nodes_01
+                            current_max_covered_rows -= current_node_side_n_rows
+                            current_max_covered_cols = current_node_side_n_cols
+                            nb_items_in_node = nb_items_in_nodes_02 - nb_items_in_node_0
+                            boundaries_check = (
+                                current_max_covered_rows == current_node_side_n_rows
+                            )
+
+                        else:
+                            super_item_id_row += current_node_side_n_rows
+                            super_item_id_col += current_node_side_n_cols
+                            item_id_in_node -= nb_items_in_nodes_012
+                            current_max_covered_rows -= current_node_side_n_rows
+                            current_max_covered_cols -= current_node_side_n_cols
+                            nb_items_in_node -= nb_items_in_nodes_012
+
+            current_node_side_n_rows = current_node_side_n_rows // 2
+            current_node_side_n_cols = current_node_side_n_cols // 2
+
+        return (super_item_id_row + (item_id_in_node // current_max_covered_cols)), (
+            super_item_id_col + (item_id_in_node % current_max_covered_cols)
+        )
+
+    return get_super_item_id
