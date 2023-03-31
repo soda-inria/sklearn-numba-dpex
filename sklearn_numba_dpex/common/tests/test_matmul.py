@@ -75,7 +75,7 @@ def _test_matmul_2d(
 @pytest.mark.parametrize(
     "work_group_size, sub_group_size", [(1, 1), (4, 2), (16, 4), ("max", None)]
 )
-@pytest.mark.parametrize("dtype", np.float32)
+@pytest.mark.parametrize("dtype", [np.float32])
 @pytest.mark.parametrize(
     "test_input_shapes",
     [
