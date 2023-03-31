@@ -19,12 +19,11 @@ from sklearn_numba_dpex.common._utils import (
     check_power_of_2,
     get_maximum_power_of_2_smaller_than,
 )
-from sklearn_numba_dpex.common.kernels import (
-    make_initialize_to_zeros_2d_kernel,
-    make_sum_reduction_2d_kernel,
-)
+from sklearn_numba_dpex.common.kernels import make_initialize_to_zeros_kernel
+from sklearn_numba_dpex.common.reductions import make_sum_reduction_2d_kernel
 
 zero_idx = np.int64(0)
+one_idx = np.int64(1)
 count_one_as_a_long = np.int64(1)
 count_one_as_an_int = np.int32(1)
 
@@ -264,19 +263,18 @@ def _get_topk_threshold(array_in, k, group_sizes):
     )
 
     reduce_privatized_counts = make_sum_reduction_2d_kernel(
-        size0=n_counts_private_copies,
-        size1=radix_size,
-        work_group_size=work_group_size,
+        shape=(n_counts_private_copies, radix_size),
         device=device,
         dtype=np.int64,
+        work_group_size=work_group_size,
         axis=0,
         sub_group_size=sub_group_size,
     )
 
     check_radix_histogram = _make_check_radix_histogram_kernel(radix_size, dtype)
 
-    initialize_privatized_counts = make_initialize_to_zeros_2d_kernel(
-        n_counts_private_copies, radix_size, work_group_size, dtype
+    initialize_privatized_counts = make_initialize_to_zeros_kernel(
+        (n_counts_private_copies, radix_size), work_group_size, dtype
     )
 
     (
@@ -303,13 +301,6 @@ def _get_topk_threshold(array_in, k, group_sizes):
         [0], dtype=np.int64, device=sequential_processing_device
     )
     terminate = dpt.asarray([0], dtype=np.int32, device=sequential_processing_device)
-
-    if sequential_processing_on_different_device:
-        check_radix_histogram = check_radix_histogram.configure(
-            sycl_queue=terminate.sycl_queue,
-            global_size=[1],
-            local_size=[1],
-        )
 
     while True:
         create_radix_histogram_kernel(
@@ -423,7 +414,9 @@ def _make_create_radix_histogram_kernel(
         n_sub_group_per_work_group = get_maximum_power_of_2_smaller_than(
             work_group_size / sub_group_size
         )
-        work_group_size = n_sub_group_per_work_group * sub_group_size
+        work_group_size = sub_group_size * n_sub_group_per_work_group
+
+    work_group_shape = (sub_group_size, n_sub_group_per_work_group)
 
     # The size of the radix is chosen such as the size of intermediate objects that
     # build in shared memory amounts to one int64 item per work item.
@@ -436,7 +429,7 @@ def _make_create_radix_histogram_kernel(
     n_sum_reduction_steps = math.log2(n_sub_group_per_work_group)
 
     n_work_groups = math.ceil(n_items / work_group_size)
-    global_size = n_work_groups * work_group_size
+    global_shape = (sub_group_size, n_sub_group_per_work_group * n_work_groups)
 
     n_counts_items = radix_size
     n_counts_bytes = np.dtype(np.int64).itemsize * n_counts_items
@@ -495,17 +488,16 @@ def _make_create_radix_histogram_kernel(
         discarded by the previous iterations match the condition. During the first
         iteration, the condition is true for all items.
         """
-
-        item_idx = dpex.get_global_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
-        local_subgroup = local_work_id // sub_group_size
-        local_subgroup_work_id = local_work_id % sub_group_size
+        item_idx = dpex.get_global_id(zero_idx) + (
+            sub_group_size * dpex.get_global_id(one_idx))
+        local_subgroup = dpex.get_local_id(one_idx)
+        local_subgroup_work_id = dpex.get_local_id(zero_idx)
 
         # Initialize the shared memory in the work group
         local_counts = dpex.local.array(local_counts_size, dtype=histogram_dtype)
         local_counts[local_subgroup, local_subgroup_work_id] = zero_idx
 
-        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+        dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
         # If item_idx is outside the bounds of the input, ignore this location.
         is_in_bounds = item_idx < n_items
@@ -552,7 +544,7 @@ def _make_create_radix_histogram_kernel(
                 local_counts, (local_subgroup, digit_in_radix), count_one_as_a_long
             )
 
-        dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+        dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
         # This is the merge step, where the memory buffers of all sub-groups are summed
         # together into the first buffer local_counts[0], in a bracket manner.
@@ -567,7 +559,7 @@ def _make_create_radix_histogram_kernel(
                     local_subgroup + reduction_active_subgroups, local_subgroup_work_id
                 ]
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
         # The current histogram is local to the current work group. Yet again
         # summing right away all histograms to a unique, global histogram in global
@@ -590,7 +582,7 @@ def _make_create_radix_histogram_kernel(
         radix_size,
         radix_bits,
         n_counts_private_copies,
-        create_radix_histogram[global_size, work_group_size],
+        create_radix_histogram[global_shape, work_group_shape],
     )
 
 

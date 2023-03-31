@@ -1,80 +1,95 @@
-import dpctl
+from dataclasses import dataclass
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
-dpctl_select_default_device = dpctl.select_default_device
-native_dpex_spirv_generator_cmdline = None
-native_dpex_compile_func = None
-native_dpex_compile_func_template = None
+import dpctl.tensor as dpt
+from numba_dpex import USMNdArray
+
+_native_dpex_typeof_helper = None
+_native_Packer_unpack_usm_array = None
 
 
-def _load_numba_dpex_with_patches(with_spirv_fix=True, with_compiler_fix=True):
-    """This function hacks `numba_dpex` init to work around issues after
-    `dpctl>=0.14.1dev1` and `numba_dpex>=0.19.0` bumps. It will be
-    reverted when the official fixes are out.
-    See https://github.com/IntelPython/numba-dpex/pull/858 ,
-    https://github.com/IntelPython/numba-dpex/issues/867 and
-    https://github.com/IntelPython/numba-dpex/issues/868
+@dataclass(frozen=True)
+class _ObjectId:
+    id: int
+
+
+def _load_numba_dpex_with_patches(with_patches=True):
+    """This function hacks `numba_dpex` init to work around performance issues after
+    `numba_dpex>=0.20.0dev3` bumps. It will be reverted when the official fixes are out.
+    See the issue tracker at https://github.com/IntelPython/numba-dpex/issues/945 .
     """
-    global native_dpex_spirv_generator_cmdline
-    global native_dpex_compile_func
-    global native_dpex_compile_func_template
+    # TODO: revert patches when https://github.com/IntelPython/numba-dpex/issues/945 is
+    # fixed
+    global _native_dpex_typeof_helper
+    global _native_Packer_unpack_usm_array
 
-    def _patch_mock_dpctl_select_default_device():
-        class _mock_device:
-            is_host = False
+    from numba_dpex.core.kernel_interface.arg_pack_unpacker import Packer
+    from numba_dpex.core.typing import typeof
 
-        return _mock_device()
+    if _native_dpex_typeof_helper is None:
+        _native_dpex_typeof_helper = typeof._typeof_helper
 
-    try:
-        # A better fix for this is already available in the development tree of
-        # `numba_dpex` but it's not released yet.
-        # See https://github.com/IntelPython/numba-dpex/pull/858
-        dpctl.select_default_device = _patch_mock_dpctl_select_default_device
-        import numba_dpex.config as dpex_config
-        import numba_dpex.decorators as dpex_decorators
-        import numba_dpex.spirv_generator as dpex_spirv_generator
+    if _native_Packer_unpack_usm_array is None:
+        _native_Packer_unpack_usm_array = Packer._unpack_usm_array
 
-        if native_dpex_spirv_generator_cmdline is None:
-            native_dpex_spirv_generator_cmdline = dpex_spirv_generator.CmdLine
+    if not with_patches:
+        typeof._typeof_helper = _native_dpex_typeof_helper
+        Packer._unpack_usm_array = _native_Packer_unpack_usm_array
+        return
 
-        if native_dpex_compile_func is None:
-            native_dpex_compile_func = dpex_decorators.compile_func
+    _SYCL_OBJECTS_IDS = WeakValueDictionary()
 
-        if native_dpex_compile_func_template is None:
-            native_dpex_compile_func_template = dpex_decorators.compile_func_template
+    _SYCL_OBJECTS_UNPACK_CACHE = WeakKeyDictionary()
 
-        # TODO; revert this once https://github.com/IntelPython/numba-dpex/issues/867
-        # is fixed.
-        def _dpex_compile_func(pyfunc, *args, **kwargs):
-            pyfunc_id = id(pyfunc)
-            pyfunc.__name__ += f"_{pyfunc_id}"
-            pyfunc.__qualname__ += f"_{pyfunc_id}"
-            return native_dpex_compile_func(pyfunc, *args, **kwargs)
+    def _monkey_patch_unpack_usm_array(self, val):
+        if not isinstance(val, dpt.usm_ndarray):
+            return _native_Packer_unpack_usm_array(self, val)
 
-        def _dpex_compile_func_template(pyfunc, *args, **kwargs):
-            pyfunc_id = id(pyfunc)
-            pyfunc.__name__ += f"_{pyfunc_id}"
-            pyfunc.__qualname__ += f"_{pyfunc_id}"
-            return native_dpex_compile_func_template(pyfunc, *args, **kwargs)
+        # We work around the fact that `val` is not hashable and can't get used as a
+        # key of the `WeakKeyDictionary` by pairing it with an instance of an object
+        # that is hashable and whose garbage collection is paired to `val`'s.
+        id_val = _get_usm_ndarray_identifier(val)
+        try:
+            object_id = _SYCL_OBJECTS_IDS[id_val]
+        except KeyError:
+            _SYCL_OBJECTS_IDS[id_val] = object_id = _ObjectId(id=id_val)
+            _SYCL_OBJECTS_IDS[object_id] = val
 
-        if with_compiler_fix:
-            dpex_decorators.compile_func = _dpex_compile_func
-            dpex_decorators.compile_func_template = _dpex_compile_func_template
-        else:
-            dpex_decorators.compile_func = native_dpex_compile_func
-            dpex_decorators.compile_func_template = native_dpex_compile_func_template
+        try:
+            ret = _SYCL_OBJECTS_UNPACK_CACHE[object_id]
+        except KeyError:
+            _SYCL_OBJECTS_UNPACK_CACHE[
+                object_id
+            ] = ret = _native_Packer_unpack_usm_array(self, val)
 
-        # TODO: revert this once https://github.com/IntelPython/numba-dpex/issues/868
-        # is fixed.
-        class _CmdLine(dpex_spirv_generator.CmdLine):
-            def generate(self, llvm_spirv_args, *args, **kwargs):
-                if not dpex_config.NATIVE_FP_ATOMICS:
-                    llvm_spirv_args = ["--spirv-max-version", "1.0"] + llvm_spirv_args
-                super().generate(llvm_spirv_args, *args, **kwargs)
+        return ret
 
-        if with_spirv_fix:
-            dpex_spirv_generator.CmdLine = _CmdLine
-        else:
-            dpex_spirv_generator.CmdLine = native_dpex_spirv_generator_cmdline
+    _SYCL_OBJECTS_NUMBA_TYPE_CACHE = WeakKeyDictionary()
 
-    finally:
-        dpctl.select_default_device = dpctl_select_default_device
+    def _monkey_patch_typeof_helper(val, array_class_type):
+        if (array_class_type is not USMNdArray) or not isinstance(val, dpt.usm_ndarray):
+            return _native_dpex_typeof_helper(val, array_class_type)
+
+        # NB: the same trick than for _monkey_patch_unpack_usm_array is used here
+        id_val = _get_usm_ndarray_identifier(val)
+        try:
+            object_id = _SYCL_OBJECTS_IDS[id_val]
+        except KeyError:
+            _SYCL_OBJECTS_IDS[id_val] = object_id = _ObjectId(id=id_val)
+            _SYCL_OBJECTS_IDS[object_id] = val
+
+        try:
+            ret = _SYCL_OBJECTS_NUMBA_TYPE_CACHE[object_id]
+        except KeyError:
+            _SYCL_OBJECTS_NUMBA_TYPE_CACHE[
+                object_id
+            ] = ret = _native_dpex_typeof_helper(val, array_class_type)
+
+        return ret
+
+    Packer._unpack_usm_array = _monkey_patch_unpack_usm_array
+    typeof._typeof_helper = _monkey_patch_typeof_helper
+
+
+def _get_usm_ndarray_identifier(array):
+    return f"{id(array.usm_data)}{array.dtype}{array.shape}"

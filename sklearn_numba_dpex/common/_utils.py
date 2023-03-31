@@ -14,36 +14,21 @@ def get_maximum_power_of_2_smaller_than(x):
     return 2 ** (math.floor(math.log2(x)))
 
 
-# HACK: the following function are defined as closures to work around a `numba_dpex`
-# bug.
-# Revert it (and everything related, see
-# https://github.com/soda-inria/sklearn-numba-dpex/pull/82 )
-# when the bug is fixed. The bugfix can be tracked at
-# https://github.com/IntelPython/numba-dpex/issues/867
-def _square():
-    def _square_closure(x):
-        return x * x
-
-    return _square_closure
+def _square(x):
+    return x * x
 
 
-def _minus():
-    def _minus_closure(x, y):
-        return x - y
-
-    return _minus_closure
+def _minus(x, y):
+    return x - y
 
 
-def _plus():
-    def _plus_closure(x, y):
-        return x + y
-
-    return _plus_closure
+def _plus(x, y):
+    return x + y
 
 
-def _divide():
-    def _divide_closure(x, y):
-        return x / y
+def _divide_by(divisor):
+    def _divide_closure(x):
+        return x / divisor
 
     return _divide_closure
 

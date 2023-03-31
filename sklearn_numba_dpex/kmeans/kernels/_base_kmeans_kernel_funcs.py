@@ -1,4 +1,5 @@
 import numba_dpex as dpex
+import numpy as np
 
 
 def make_pairwise_ops_base_kernel_funcs(
@@ -63,7 +64,8 @@ def make_pairwise_ops_base_kernel_funcs(
 
         @dpex.func
         def initialize_window_of_centroids(
-            local_work_id,
+            local_row_idx,
+            local_col_idx,
             first_centroid_idx,
             centroids_half_l2_norm,
             is_last_centroid_window,
@@ -73,7 +75,8 @@ def make_pairwise_ops_base_kernel_funcs(
         ):
             if is_last_centroid_window:
                 initialize_last_window_of_centroids(
-                    local_work_id,
+                    local_row_idx,
+                    local_col_idx,
                     first_centroid_idx,
                     centroids_half_l2_norm,
                     # OUT
@@ -82,7 +85,8 @@ def make_pairwise_ops_base_kernel_funcs(
                 )
             else:
                 initialize_full_window_of_centroids(
-                    local_work_id,
+                    local_row_idx,
+                    local_col_idx,
                     first_centroid_idx,
                     centroids_half_l2_norm,
                     # OUT
@@ -203,6 +207,7 @@ class _KMeansKernelFuncFactory:
 
     def make_initialize_window_kernel_func(self, window_n_centroids):
         zero = self.dtype(0.0)
+        zero_as_a_long = np.int64(0)
 
         @dpex.func
         def _initialize_results(results):
@@ -217,22 +222,36 @@ class _KMeansKernelFuncFactory:
         @dpex.func
         # fmt: off
         def _initialize_window_of_centroids(
-            local_work_id,                      # PARAM
+            local_row_idx,                      # PARAM
+            local_col_idx,                      # PARAM
             first_centroid_idx,                 # PARAM
-            centroids_half_l2_norm,             # IN
-            window_of_centroids_half_l2_norms,  # OUT
-            results,                            # OUT
+            centroids_half_l2_norm,             # IN       (self.n_clusters,)
+            window_of_centroids_half_l2_norms,  # OUT      (work_group_shape[0],)
+            results,                            # OUT      (work_group_shape[0],)
         ):
             # fmt: on
             _initialize_results(results)
 
-            # The first `window_n_centroids` work items cooperate on loading the
-            # values of centroids_half_l2_norm relevant to current window. Each work
-            # item loads one single value.
-            if local_work_id < window_n_centroids:
-                half_l2_norm_loading_idx = first_centroid_idx + local_work_id
-                window_of_centroids_half_l2_norms[local_work_id] = (
-                    centroids_half_l2_norm[half_l2_norm_loading_idx]
+            # The work items are indexed in a 2D grid of shape
+            # `work_group_shape = (centroids_window_height, window_n_centroids)`, where
+            # `centroids_window_height` and `window_n_centroids` refer to a window of
+            # centroids that is entirely within the boundaries of the centroid array.
+            # The `window_n_centroids` work items in the first row cooperate on loading
+            # the values of `centroids_half_l2_norm` relevant to current window. Each
+            # work item loads one single value.
+
+            # NB: Close to the boundaries, the value of `window_n_centroids` is
+            # adjusted so that the window fits within the boundaries of the array,
+            # however the shape of the work group does not change. The work items in
+            # the 2D grid such as `local_col_idx` is greater than the actual value of
+            # `window_n_centroids` at the boundaries must be discarded, to avoid
+            # reading unallocated space in global memory.
+            if (
+                (local_row_idx == zero_as_a_long)  # select first row
+                and (local_col_idx < window_n_centroids)  # necessary condition at boundaries  # noqa
+            ):
+                window_of_centroids_half_l2_norms[local_col_idx] = (
+                    centroids_half_l2_norm[first_centroid_idx + local_col_idx]
                 )
 
         return _initialize_window_of_centroids

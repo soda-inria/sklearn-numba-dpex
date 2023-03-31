@@ -7,13 +7,13 @@ of the `numba-dpex` stack.
 
 This package requires working with the following branch of scikit-learn:
 
-- `wip-engines` branch on https://github.com/ogrisel/scikit-learn
+- `feature/engine-api` branch on https://github.com/scikit-learn/scikit-learn
 
 A step-by-step guide is provided in this README for installing `numba-dpex`, along with
-the `wip-engines` branch of `scikit-learn` and this plugin from source.
+the `feature/engine-api` branch of `scikit-learn` and this plugin from source.
 
-🚧 TODO: package `wip-engines` and `sklearn-numba-dpex` to have everything installable
-in `conda` with a single one-liner.
+🚧 TODO: package `feature/engine-api` and `sklearn-numba-dpex` to have everything
+installable in `conda` with a single one-liner.
 
 ## List of Included Engines
 
@@ -115,17 +115,21 @@ dependencies (`numba-dpex` and `intel::dpcpp_linux-64`) distributed on the
 
 ```bash
 export CONDA_DPEX_ENV_NAME=my-dpex-env
+```
+
+(where you can replace the name of the environment `my-dpex-env` with a name of your
+liking) followed by
+
+```bash
 conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             `# NB: different versions of `sklearn_numba_dpex` can require to pin` \
-             `# different versions, builds or channels here.` \
-             numba-dpex=0.19.0=py39hfc4b9b4_5 "intel::dpcpp_linux-64"
+             numba-dpex=0.20.0=py310hfc4b9b4_1 "intel::dpcpp_linux-64"
 ```
 
-(where you can replace the name of the environment `my-dpex-env` with a name of your
-liking)
+Note that different versions of `sklearn_numba_dpex` can require to pin different
+versions, builds or channels in this last command.
 
 An additional command is currently required to work around missing Intel CPU OpenCL
 runtime activation. To resolve it, one needs to set environment variables for the
@@ -139,7 +143,7 @@ conda env config vars set \
 ```
 
 `scikit-learn` must be installed from source using an experimental version available on
-[`wip-engines`](https://github.com/ogrisel/scikit-learn/commits/wip-engines), a
+[`feature/engine-api`](https://github.com/scikit-learn/scikit-learn/tree/feature/engine-api), a
 development branch. Be careful to build with compatible `python` and `numpy` versions.
 
 <details>
@@ -160,9 +164,9 @@ conda create --yes --name sklearn-dev \
                    "numpy==$DPEX_NUMPY_VERSION" \
                    scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
-git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
-git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
+git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
 cd dist/
@@ -220,12 +224,12 @@ sudo docker start -a -i my_container_name
 ```
 
 Once you have loaded into the container, follow those instructions to install the
-`wip-engines` branch of scikit-learn:
+`feature/engine-api` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/ogrisel/scikit-learn -b wip-engines
+git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api --depth 1"
 cd scikit-learn
-git checkout fdaf97b5b90e18fc63483de9455970123208c9bb
+git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
 pip install -e .
 cd ..
 ```
@@ -304,8 +308,13 @@ python ./kmeans.py
 to run a benchmark for different k-means implementations and print a short summary of
 the performance.
 
-Some parameters in the `__main__` section of the file `./benchmark/kmeans.py` are
-exposed for quick edition (`n_clusters`, `max_iter`, `skip_slow`, ...).
+The command
+
+```bash
+python ./kmeans --help
+```
+
+will output more information about the available parameters.
 
 ### Notes about the preferred floating point precision (float32)
 

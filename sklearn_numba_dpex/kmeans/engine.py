@@ -7,6 +7,7 @@ import dpctl
 import dpctl.tensor as dpt
 import dpnp
 import numpy as np
+import scipy.sparse as sp
 import sklearn
 import sklearn.utils.validation as sklearn_validation
 from sklearn.cluster._kmeans import KMeansCythonEngine
@@ -73,6 +74,14 @@ class KMeansEngine(KMeansCythonEngine):
     # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG: Dict[str, Any] = dict()
 
+    engine_name = "kmeans"
+
+    @staticmethod
+    def convert_to_sklearn_types(name, value):
+        if name in ["cluster_centers_", "labels_"]:
+            return dpt.asnumpy(value)
+        return value
+
     def __init__(self, estimator):
         self.device = self._CONFIG.get("device", _DeviceUnset)
 
@@ -105,15 +114,24 @@ class KMeansEngine(KMeansCythonEngine):
             )
         self._is_in_testing_mode = _is_in_testing_mode == "1"
 
+    def accepts(self, X, y, sample_weight):
+
+        if (algorithm := self.estimator.algorithm) not in ("lloyd", "auto", "full"):
+            if self._is_in_testing_mode:
+                raise NotSupportedByEngineError(
+                    "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
+                    f" algorithm, {algorithm} is not supported."
+                )
+            else:
+                return False
+
+        if sp.issparse(X):
+            return self._is_in_testing_mode
+
+        return True
+
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
-
-        algorithm = estimator.algorithm
-        if algorithm not in ("lloyd", "auto", "full"):
-            raise NotSupportedByEngineError(
-                "The sklearn_nunmba_dpex engine for KMeans only support the Lloyd"
-                f" algorithm, {algorithm} is not supported."
-            )
 
         X = self._validate_data(X)
         estimator._check_params_vs_input(X)
@@ -206,7 +224,9 @@ class KMeansEngine(KMeansCythonEngine):
             # XXX: having a C-contiguous centroid array is expected in sklearn in some
             # unit test and by the cython engine.
             assignments_idx = dpt.asnumpy(assignments_idx).astype(np.int32)
-            best_centroids_t = np.asfortranarray(dpt.asnumpy(best_centroids_t))
+            best_centroids_t = np.asfortranarray(dpt.asnumpy(best_centroids_t)).astype(
+                self.estimator._output_dtype
+            )
 
         # ???: rather that returning whatever dtype the driver returns (which might
         # depends on device support for float64), shouldn't we cast to a dtype that
@@ -220,9 +240,9 @@ class KMeansEngine(KMeansCythonEngine):
             return super().is_same_clustering(labels, best_labels, n_clusters)
         return is_same_clustering(labels, best_labels, n_clusters)
 
-    def get_nb_distinct_clusters(self, best_labels):
+    def count_distinct_clusters(self, best_labels):
         if self._is_in_testing_mode:
-            return super().get_nb_distinct_clusters(best_labels)
+            return super().count_distinct_clusters(best_labels)
         return get_nb_distinct_clusters(best_labels, self.estimator.n_clusters)
 
     def prepare_prediction(self, X, sample_weight):
@@ -269,7 +289,9 @@ class KMeansEngine(KMeansCythonEngine):
         )
         euclidean_distances = get_euclidean_distances(X.T, cluster_centers)
         if self._is_in_testing_mode:
-            euclidean_distances = dpt.asnumpy(euclidean_distances)
+            euclidean_distances = dpt.asnumpy(euclidean_distances).astype(
+                self.estimator._output_dtype
+            )
         return euclidean_distances
 
     def _validate_data(self, X, reset=True):
@@ -290,6 +312,12 @@ class KMeansEngine(KMeansCythonEngine):
             accepted_dtypes = [np.float64, np.float32]
         else:
             accepted_dtypes = [np.float32]
+
+        if self._is_in_testing_mode and reset:
+            if (X_dtype := X.dtype) not in accepted_dtypes:
+                self.estimator._output_dtype = np.float64
+            else:
+                self.estimator._output_dtype = X_dtype
 
         with _validate_with_array_api(device):
             try:

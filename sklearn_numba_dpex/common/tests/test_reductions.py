@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from sklearn.utils._testing import assert_allclose
 
-from sklearn_numba_dpex.common.kernels import (
+from sklearn_numba_dpex.common.reductions import (
     make_argmin_reduction_1d_kernel,
     make_sum_reduction_2d_kernel,
 )
@@ -16,7 +16,7 @@ from sklearn_numba_dpex.testing.config import float_dtype_params
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("work_group_size", [2, 4, 8, "max"])
 @pytest.mark.parametrize(
-    "test_input_shape", [(1, 1), (1, 3), (3, 1), (3, 5), (5, 3), (3, 4), (4, 3)]
+    "test_input_shape", [(1, 1), (1, 3), (3, 1), (3, 5), (5, 3), (3, 4), (4, 3), (3, 9)]
 )
 @pytest.mark.parametrize("dtype", float_dtype_params)
 def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
@@ -31,14 +31,11 @@ def test_sum_reduction_2d(test_input_shape, work_group_size, axis, dtype):
 
     if work_group_size == "max":
         sub_group_size = min(device.sub_group_sizes)
-    elif work_group_size == 1:
-        sub_group_size = 1
     else:
         sub_group_size = work_group_size // 2
 
     sum_reduction_2d_kernel = make_sum_reduction_2d_kernel(
-        size0=len(array_in),
-        size1=array_in.shape[1],
+        shape=(len(array_in), array_in.shape[1]),
         work_group_size=work_group_size,
         device=device,
         dtype=dtype,
@@ -60,8 +57,7 @@ def test_sum_reduction_1d(length, expected_result, dtype, work_group_size):
     device = array_in.device.sycl_device
 
     sum_reduction_1d_kernel = make_sum_reduction_2d_kernel(
-        size0=len(array_in),
-        size1=None,
+        shape=(len(array_in),),
         work_group_size=work_group_size,
         device=device,
         dtype=dtype,
@@ -101,8 +97,7 @@ def test_sum_reduction_raise_on_invalid_size_parameters(
 ):
     with expected_error:
         make_sum_reduction_2d_kernel(
-            size0=10,
-            size1=10,
+            shape=(10, 10),
             work_group_size=work_group_size,
             sub_group_size=sub_group_size,
             axis=axis,

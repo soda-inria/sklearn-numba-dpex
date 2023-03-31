@@ -37,6 +37,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_features,
     n_clusters,
     return_assignments,
+    check_strict_convergence,
     sub_group_size,
     global_mem_cache_size,
     centroids_private_copies_max_cache_occupancy,
@@ -70,17 +71,17 @@ def make_lloyd_single_step_fixed_window_kernel(
         required_memory_constant=sub_group_size * dtype_itemsize,
     )
 
-    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
-    if work_group_size != input_work_group_size:
-        work_group_size = centroids_window_height * sub_group_size
-
-    elif centroids_window_height * sub_group_size != work_group_size:
+    if (work_group_size == input_work_group_size) and (
+        (centroids_window_height * sub_group_size) != work_group_size
+    ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
+
+    work_group_shape = (window_n_centroids, centroids_window_height)
 
     (
         initialize_window_of_centroids,
@@ -106,23 +107,45 @@ def make_lloyd_single_step_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, centroids_window_width)
+    centroids_window_shape = (centroids_window_height, window_n_centroids)
 
-    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    n_subgroups = global_size // sub_group_size
+    n_subgroups = math.ceil(n_samples / window_n_centroids)
 
     n_cluster_items = n_clusters * (n_features + 1)
     n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
     # TODO: control that this value is not higher than the number of sub-groups of size
     # sub_group_size that can effectively run concurrently. We should fetch this
     # information and apply it here.
-    # See https://github.com/IntelPython/dpctl/issues/1033
+
+    # NB: for more details about the privatization strategy the following variables
+    # refer too, please read the inline commenting that address it in the kernel
+    # definition.
+
+    # Ensure that the memory allocated for privatization will not saturate the global
+    # memory cache size. For this purpose we limit the number of private copies to
+    # a fraction of the available global memory cache size.
     n_centroids_private_copies = (
         global_mem_cache_size * centroids_private_copies_max_cache_occupancy
     ) // n_cluster_bytes
-    n_centroids_private_copies = int(min(n_subgroups, n_centroids_private_copies))
+
+    # Each set of `sub_group_size` consecutive work items is assigned one private
+    # copy, and several such sets can be assigned to the same private copy. Thus, at
+    # most `n_subgroups` private copies are needed.
+    # Moreover, collisions can only occur between sub groups that execute concurrently.
+    # Thus, at most `nb_concurrent_sub_groups` private copies are needed.
+    # TODO: `nb_concurrent_sub_groups` is considered equal to
+    # `device.max_compute_units`. We're not sure that this is the correct
+    # read of the device specs. Confirm or fix once it's made clearer. Suggested reads
+    # that highlight complexity of the execution model:
+    # - https://github.com/IntelPython/dpctl/issues/1033
+    # - https://stackoverflow.com/a/6490897
+    n_centroids_private_copies = int(
+        min(n_subgroups, n_centroids_private_copies, device.max_compute_units)
+    )
 
     zero_idx = np.int64(0)
+    one_idx = np.int64(1)
+    zero_as_uint32 = np.uint32(0)
     inf = dtype(math.inf)
 
     # TODO: currently, constant memory is not supported by numba_dpex, but for read-only
@@ -143,7 +166,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
         centroids_half_l2_norm,            # IN             (n_clusters,)
+        previous_assignments_idx,          # IN             (n_samples,)
         assignments_idx,                   # OUT            (n_samples,)
+        strict_convergence_status,         # OUT            (1,)
         new_centroids_t_private_copies,    # OUT            (n_private_copies, n_features, n_clusters)  # noqa
         cluster_sizes_private_copies,      # OUT            (n_private_copies, n_clusters)  # noqa
     ):
@@ -173,8 +198,21 @@ def make_lloyd_single_step_fixed_window_kernel(
         centroids_half_l2_norm to reduce the overall number of floating point
         operations in the kernel.
         """
-        sample_idx = dpex.get_global_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        # NB: the axis in the following dpex calls are reversed, so the kernel further
+        # reads like a SYCL kernel that maps 2D group size with a row-major order,
+        # despite that `numba_dpex` chose to mimic the column-major order style of
+        # mapping 2D group sizes in cuda.
+        sub_group_idx = dpex.get_global_id(one_idx)
+        local_row_idx = dpex.get_local_id(one_idx)
+        local_col_idx = dpex.get_local_id(zero_idx)
+
+        # Let's start by remapping the 2D grid of work items to a 1D grid that reflect
+        # how contiguous work items address one contiguoue sample_idx:
+        sample_idx = (sub_group_idx * sub_group_size) + local_col_idx
+        # NB: The 2D work group shape makes it easier (and less expensive) to map
+        # the local memory arrays to the array of centroids. Do not get confused by the
+        # fact that this shape is unrelated to how the kernel is parallelized on the
+        # samples, where each work item applies to one sample.
 
         # This array in shared memory is used as a sliding array over values of
         # current_centroids_t. During each iteration in the inner loop, a new one is
@@ -204,9 +242,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         min_sample_pseudo_inertia = inf
 
         # Those variables are used in the inner loop during loading of the window of
-        # centroids
-        window_loading_centroid_idx = local_work_id % window_n_centroids
-        window_loading_feature_offset = local_work_id // window_n_centroids
+        # centroidswork_group_shape
+        window_loading_feature_offset = local_row_idx
+        window_loading_centroid_idx = local_col_idx
 
         # STEP 1: compute the closest centroid
         # Outer loop: iterate on successive windows of size window_n_centroids that
@@ -223,7 +261,8 @@ def make_lloyd_single_step_fixed_window_kernel(
             # are modified in place.
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
             initialize_window_of_centroids(
-                local_work_id,
+                local_row_idx,
+                local_col_idx,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 is_last_centroid_window,
@@ -253,7 +292,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -271,7 +310,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
                 # operations in the current iteration to be over for all work items.
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
@@ -290,10 +329,41 @@ def make_lloyd_single_step_fixed_window_kernel(
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
+
+        _update_result_data(
+            sample_idx,
+            min_idx,
+            sub_group_idx,
+            X_t,
+            sample_weight,
+            previous_assignments_idx,
+            # OUT
+            assignments_idx,
+            strict_convergence_status,
+            cluster_sizes_private_copies,
+            new_centroids_t_private_copies,
+        )
+
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _update_result_data(
+        sample_idx,                         # PARAM
+        min_idx,                            # PARAM
+        sub_group_idx,                      # PARAM
+        X_t,                                # IN
+        sample_weight,                      # IN
+        previous_assignments_idx,           # IN
+        assignments_idx,                    # OUT
+        strict_convergence_status,          # OUT
+        cluster_sizes_private_copies,       # OUT
+        new_centroids_t_private_copies,     # OUT
+    ):
+        # fmt: on
 
         # NB: this check can't be moved at the top at the kernel, because if a work item
         # exits early with a `return` it will never reach the barriers, thus causing a
@@ -304,6 +374,12 @@ def make_lloyd_single_step_fixed_window_kernel(
 
         if return_assignments:
             assignments_idx[sample_idx] = min_idx
+
+        if check_strict_convergence:
+            current_strict_convergence_status = strict_convergence_status[zero_idx]
+            if (current_strict_convergence_status != zero_as_uint32):
+                if (previous_assignments_idx[sample_idx] != min_idx):
+                    strict_convergence_status[zero_idx] = zero_as_uint32
 
         # STEP 2: update centroids.
 
@@ -335,10 +411,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         # counts.
 
         # each work item is assigned an array of centroids in a round robin manner
-        privatization_idx = (
-            sample_idx // sub_group_size
-        ) % n_centroids_private_copies
-
+        privatization_idx = sub_group_idx % n_centroids_private_copies
         weight = sample_weight[sample_idx]
 
         dpex.atomic.add(
@@ -353,7 +426,13 @@ def make_lloyd_single_step_fixed_window_kernel(
                 (privatization_idx, feature_idx, min_idx),
                 X_t[feature_idx, sample_idx] * weight,
             )
+
+    global_size = (
+        window_n_centroids,
+        math.ceil(n_subgroups / centroids_window_height) * centroids_window_height,
+    )
+
     return (
         n_centroids_private_copies,
-        fused_lloyd_single_step[global_size, work_group_size],
+        fused_lloyd_single_step[global_size, work_group_shape],
     )

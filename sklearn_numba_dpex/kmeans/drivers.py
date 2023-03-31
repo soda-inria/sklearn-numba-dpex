@@ -1,10 +1,8 @@
-import math
-
 import dpctl.tensor as dpt
 import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
-    _divide,
+    _divide_by,
     _get_global_mem_cache_size,
     _get_sequential_processing_device,
     _minus,
@@ -12,18 +10,19 @@ from sklearn_numba_dpex.common._utils import (
     _square,
 )
 from sklearn_numba_dpex.common.kernels import (
-    make_argmin_reduction_1d_kernel,
+    make_apply_elementwise_func,
     make_broadcast_division_1d_2d_axis0_kernel,
     make_broadcast_ops_1d_2d_axis1_kernel,
-    make_elementwise_binary_op_1d_kernel,
     make_half_l2_norm_2d_axis0_kernel,
-    make_initialize_to_zeros_2d_kernel,
-    make_initialize_to_zeros_3d_kernel,
-    make_sum_reduction_2d_kernel,
+    make_initialize_to_zeros_kernel,
 )
 from sklearn_numba_dpex.common.random import (
     create_xoroshiro128pp_states,
     get_random_raw,
+)
+from sklearn_numba_dpex.common.reductions import (
+    make_argmin_reduction_1d_kernel,
+    make_sum_reduction_2d_kernel,
 )
 from sklearn_numba_dpex.common.topk import topk_idx
 from sklearn_numba_dpex.kmeans.kernels import (
@@ -59,9 +58,13 @@ def lloyd(
     max_work_group_size = device.max_work_group_size
     sub_group_size = min(device.sub_group_sizes)
     global_mem_cache_size = _get_global_mem_cache_size(device)
-    centroids_private_copies_max_cache_occupancy = 0.7
 
-    verbose = bool(verbose)
+    # The following parameter controls the fraction of the device global cache memory
+    # that can be relied upon to reduce the probability of collision of atomic
+    # ops during execution (see `lloyd_single_step` kernel for more information). The
+    # following value has been chosen empirically and it might be beneficial to test it
+    # further on different hardware.
+    centroids_private_copies_max_cache_occupancy = 0.7
 
     # Create a set of kernels
     (
@@ -71,7 +74,12 @@ def lloyd(
         n_samples,
         n_features,
         n_clusters,
-        return_assignments=bool(verbose),
+        # NB: the assignments are needed if verbose=True, and for strict convergence
+        # checking. If systematic strict convergence checking is disabled in the future,
+        # if could be set to False when verbose=False (thus marginally improving
+        # performance).
+        return_assignments=True,
+        check_strict_convergence=True,
         sub_group_size=sub_group_size,
         global_mem_cache_size=global_mem_cache_size,
         centroids_private_copies_max_cache_occupancy=centroids_private_copies_max_cache_occupancy,  # noqa
@@ -94,24 +102,20 @@ def lloyd(
         n_samples, n_features, max_work_group_size, compute_dtype
     )
 
-    reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_2d_kernel(
-        size0=n_centroids_private_copies,
-        size1=n_clusters,
+    reset_cluster_sizes_private_copies_kernel = make_initialize_to_zeros_kernel(
+        shape=(n_centroids_private_copies, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
 
-    reset_centroids_private_copies_kernel = make_initialize_to_zeros_3d_kernel(
-        size0=n_centroids_private_copies,
-        size1=n_features,
-        size2=n_clusters,
+    reset_centroids_private_copies_kernel = make_initialize_to_zeros_kernel(
+        shape=(n_centroids_private_copies, n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
 
     broadcast_division_kernel = make_broadcast_division_1d_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        shape=(n_features, n_clusters),
         work_group_size=max_work_group_size,
     )
 
@@ -123,23 +127,20 @@ def lloyd(
     )
 
     half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        (n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
 
     reduce_inertia_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,  # 1d reduction
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
     )
 
     reduce_centroid_shifts_kernel = make_sum_reduction_2d_kernel(
-        size0=n_clusters,
-        size1=None,  # 1d reduction
+        shape=(n_clusters,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -163,7 +164,10 @@ def lloyd(
     sq_dist_to_nearest_centroid = per_sample_inertia = dpt.empty(
         n_samples, dtype=compute_dtype, device=device
     )
+
+    new_assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
     assignments_idx = dpt.empty(n_samples, dtype=np.uint32, device=device)
+
     new_centroids_t_private_copies = dpt.empty(
         (n_centroids_private_copies, n_features, n_clusters),
         dtype=compute_dtype,
@@ -179,8 +183,15 @@ def lloyd(
     # n_empty_clusters_ is a scalar handled in kernels via a one-element array.
     n_empty_clusters = dpt.empty(1, dtype=np.int32, device=device)
 
+    # allocation of one scalar where we store the result of strict convergence check
+    strict_convergence_status = dpt.empty(1, dtype=np.uint32, device=device)
+
+    verbose = bool(verbose)
+
     # The loop
     n_iteration = 0
+    # See the main loop for a more elaborate note about checking "strict convergence"
+    strict_convergence = False
     centroid_shifts_sum = np.inf
 
     # TODO: Investigate possible speedup with a custom dpctl queue with a custom
@@ -202,8 +213,10 @@ def lloyd(
             sample_weight,
             centroids_t,
             centroids_half_l2_norm,
-            # OUT:
             assignments_idx,
+            # OUT:
+            new_assignments_idx,
+            strict_convergence_status,
             new_centroids_t_private_copies,
             cluster_sizes_private_copies,
         )
@@ -226,7 +239,7 @@ def lloyd(
                 X_t,
                 sample_weight,
                 new_centroids_t,
-                assignments_idx,
+                new_assignments_idx,
                 # OUT:
                 per_sample_inertia,
             )
@@ -241,17 +254,6 @@ def lloyd(
             # inertia by default during the first pass on data in case there's an
             # empty cluster.
 
-            # if verbose is True, then assignments to closest centroids already have
-            # been computed in the main kernel
-            if not verbose:
-                assignment_fixed_window_kernel(
-                    X_t,
-                    centroids_t,
-                    centroids_half_l2_norm,
-                    # OUT:
-                    assignments_idx,
-                )
-
             # if verbose is True and if sample_weight is uniform, distances to
             # closest centroids already have been computed in the main kernel
             if not verbose or not use_uniform_weights:
@@ -262,7 +264,7 @@ def lloyd(
                     X_t,
                     dpt.ones_like(sample_weight),
                     centroids_t,
-                    assignments_idx,
+                    new_assignments_idx,
                     # OUT:
                     sq_dist_to_nearest_centroid,
                 )
@@ -273,7 +275,7 @@ def lloyd(
                 sample_weight,
                 new_centroids_t,
                 cluster_sizes,
-                assignments_idx,
+                new_assignments_idx,
                 empty_clusters_list,
                 sq_dist_to_nearest_centroid,
                 per_sample_inertia,
@@ -282,17 +284,6 @@ def lloyd(
 
         # Change `new_centroids_t` inplace
         broadcast_division_kernel(new_centroids_t, cluster_sizes)
-
-        compute_centroid_shifts_kernel(
-            centroids_t,
-            new_centroids_t,
-            # OUT:
-            centroid_shifts,
-        )
-
-        centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
-        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
-        centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
 
         # ???: unlike sklearn, sklearn_intelex checks that pseudo_inertia decreases
         # and keep an additional copy of centroids that is updated only if the
@@ -313,14 +304,58 @@ def lloyd(
         # refers. For this reason, this strategy is not compatible with sklearn
         # unit tests, that consider new_centroids_t (the array after the update)
         # to be the best centroids at each iteration.
-
         centroids_t, new_centroids_t = (new_centroids_t, centroids_t)
+
+        # ???: if two successive assignations have been computed equal, it's called
+        # "strict convergence" and means that the algorithm has converged and can't get
+        # better (since same assignments will produce the same centroid updates, which
+        # will produce the same assignments, and so on..). scikit-learn decides to
+        # check for strict convergence at each iteration, but that sounds expensive
+        # since for each iteration it requires writing assignments in memory and
+        # comparing it to the previous assignments.
+
+        # Providing the user chooses a sensible value for `tol`, wouldn't the cost of
+        # this check be in general greater than what the benefits ?
+
+        # When `tol == 0` it is easy to see that lloyd can indeed fail to stop at the
+        # right time due to numerical errors, and that strict convergence checking is
+        # good. For the general case, it seems detrimental to performance, for little
+        # gain except in case of, maybe, extremely imbalanced input data distribution.
+        # Thus, shouldnt strict convergence checking be enabled only if `tol == 0` ?
+        # (which is, moreover, the only case where strict convergence really is tested
+        # in scikit learn)
+
+        # For now the exact same behavior than scikit-learn's is mimicked.
+
+        # See: https://github.com/scikit-learn/scikit-learn/issues/25716
+
+        assignments_idx, new_assignments_idx = (
+            new_assignments_idx,
+            assignments_idx,
+        )
 
         n_iteration += 1
 
+        if n_iteration > 1:
+            strict_convergence, *_ = strict_convergence_status
+            if strict_convergence:
+                break
+            strict_convergence_status[0] = np.uint32(1)
+
+        compute_centroid_shifts_kernel(
+            centroids_t,
+            new_centroids_t,
+            # OUT:
+            centroid_shifts,
+        )
+
+        centroid_shifts_sum, *_ = reduce_centroid_shifts_kernel(centroid_shifts)
+        # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
+        centroid_shifts_sum = compute_dtype(centroid_shifts_sum)
+
     if verbose:
         converged_at = n_iteration - 1
-        if centroid_shifts_sum == 0:  # NB: possible if tol = 0
+        if strict_convergence or (centroid_shifts_sum == 0):  # NB: possible if tol = 0
             print(f"Converged at iteration {converged_at}: strict convergence.")
 
         elif centroid_shifts_sum <= tol:
@@ -422,29 +457,29 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = min(device.sub_group_sizes)
 
     sum_axis1_kernel = make_sum_reduction_2d_kernel(
-        X_t.shape[0],
-        X_t.shape[1],
+        X_t.shape,
         axis=1,
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
-        sub_group_size=sub_group_size,
     )
 
-    elementwise_binary_divide_kernel = make_elementwise_binary_op_1d_kernel(
-        n_features, _divide, max_work_group_size, compute_dtype
+    elementwise_divide_by_n_samples_fn = _divide_by(compute_dtype(n_samples))
+
+    divide_by_n_samples_kernel = make_apply_elementwise_func(
+        (n_features,),
+        elementwise_divide_by_n_samples_fn,
+        max_work_group_size,
     )
 
     # At the time of writing this code, dpnp does not support functions (like `==`
-    # operator) that would help computing `sample_weight_is_uniform` in a simpler
+    # operator) that would help computing `X_mean_is_zeroed` in a simpler
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_of_squares_kernel = make_sum_reduction_2d_kernel(
-        size0=n_features,
-        size1=None,
+        shape=(n_features,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -453,11 +488,8 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     X_mean = sum_axis1_kernel(X_t)[:, 0]
 
-    divisor = dpt.full(
-        sh=(1,), fill_value=compute_dtype(n_samples), dtype=compute_dtype, device=device
-    )
     # Change `X_mean` inplace
-    elementwise_binary_divide_kernel(X_mean, divisor)
+    divide_by_n_samples_kernel(X_mean)
 
     X_sum_squared = sum_of_squares_kernel(X_mean)[0]
     X_mean_is_zeroed = float(X_sum_squared) == 0.0
@@ -472,11 +504,9 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         # subtract the mean of x for more accurate distance computations
         X_t = dpt.asarray(X_t, copy=copy_x)
         broadcast_X_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-            n_features,
-            n_samples,
+            (n_features, n_samples),
             ops=_minus,
             work_group_size=max_work_group_size,
-            dtype=compute_dtype,
         )
 
         # Change `X_t` inplace
@@ -485,11 +515,9 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
         if isinstance(init, dpt.usm_ndarray):
             n_clusters = init.shape[1]
             broadcast_init_minus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-                n_features,
-                n_clusters,
+                (n_features, n_clusters),
                 ops=_minus,
                 work_group_size=max_work_group_size,
-                dtype=compute_dtype,
             )
             # Change `init` inplace
             broadcast_init_minus_X_mean(init, X_mean)
@@ -497,8 +525,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     n_items = n_features * n_samples
 
     variance_kernel = make_sum_reduction_2d_kernel(
-        size0=n_items,
-        size1=None,
+        shape=(n_items,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -507,7 +534,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
 
     variance = variance_kernel(dpt.reshape(X_t, -1))
     # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238
-    tol = (dpt.asnumpy(variance)[0] / n_features) * tol
+    tol = (dpt.asnumpy(variance)[0] / (n_features * n_samples)) * tol
 
     # check if sample_weight is uniform
     # At the time of writing this code, dpnp does not support functions (like `==`
@@ -515,8 +542,7 @@ def prepare_data_for_lloyd(X_t, init, tol, sample_weight, copy_x):
     # manner.
     # TODO: if dpnp support extends to relevant features, use it instead ?
     sum_sample_weight_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -540,18 +566,15 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
 
     n_features, n_samples = X_t.shape
     n_clusters = best_centers_t.shape[1]
-    compute_dtype = X_t.dtype.type
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
 
     best_centers_t = dpt.asarray(best_centers_t, copy=False)
     broadcast_init_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-        n_features,
-        n_clusters,
+        (n_features, n_clusters),
         ops=_plus,
         work_group_size=max_work_group_size,
-        dtype=compute_dtype,
     )
     # Change `best_centers_t` inplace
     broadcast_init_plus_X_mean(best_centers_t, X_mean)
@@ -569,11 +592,9 @@ def restore_data_after_lloyd(X_t, best_centers_t, X_mean, copy_x):
     if not copy_x:
         X_t = dpt.asarray(X_t, copy=False)
         broadcast_X_plus_X_mean = make_broadcast_ops_1d_2d_axis1_kernel(
-            n_features,
-            n_samples,
+            (n_features, n_samples),
             ops=_plus,
             work_group_size=max_work_group_size,
-            dtype=compute_dtype,
         )
         # Change X_t inplace
         broadcast_X_plus_X_mean(X_t, X_mean)
@@ -636,8 +657,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     )
 
     half_l2_norm_kernel = make_half_l2_norm_2d_axis0_kernel(
-        size0=n_features,
-        size1=n_clusters,
+        (n_features, n_clusters),
         work_group_size=max_work_group_size,
         dtype=compute_dtype,
     )
@@ -667,8 +687,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     )
 
     reduce_inertia_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,  # 1d reduction
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
@@ -756,13 +775,6 @@ def kmeans_plusplus(
         compute_dtype,
     )
 
-    sample_center_candidates_kernel = make_sample_center_candidates_kernel(
-        n_samples,
-        n_local_trials,
-        max_work_group_size,
-        compute_dtype,
-    )
-
     (
         kmeansplusplus_single_step_fixed_window_kernel
     ) = make_kmeansplusplus_single_step_fixed_window_kernel(
@@ -783,16 +795,14 @@ def kmeans_plusplus(
     )
 
     reduce_potential_1d_kernel = make_sum_reduction_2d_kernel(
-        size0=n_samples,
-        size1=None,
+        shape=(n_samples,),
         work_group_size="max",
         device=device,
         dtype=compute_dtype,
     )
 
     reduce_potential_2d_kernel = make_sum_reduction_2d_kernel(
-        size0=n_local_trials,
-        size1=n_samples,
+        shape=(n_local_trials, n_samples),
         axis=1,
         work_group_size="max",
         device=device,
@@ -805,18 +815,16 @@ def kmeans_plusplus(
         device=sequential_processing_device,
     )
     if sequential_processing_on_different_device:
-        new_work_group_size = sequential_processing_device.max_work_group_size
-        new_global_size = (
-            math.ceil(
-                sample_center_candidates_kernel.global_size[0] / new_work_group_size
-            )
-            * new_work_group_size
-        )
-        sample_center_candidates_kernel = sample_center_candidates_kernel.configure(
-            sycl_queue=random_state.sycl_queue,
-            global_size=[new_global_size],
-            local_size=[new_work_group_size],
-        )
+        sampling_work_group_size = sequential_processing_device.max_work_group_size
+    else:
+        sampling_work_group_size = max_work_group_size
+
+    sample_center_candidates_kernel = make_sample_center_candidates_kernel(
+        n_samples,
+        n_local_trials,
+        sampling_work_group_size,
+        compute_dtype,
+    )
 
     centers_t = dpt.empty(
         sh=(n_features, n_clusters), dtype=compute_dtype, device=device

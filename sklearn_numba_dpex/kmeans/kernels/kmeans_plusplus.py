@@ -115,17 +115,17 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         work_group_size, device, required_local_memory_per_item=np.dtype(dtype).itemsize
     )
 
-    candidates_window_width = window_n_candidates
     candidates_window_height = work_group_size // sub_group_size
 
-    if work_group_size != input_work_group_size:
-        work_group_size = candidates_window_height * sub_group_size
-
-    elif candidates_window_height * sub_group_size != work_group_size:
+    if (work_group_size == input_work_group_size) and (
+        (candidates_window_height * sub_group_size) != work_group_size
+    ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
+
+    work_group_shape = (window_n_candidates, candidates_window_height)
 
     (
         initialize_window_of_candidates,
@@ -147,9 +147,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     last_candidate_window_idx = n_windows_for_candidates - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    candidates_window_shape = (candidates_window_height, candidates_window_width)
+    candidates_window_shape = (candidates_window_height, window_n_candidates)
 
     zero_idx = np.int64(0)
+    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -161,17 +162,21 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         sq_distances_t,                    # OUT            (n_candidates, n_samples)
     ):
         # fmt: on
-        sample_idx = dpex.get_global_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
 
         candidates_window = dpex.local.array(shape=candidates_window_shape, dtype=dtype)
-
         sq_distances = dpex.private.array(shape=window_n_candidates, dtype=dtype)
 
         first_candidate_idx = zero_idx
 
-        window_loading_candidate_idx = local_work_id % window_n_candidates
-        window_loading_feature_offset = local_work_id // window_n_candidates
+        local_col_idx = dpex.get_local_id(zero_idx)
+
+        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        window_loading_candidate_idx = local_col_idx
+
+        sample_idx = (
+            (dpex.get_global_id(one_idx) * sub_group_size)
+            + local_col_idx
+        )
 
         for candidate_window_idx in range(n_windows_for_candidates):
             is_last_candidate_window = candidate_window_idx == last_candidate_window_idx
@@ -196,7 +201,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     candidates_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
                 accumulate_sq_distances(
                     sample_idx,
@@ -210,25 +215,50 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
                 first_feature_idx += candidates_window_height
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
-            if sample_idx < n_samples:
-                sample_weight_ = sample_weight[sample_idx]
-                closest_dist_sq_ = closest_dist_sq[sample_idx]
-                for i in range(window_n_candidates):
-                    candidate_idx = first_candidate_idx + i
-                    if candidate_idx < n_candidates:
-                        sq_distance_i = min(
-                            sq_distances[i] * sample_weight_,
-                            closest_dist_sq_
-                        )
-                        sq_distances_t[first_candidate_idx + i, sample_idx] = (
-                            sq_distance_i
-                        )
+            _save_sq_distances(
+                sample_idx,
+                first_candidate_idx,
+                sq_distances,
+                sample_weight,
+                closest_dist_sq,
+                # OUT
+                sq_distances_t
+            )
 
             first_candidate_idx += window_n_candidates
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
-    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return kmeansplusplus_single_step[global_size, work_group_size]
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    # fmt: off
+    def _save_sq_distances(
+        sample_idx,             # PARAM
+        first_candidate_idx,    # PARAM
+        sq_distances,           # IN
+        sample_weight,          # IN
+        closest_dist_sq,        # IN
+        sq_distances_t,         # OUT
+    ):
+        # fmt: on
+        if sample_idx >= n_samples:
+            return
+
+        sample_weight_ = sample_weight[sample_idx]
+        closest_dist_sq_ = closest_dist_sq[sample_idx]
+        for i in range(window_n_candidates):
+            candidate_idx = first_candidate_idx + i
+            if candidate_idx < n_candidates:
+                sq_distance_i = min(sq_distances[i] * sample_weight_, closest_dist_sq_)
+                sq_distances_t[first_candidate_idx + i, sample_idx] = sq_distance_i
+
+    n_windows_for_samples = math.ceil(n_samples / window_n_candidates)
+
+    global_size = (
+        window_n_candidates,
+        math.ceil(n_windows_for_samples / candidates_window_height)
+        * candidates_window_height,
+    )
+    return kmeansplusplus_single_step[global_size, work_group_shape]

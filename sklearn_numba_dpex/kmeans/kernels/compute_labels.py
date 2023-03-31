@@ -27,20 +27,20 @@ def make_label_assignment_fixed_window_kernel(
         work_group_size,
         device,
         required_local_memory_per_item=dtype_itemsize,
-        required_memory_constant=sub_group_size * dtype_itemsize,
+        required_memory_constant=window_n_centroids * dtype_itemsize,
     )
 
-    centroids_window_width = window_n_centroids
     centroids_window_height = work_group_size // sub_group_size
 
-    if work_group_size != input_work_group_size:
-        work_group_size = centroids_window_height * sub_group_size
-
-    elif centroids_window_height * sub_group_size != work_group_size:
+    if (work_group_size == input_work_group_size) and (
+        (centroids_window_height * sub_group_size) != work_group_size
+    ):
         raise ValueError(
             "Expected work_group_size to be a multiple of sub_group_size but got "
             f"sub_group_size={sub_group_size} and work_group_size={work_group_size}"
         )
+
+    work_group_shape = (window_n_centroids, centroids_window_height)
 
     (
         initialize_window_of_centroids,
@@ -66,10 +66,11 @@ def make_label_assignment_fixed_window_kernel(
     last_centroid_window_idx = n_windows_for_centroids - 1
     last_feature_window_idx = n_windows_for_features - 1
 
-    centroids_window_shape = (centroids_window_height, centroids_window_width)
+    centroids_window_shape = (centroids_window_height, window_n_centroids)
 
     inf = dtype(math.inf)
     zero_idx = np.int64(0)
+    one_idx = np.int64(1)
 
     @dpex.kernel
     # fmt: off
@@ -80,9 +81,12 @@ def make_label_assignment_fixed_window_kernel(
         assignments_idx,          # OUT            (n_samples,)
     ):
         # fmt: on
-
-        sample_idx = dpex.get_global_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        local_row_idx = dpex.get_local_id(one_idx)
+        local_col_idx = dpex.get_local_id(zero_idx)
+        sample_idx = (
+            (dpex.get_global_id(one_idx) * sub_group_size)
+            + local_col_idx
+        )
 
         centroids_window = dpex.local.array(shape=centroids_window_shape, dtype=dtype)
         window_of_centroids_half_l2_norms = dpex.local.array(
@@ -95,14 +99,15 @@ def make_label_assignment_fixed_window_kernel(
         min_idx = zero_idx
         min_sample_pseudo_inertia = inf
 
-        window_loading_centroid_idx = local_work_id % window_n_centroids
-        window_loading_feature_offset = local_work_id // window_n_centroids
+        window_loading_centroid_idx = local_col_idx
+        window_loading_feature_offset = local_row_idx
 
         for centroid_window_idx in range(n_windows_for_centroids):
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
 
             initialize_window_of_centroids(
-                local_work_id,
+                local_row_idx,
+                local_col_idx,
                 first_centroid_idx,
                 centroids_half_l2_norm,
                 is_last_centroid_window,
@@ -125,7 +130,7 @@ def make_label_assignment_fixed_window_kernel(
                     centroids_window,
                 )
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -140,7 +145,7 @@ def make_label_assignment_fixed_window_kernel(
 
                 first_feature_idx += centroids_window_height
 
-                dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+                dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
             min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
@@ -153,13 +158,29 @@ def make_label_assignment_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-            dpex.barrier(dpex.CLK_LOCAL_MEM_FENCE)
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
-        # No update step, only store min_idx in the output array
-        if sample_idx >= n_samples:
-            return
+        _setitem_if(
+            sample_idx < n_samples,
+            sample_idx,
+            min_idx,
+            # OUT
+            assignments_idx,
+        )
 
-        assignments_idx[sample_idx] = min_idx
+    # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+    @dpex.func
+    def _setitem_if(condition, index, value, array):
+        if condition:
+            array[index] = value
+        return condition
 
-    global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return assignment[global_size, work_group_size]
+    n_windows_for_sample = math.ceil(n_samples / window_n_centroids)
+
+    global_size = (
+        window_n_centroids,
+        math.ceil(n_windows_for_sample / centroids_window_height)
+        * centroids_window_height,
+    )
+
+    return assignment[global_size, work_group_shape]
