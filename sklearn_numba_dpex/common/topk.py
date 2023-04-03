@@ -17,7 +17,6 @@ from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
     _get_sequential_processing_device,
     check_power_of_2,
-    get_maximum_power_of_2_smaller_than,
 )
 from sklearn_numba_dpex.common.kernels import make_initialize_to_zeros_kernel
 from sklearn_numba_dpex.common.reductions import make_sum_reduction_2d_kernel
@@ -242,7 +241,7 @@ def _get_topk_threshold(array_in, k, group_sizes):
         work_group_size, sub_group_size = group_sizes
     else:
         work_group_size = device.max_work_group_size
-        sub_group_size = min(device.sub_group_sizes)
+        sub_group_size = 4
 
     global_mem_cache_size = device.global_mem_cache_size
     counts_private_copies_max_cache_occupancy = 0.7
@@ -311,7 +310,6 @@ def _get_topk_threshold(array_in, k, group_sizes):
             # OUT
             privatized_counts,
         )
-
         counts = dpt.reshape(reduce_privatized_counts(privatized_counts), (-1,))
 
         if sequential_processing_on_different_device:
@@ -383,66 +381,72 @@ def _make_create_radix_histogram_kernel(
 ):
     histogram_dtype = np.int64
 
+    check_power_of_2(sub_group_size)
+
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
         work_group_size, device, np.dtype(histogram_dtype).itemsize
     )
 
-    check_power_of_2(sub_group_size)
+    # This value is equal to the number of subgroups that are leveraged for creating
+    # the histogram of radix occurences. (during said step, all other sub groups are
+    # idle).
+    n_sub_groups_for_local_histograms = work_group_size / (
+        sub_group_size * sub_group_size
+    )
+    n_sub_groups_for_local_histograms_log2 = math.floor(
+        math.log2(n_sub_groups_for_local_histograms)
+    )
 
-    if work_group_size == input_work_group_size:
-
-        n_sub_group_per_work_group = work_group_size // sub_group_size
-
-        try:
-            check_power_of_2(n_sub_group_per_work_group)
-            power_of_2_n_sub_groups = True
-        except ValueError:
-            power_of_2_n_sub_groups = False
-
-        if not (
-            ((n_sub_group_per_work_group * sub_group_size) == work_group_size)
-            and power_of_2_n_sub_groups
-        ):
-            raise ValueError(
-                "Expected work_group_size to be a power-of-two multiple of"
-                f" sub_group_size but got sub_group_size={sub_group_size} and"
-                f" work_group_size={work_group_size}"
-            )
-
-    else:
-        n_sub_group_per_work_group = get_maximum_power_of_2_smaller_than(
-            work_group_size / sub_group_size
+    if work_group_size != input_work_group_size:
+        n_sub_groups_for_local_histograms = 2**n_sub_groups_for_local_histograms_log2
+        work_group_size = int(
+            n_sub_groups_for_local_histograms * sub_group_size * sub_group_size
         )
-        work_group_size = sub_group_size * n_sub_group_per_work_group
 
-    work_group_shape = (sub_group_size, n_sub_group_per_work_group)
+    elif work_group_size != (
+        (2**n_sub_groups_for_local_histograms_log2) * sub_group_size * sub_group_size
+    ):
+        raise ValueError(
+            "Expected `work_group_size / (sub_group_size * sub_group_size)` to be a "
+            f"power of two, but got {n_sub_groups_for_local_histograms} instead, with "
+            f"`work_group_size={work_group_size}` and "
+            f"`sub_group_size={sub_group_size}`."
+        )
+    else:
+        n_sub_groups_for_local_histograms = int(n_sub_groups_for_local_histograms)
+
+    n_local_histograms = work_group_size // sub_group_size
+    work_group_shape = (sub_group_size, n_local_histograms)
 
     # The size of the radix is chosen such as the size of intermediate objects that
     # build in shared memory amounts to one int64 item per work item.
     radix_size = sub_group_size
     radix_bits = int(math.log2(radix_size))
-    local_counts_size = (n_sub_group_per_work_group, radix_size)
+    local_counts_size = (n_local_histograms, radix_size)
 
     # Number of iterations when reducing the per-sub group histograms to per-work group
     # histogram in work groups
-    n_sum_reduction_steps = math.log2(n_sub_group_per_work_group)
+    n_sum_reduction_steps = math.log2(n_local_histograms)
 
     n_work_groups = math.ceil(n_items / work_group_size)
-    global_shape = (sub_group_size, n_sub_group_per_work_group * n_work_groups)
+    global_shape = (sub_group_size, n_local_histograms * n_work_groups)
 
     n_counts_items = radix_size
     n_counts_bytes = np.dtype(np.int64).itemsize * n_counts_items
-
-    # TODO: control that this value is not higher than the number of sub-groups of size
-    # sub_group_size that can effectively run concurrently. We should fetch this
-    # information and apply it here.
-    # See https://github.com/IntelPython/dpctl/issues/1033
     n_counts_private_copies = (
         global_mem_cache_size * counts_private_copies_max_cache_occupancy
     ) // n_counts_bytes
 
-    n_counts_private_copies = int(min(n_work_groups, n_counts_private_copies))
+    # TODO: `nb_concurrent_sub_groups` is considered equal to
+    # `device.max_compute_units`. We're not sure that this is the correct
+    # read of the device specs. Confirm or fix once it's made clearer. Suggested reads
+    # that highlight complexity of the execution model:
+    # - https://github.com/IntelPython/dpctl/issues/1033
+    # - https://stackoverflow.com/a/6490897
+    n_counts_private_copies = int(
+        min(n_work_groups, n_counts_private_copies, device.max_compute_units)
+    )
 
     lexicographical_mapping = _make_lexicographical_mapping_kernel_func(dtype)
 
@@ -450,6 +454,7 @@ def _make_create_radix_histogram_kernel(
     zero_as_uint_dtype = uint_type(0)
     one_as_uint_dtype = uint_type(1)
     two_as_a_long = np.int64(2)
+    minus_one_idx = -np.int64(1)
 
     select_last_radix_bits_mask = (
         one_as_uint_dtype << np.uint32(radix_bits)
@@ -462,15 +467,15 @@ def _make_create_radix_histogram_kernel(
         mask_for_desired_value,       # IN            (1,)
         desired_masked_value,         # IN            (1,)
         radix_position,               # IN            (1,)
-        privatized_counts,            # OUT           (n_counts_private_copies, radix_size)  # noqa
+        privatized_counts             # OUT           (n_counts_private_copies, radix_size)  # noqa
     ):
         # fmt: on
         """
         This kernel is the core of the radix top-k algorithm. This top-k implementation
         is well adapted to GPU architectures, but can suffer from bad performance
-        depending on the distribution of the input data. It will be supplemented with
-        additional optimizations to ensure base performance for all input
-        distributions.
+        depending on the distribution of the input data. It is planned to be
+        supplemented with additional optimizations to ensure base performance for all
+        input distributions.
 
         Radix top-k consists in computing the histogram of the number of occurences of
         all possible radixes (i.e subsequence of the sequence of bits) at a given
@@ -488,17 +493,132 @@ def _make_create_radix_histogram_kernel(
         discarded by the previous iterations match the condition. During the first
         iteration, the condition is true for all items.
         """
+        # Index of the value in `array_in_uint` whose radix will be computed by the
+        # current work item
         item_idx = dpex.get_global_id(zero_idx) + (
             sub_group_size * dpex.get_global_id(one_idx))
+
+        # Index of the subgroup and position within this sub group. Incidentally, this
+        # also matches the location to which the radix value will be written in the
+        # shared memory buffer.
         local_subgroup = dpex.get_local_id(one_idx)
         local_subgroup_work_id = dpex.get_local_id(zero_idx)
 
+        # Like `item_idx`, but where the first value of `array_in_uint` covered by the
+        # current work group is indexed with zero.
+        local_item_idx = ((local_subgroup * sub_group_size) + local_subgroup_work_id)
+
+        # The first `n_local_histograms` work items are special, they are used to
+        # build the histogram of radix counts. The following variable tells wether the
+        # current work item is one of those.
+        is_histogram_item = local_item_idx < n_local_histograms
+
         # Initialize the shared memory in the work group
-        local_counts = dpex.local.array(local_counts_size, dtype=histogram_dtype)
-        local_counts[local_subgroup, local_subgroup_work_id] = zero_idx
+        # NB: for clarity in the code, two variables refer to the same buffer. The
+        # buffer will indeed be used twice for different purpose each time.
+        radix_values = local_counts = dpex.local.array(
+            local_counts_size, dtype=histogram_dtype
+        )
+
+        # Initialize private memory
+        private_counts = dpex.private.array(sub_group_size, dtype=histogram_dtype)
+        initialize_private_histograms(private_counts)
 
         dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
+        # Compute the value of `array_in_uint` at location `item_idx`, and store it
+        # in `radix_values[local_subgroup, local_subgroup_work_id]`. If the value is
+        # out of bounds, or if it doesn't match the mask, store `-1` instead.
+        compute_radixes(
+            item_idx,
+            local_subgroup,
+            local_subgroup_work_id,
+            mask_for_desired_value,
+            desired_masked_value,
+            radix_position,
+            array_in_uint,
+            # OUT
+            radix_values
+        )
+
+        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+
+        # The first `n_local_histograms` work items read `sub_group_size`
+        # values each and compute the histogram of their occurences in private memory.
+        # During this step, all other work items in the work group are idle.
+        # NB: this is an order of magnitude faster than cooperatively summing the
+        # counts in the histogram using `dpex.atomics.add` (probably because a high
+        # occurence of conflicts)
+        compute_private_histogram(
+            item_idx,
+            is_histogram_item,
+            local_item_idx,
+            local_subgroup,
+            local_subgroup_work_id,
+            radix_values,
+            # OUT
+            private_counts
+        )
+
+        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+
+        # The first `n_local_histograms` work items  write their private histogram
+        # into the shared memory buffer, effectively sharing it with all other work
+        # items. Each work item write to a different row in `local_counts`.
+        share_private_histograms(
+            is_histogram_item,
+            local_subgroup,
+            local_subgroup_work_id,
+            private_counts,
+            # OUT
+            local_counts
+        )
+
+        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+
+        # This is the merge step, where all shared histograms are summed
+        # together into the first buffer local_counts[0], in a bracket manner.
+        # NB: apparently cuda have much more powerful intrinsics to perform steps like
+        # this, such as ballot voting ? are there `SYCL` or `numba_dpex` roadmaps to
+        # enable the same intrinsics ?
+        reduction_active_subgroups = n_local_histograms
+        for _ in range(n_sum_reduction_steps):
+            reduction_active_subgroups = reduction_active_subgroups // two_as_a_long
+            partial_local_histograms_reduction(
+                local_subgroup,
+                local_subgroup_work_id,
+                reduction_active_subgroups,
+                # OUT
+                local_counts
+            )
+            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+
+        # The current histogram is local to the current work group. Summing right away
+        # all histograms to a unique, global histogram in global memory might give poor
+        # performance because it would require atomics that would be subject to a lot
+        # of conflicts. Likewise, to circumvent this risk partial sums are written to
+        # privatized buffers in global memory. The partial buffers will be reduced to a
+        # single global histogram in a complementary kernel.
+        merge_histogram_in_global_memory(
+            item_idx,
+            local_subgroup,
+            local_subgroup_work_id,
+            local_counts,
+            # OUT
+            privatized_counts
+        )
+
+    @dpex.func
+    def compute_radixes(
+        item_idx,
+        local_subgroup,
+        local_subgroup_work_id,
+        mask_for_desired_value,
+        desired_masked_value,
+        radix_position,
+        array_in_uint,
+        radix_values,
+    ):
         # If item_idx is outside the bounds of the input, ignore this location.
         is_in_bounds = item_idx < n_items
         if is_in_bounds:
@@ -527,56 +647,144 @@ def _make_create_radix_histogram_kernel(
             # Extract the value encoded by the next radix_bits bits starting at
             # position radix_position_ (reading bits from left to right)
             # NB: resulting value is in interval [0, radix_size[
-            digit_in_radix = (
-                item_lexicographically_mapped >> radix_position_
-            ) & select_last_radix_bits_mask
-
-            # Increment the count of the value `digit_in_radix` by one in the
-            # histogram.
-            # NB: all threads are executing this step concurrently, the increment must
-            # be protected by the use of atomics. To alleviate the performance impact
-            # of conflicts on atomics operations, the different sub-groups of the
-            # work group write to a privatized shared memory buffer, such that conflicts
-            # can only occurs between threads of a same work group. The privatized
-            # buffers are then merged in the step afterward.
-            # ???: maybe instead on this we could have full privatization
-            dpex.atomic.add(
-                local_counts, (local_subgroup, digit_in_radix), count_one_as_a_long
+            value = histogram_dtype(
+                (item_lexicographically_mapped >> radix_position_)
+                & select_last_radix_bits_mask
             )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        else:
+            # write `-1` if the index is out of bounds, or if the value doesn't match
+            # the mask.
+            value = histogram_dtype(minus_one_idx)
 
-        # This is the merge step, where the memory buffers of all sub-groups are summed
-        # together into the first buffer local_counts[0], in a bracket manner.
-        # NB: apparently cuda have much more powerful intrinsics to perform steps like
-        # this, such as ballot voting ? are there `SYCL` or `numba_dpex` roadmaps to
-        # enable the same intrinsics ?
-        reduction_active_subgroups = n_sub_group_per_work_group
-        for _ in range(n_sum_reduction_steps):
-            reduction_active_subgroups = reduction_active_subgroups // two_as_a_long
-            if local_subgroup < reduction_active_subgroups:
-                local_counts[local_subgroup, local_subgroup_work_id] += local_counts[
-                    local_subgroup + reduction_active_subgroups, local_subgroup_work_id
-                ]
+        radix_values[local_subgroup, local_subgroup_work_id] = value
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+    # HACK 906: all instructions inbetween barriers must be defined in `dpex.func`
+    # device functions.
+    # See sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
 
-        # The current histogram is local to the current work group. Yet again
-        # summing right away all histograms to a unique, global histogram in global
-        # memory would give poor performance because it would require atomics that
-        # would be subject to a lot of conflicts. Likewise, to circumvent this risk
-        # partial sums are written to privatized buffers in global memory. The partial
-        # buffers will be reduced to a single global histogram in a complementary
-        # kernel.
+    # HACK 906: start
 
+    @dpex.func
+    def initialize_private_histograms(private_counts):
+        for i in range(sub_group_size):
+            private_counts[i] = zero_idx
+
+    # The `compute_private_histogram` function is written differently depending on how
+    # the number of histogram work items compare to the size of the sub groups.
+
+    # First case: work items used for building the histogram span several sub groups
+    if n_sub_groups_for_local_histograms_log2 >= 0:
+        # NB: because of how parameters have been validated,
+        # `n_sub_groups_for_local_histograms` is always divisible by
+        # `sub_group_size` here.
+
+        item_idx_increment_per_step = n_sub_groups_for_local_histograms * sub_group_size
+
+        @dpex.func
+        def compute_private_histogram(
+            item_idx,
+            is_histogram_item,
+            local_item_idx,
+            local_subgroup,
+            local_subgroup_work_id,
+            radix_values,
+            private_counts,
+        ):
+            if is_histogram_item:
+                current_subgroup = local_subgroup
+                current_item_idx = item_idx
+                for _ in range(sub_group_size):
+                    if current_item_idx <= n_items:
+                        radix_value = radix_values[
+                            current_subgroup, local_subgroup_work_id
+                        ]
+                        # `radix_value` can be equal to `-1` which means the value
+                        # must be skipped
+                        if radix_value >= zero_idx:
+                            private_counts[radix_value] += count_one_as_a_long
+                        current_subgroup += n_sub_groups_for_local_histograms
+                        current_item_idx += item_idx_increment_per_step
+
+    # Second case: histogram items span less than one sub group, and each work item
+    # must span several values in each row of `radix_values`
+    else:
+        # NB: because of how parameters have been validated, `sub_group_size` is
+        # always divisible by `n_local_histograms` here.
+        n_iter_for_radixes = sub_group_size // n_local_histograms
+
+        @dpex.func
+        def compute_private_histogram(
+            item_idx,
+            is_histogram_item,
+            local_item_idx,
+            local_subgroup,
+            local_subgroup_work_id,
+            radix_values,
+            private_counts,
+        ):
+            if is_histogram_item:
+                starting_item_idx = item_idx
+                for histogram_idx in range(n_local_histograms):
+                    current_item_idx = starting_item_idx
+                    radix_value_idx = local_item_idx
+                    for _ in range(n_iter_for_radixes):
+                        if current_item_idx < n_items:
+                            radix_value = radix_values[histogram_idx, radix_value_idx]
+                            if radix_value >= zero_idx:
+                                private_counts[radix_value] += count_one_as_a_long
+                            radix_value_idx += n_local_histograms
+                            current_item_idx += n_local_histograms
+                    starting_item_idx += sub_group_size
+
+    @dpex.func
+    def share_private_histograms(
+        is_histogram_item,
+        local_subgroup,
+        local_subgroup_work_id,
+        private_counts,
+        local_counts,
+    ):
+        if is_histogram_item:
+            col_idx = local_subgroup_work_id
+            starting_row_idx = local_subgroup * sub_group_size
+
+            # The following indexing enable nicer memory RW patterns since it ensures
+            # that contiguous work items in a sub group access contiguous values.
+            for i in range(sub_group_size):
+                local_counts[
+                    (starting_row_idx + i) % n_local_histograms, col_idx
+                ] = private_counts[col_idx]
+                col_idx = (col_idx + one_idx) % sub_group_size
+
+    @dpex.func
+    def partial_local_histograms_reduction(
+        local_subgroup, local_subgroup_work_id, reduction_active_subgroups, local_counts
+    ):
+        if local_subgroup < reduction_active_subgroups:
+            local_counts[local_subgroup, local_subgroup_work_id] += local_counts[
+                local_subgroup + reduction_active_subgroups, local_subgroup_work_id
+            ]
+
+    @dpex.func
+    def merge_histogram_in_global_memory(
+        item_idx,
+        local_subgroup,
+        local_subgroup_work_id,
+        local_counts,
+        privatized_counts,
+    ):
         # Each work group is assigned an array of centroids in a round robin manner
         privatization_idx = (item_idx // work_group_size) % n_counts_private_copies
 
         if local_subgroup == zero_idx:
             dpex.atomic.add(
-                privatized_counts, (privatization_idx, local_subgroup_work_id),
-                local_counts[zero_idx, local_subgroup_work_id]
-                )
+                privatized_counts,
+                (privatization_idx, local_subgroup_work_id),
+                local_counts[zero_idx, local_subgroup_work_id],
+            )
+
+    # HACK 906: end
 
     return (
         radix_size,
