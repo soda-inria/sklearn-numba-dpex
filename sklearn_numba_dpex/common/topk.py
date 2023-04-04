@@ -15,6 +15,7 @@ import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
     _enforce_matmul_like_work_group_geometry,
+    _get_global_mem_cache_size,
     _get_sequential_processing_device,
     check_power_of_2,
 )
@@ -96,11 +97,12 @@ def _make_lexicographical_unmapping_kernel_func(dtype):
     n_bits_per_item = _get_n_bits_per_item(dtype)
     sign_bit_idx = np.int32(n_bits_per_item - 1)
     uint_type = uint_type_mapping[dtype]
+    one_as_uint_dtype = uint_type(1)
     sign_mask = uint_type(2 ** (sign_bit_idx))
 
     @dpex.func
     def lexicographical_unmapping(item):
-        mask = ((item >> sign_bit_idx) - 1) | sign_mask
+        mask = ((item >> sign_bit_idx) - one_as_uint_dtype) | sign_mask
         return item ^ mask
 
     return lexicographical_unmapping
@@ -243,7 +245,7 @@ def _get_topk_threshold(array_in, k, group_sizes):
         work_group_size = device.max_work_group_size
         sub_group_size = 4
 
-    global_mem_cache_size = device.global_mem_cache_size
+    global_mem_cache_size = _get_global_mem_cache_size(device)
     counts_private_copies_max_cache_occupancy = 0.7
 
     (
