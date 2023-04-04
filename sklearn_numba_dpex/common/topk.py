@@ -14,7 +14,7 @@ import numba_dpex as dpex
 import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
-    _check_max_work_group_size,
+    _enforce_matmul_like_work_group_geometry,
     _get_sequential_processing_device,
     check_power_of_2,
 )
@@ -383,38 +383,13 @@ def _make_create_radix_histogram_kernel(
 
     check_power_of_2(sub_group_size)
 
-    input_work_group_size = work_group_size
-    work_group_size = _check_max_work_group_size(
-        work_group_size, device, np.dtype(histogram_dtype).itemsize
+    (
+        work_group_size,
+        n_sub_groups_for_local_histograms,
+        n_sub_groups_for_local_histograms_log2,
+    ) = _enforce_matmul_like_work_group_geometry(
+        work_group_size, sub_group_size, device, required_local_memory_per_item=1
     )
-
-    # This value is equal to the number of subgroups that are leveraged for creating
-    # the histogram of radix occurences. (during said step, all other sub groups are
-    # idle).
-    n_sub_groups_for_local_histograms = work_group_size / (
-        sub_group_size * sub_group_size
-    )
-    n_sub_groups_for_local_histograms_log2 = math.floor(
-        math.log2(n_sub_groups_for_local_histograms)
-    )
-
-    if work_group_size != input_work_group_size:
-        n_sub_groups_for_local_histograms = 2**n_sub_groups_for_local_histograms_log2
-        work_group_size = int(
-            n_sub_groups_for_local_histograms * sub_group_size * sub_group_size
-        )
-
-    elif work_group_size != (
-        (2**n_sub_groups_for_local_histograms_log2) * sub_group_size * sub_group_size
-    ):
-        raise ValueError(
-            "Expected `work_group_size / (sub_group_size * sub_group_size)` to be a "
-            f"power of two, but got {n_sub_groups_for_local_histograms} instead, with "
-            f"`work_group_size={work_group_size}` and "
-            f"`sub_group_size={sub_group_size}`."
-        )
-    else:
-        n_sub_groups_for_local_histograms = int(n_sub_groups_for_local_histograms)
 
     n_local_histograms = work_group_size // sub_group_size
     work_group_shape = (sub_group_size, n_local_histograms)
@@ -695,7 +670,7 @@ def _make_create_radix_histogram_kernel(
                 current_subgroup = local_subgroup
                 current_item_idx = item_idx
                 for _ in range(sub_group_size):
-                    if current_item_idx <= n_items:
+                    if current_item_idx < n_items:
                         radix_value = radix_values[
                             current_subgroup, local_subgroup_work_id
                         ]
