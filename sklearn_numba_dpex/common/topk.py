@@ -502,8 +502,6 @@ def _make_create_radix_histogram_kernel(
         private_counts = dpex.private.array(sub_group_size, dtype=histogram_dtype)
         initialize_private_histograms(private_counts)
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
-
         # Compute the value of `array_in_uint` at location `item_idx`, and store it
         # in `radix_values[local_subgroup, local_subgroup_work_id]`. If the value is
         # out of bounds, or if it doesn't match the mask, store `-1` instead.
@@ -681,8 +679,8 @@ def _make_create_radix_histogram_kernel(
                         # must be skipped
                         if radix_value >= zero_idx:
                             private_counts[radix_value] += count_one_as_a_long
-                        current_subgroup += n_sub_groups_for_local_histograms
-                        current_item_idx += item_idx_increment_per_step
+                    current_subgroup += n_sub_groups_for_local_histograms
+                    current_item_idx += item_idx_increment_per_step
 
     # Second case: histogram items span less than one sub group, and each work item
     # must span several values in each row of `radix_values`
