@@ -126,8 +126,10 @@ def make_matmul_2d_kernel(
         work_group_size,
         sub_group_size,
         device,
-        required_local_memory_per_item=arithmetic_intensity_multiplier_X
-        + arithmetic_intensity_multiplier_Y,
+        required_local_memory_per_item=(
+            arithmetic_intensity_multiplier_X + arithmetic_intensity_multiplier_Y
+        )
+        * np.dtype(dtype).itemsize,
     )
 
     # Automatically set `private_Y_t_sliding_window_width` to `sub_group_size` if

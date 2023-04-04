@@ -388,7 +388,10 @@ def _make_create_radix_histogram_kernel(
         n_sub_groups_for_local_histograms,
         n_sub_groups_for_local_histograms_log2,
     ) = _enforce_matmul_like_work_group_geometry(
-        work_group_size, sub_group_size, device, required_local_memory_per_item=1
+        work_group_size,
+        sub_group_size,
+        device,
+        required_local_memory_per_item=np.dtype(histogram_dtype).itemsize,
     )
 
     n_local_histograms = work_group_size // sub_group_size
