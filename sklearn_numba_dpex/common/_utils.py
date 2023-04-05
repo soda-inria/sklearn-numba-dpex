@@ -1,6 +1,8 @@
 import math
 import warnings
 
+import dpctl
+
 
 def check_power_of_2(x):
     if x != 2 ** (math.floor(math.log2(x))):
@@ -29,6 +31,22 @@ def _divide_by(divisor):
         return x / divisor
 
     return _divide_closure
+
+
+def _get_sequential_processing_device(device):
+    """Returns a device most fitted for sequential processing (i.e a cpu rather than a
+    gpu). If such a device is not found, returns the input device instead.
+
+    Also returns a boolean that informs on wether the returned device is different than
+    the input device."""
+    if device.has_aspect_cpu:
+        return device, False
+
+    try:
+        return dpctl.SyclDevice("cpu"), True
+    except dpctl.SyclDeviceCreationError:
+        warnings.warn("No CPU found, falling back to GPU for sequential instructions.")
+        return device, False
 
 
 def _check_max_work_group_size(
@@ -87,8 +105,8 @@ def _check_max_work_group_size(
         return work_group_size
 
 
-# This is the value found for Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics]
-# GPU.
+# This is the value found for Intel Corpowork_group_size_ration TigerLake-LP GT2
+# [Iris Xe Graphics] GPU.
 _GLOBAL_MEM_CACHE_SIZE_DEFAULT = 1048576  # 2**20
 
 
@@ -109,3 +127,50 @@ def _get_global_mem_cache_size(device):
     )
 
     return _GLOBAL_MEM_CACHE_SIZE_DEFAULT
+
+
+def _enforce_matmul_like_work_group_geometry(
+    work_group_size, sub_group_size, device, required_local_memory_per_item
+):
+    """There are several kernels, such as matrix multiplication, that like to have
+    `work_group_size / (sub_group_size ** 2)` equal to a power of two. This helper
+    either ensure that if `work_group_size` is automatically adjusted then it matches
+    this rule, or if `work_group_size` is manually overriden it will raise an error if
+    the rule is not met.
+
+    The helper also returns the value of work_group_size / (sub_group_size ** 2).
+    """
+
+    input_work_group_size = work_group_size
+    work_group_size = _check_max_work_group_size(
+        work_group_size,
+        device,
+        required_local_memory_per_item=required_local_memory_per_item,
+    )
+
+    # This value is equal to the number of results per work item assuming
+    # arithmetic_intensity_multiplier_X = arithmetic_intensity_multiplier_Y = 1 .
+    # It is expected to be a power of two (base_nb_results_per_work_item_log2 < 1 is
+    # possible.)
+    work_group_size_ratio = work_group_size / (sub_group_size * sub_group_size)
+    work_group_size_ratio_log2 = math.floor(math.log2(work_group_size_ratio))
+
+    if work_group_size != input_work_group_size:
+        base_nb_results_per_work_item = 2**work_group_size_ratio_log2
+        work_group_size = int(
+            base_nb_results_per_work_item * sub_group_size * sub_group_size
+        )
+
+    elif work_group_size != (
+        (2**work_group_size_ratio_log2) * sub_group_size * sub_group_size
+    ):
+        raise ValueError(
+            "Expected `work_group_size / (sub_group_size * sub_group_size)` to be a "
+            f"power of two, but got {work_group_size_ratio} instead, with "
+            f"`work_group_size={work_group_size}` and "
+            f"`sub_group_size={sub_group_size}`."
+        )
+
+    work_group_size_ratio = int(work_group_size_ratio)
+
+    return work_group_size, work_group_size_ratio, work_group_size_ratio_log2

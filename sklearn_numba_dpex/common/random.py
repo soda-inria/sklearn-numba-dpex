@@ -1,5 +1,4 @@
 import random
-import warnings
 from functools import lru_cache
 
 import dpctl
@@ -7,6 +6,8 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 from numba import float32, float64, int64, uint32, uint64
+
+from ._utils import _get_sequential_processing_device
 
 # This code is largely inspired from the numba.cuda.random module and the
 # numba/cuda/random.py where it's defined (v<0.57), and by the implementation of the
@@ -163,29 +164,21 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     # is available make sure to use it.
     if device is None:
         device = dpctl.SyclDevice()
-    from_cpu_to_device = False
-    if not device.has_aspect_cpu:
-        try:
-            cpu_device = dpctl.SyclDevice("cpu")
-            from_cpu_to_device = True
-        except dpctl.SyclDeviceCreationError:
-            warnings.warn(
-                "No CPU found, falling back random initiatlization to default device."
-            )
+
+    (
+        sequential_processing_device,
+        sequential_processing_on_different_device,
+    ) = _get_sequential_processing_device(device)
 
     states = dpt.empty(
-        sh=(n_states, 2),
-        dtype=np.uint64,
-        device=cpu_device if from_cpu_to_device else device,
+        sh=(n_states, 2), dtype=np.uint64, device=sequential_processing_device
     )
 
-    seed = dpt.asarray(
-        [seed], dtype=np.uint64, device=cpu_device if from_cpu_to_device else device
-    )
+    seed = dpt.asarray([seed], dtype=np.uint64, device=sequential_processing_device)
 
     init_xoroshiro128pp_states_kernel(states, seed)
 
-    if from_cpu_to_device:
+    if sequential_processing_on_different_device:
         return states.to_device(device)
 
     return states

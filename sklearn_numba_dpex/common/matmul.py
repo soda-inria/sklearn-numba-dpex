@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numpy as np
 
-from sklearn_numba_dpex.common._utils import _check_max_work_group_size
+from sklearn_numba_dpex.common._utils import _enforce_matmul_like_work_group_geometry
 
 zero_idx = np.int64(0)
 
@@ -118,41 +118,19 @@ def make_matmul_2d_kernel(
     zero = dtype(0.0)
     two_as_long = dpex.int64(2)
 
-    input_work_group_size = work_group_size
-    work_group_size = _check_max_work_group_size(
+    (
         work_group_size,
+        _,
+        base_nb_results_per_work_item_log2,
+    ) = _enforce_matmul_like_work_group_geometry(
+        work_group_size,
+        sub_group_size,
         device,
         required_local_memory_per_item=(
             arithmetic_intensity_multiplier_X + arithmetic_intensity_multiplier_Y
-        ),
-    )
-
-    # This value is equal to the number of results per work item assuming
-    # arithmetic_intensity_multiplier_X = arithmetic_intensity_multiplier_Y = 1 .
-    # It is expected to be a power of two (base_nb_results_per_work_item_log2 < 1 is
-    # possible.)
-    base_nb_results_per_work_item = work_group_size / (sub_group_size * sub_group_size)
-    base_nb_results_per_work_item_log2 = math.floor(
-        math.log2(base_nb_results_per_work_item)
-    )
-
-    if work_group_size != input_work_group_size:
-        base_nb_results_per_work_item = 2**base_nb_results_per_work_item_log2
-        work_group_size = int(
-            base_nb_results_per_work_item * sub_group_size * sub_group_size
         )
-
-    elif work_group_size != (
-        (2**base_nb_results_per_work_item_log2) * sub_group_size * sub_group_size
-    ):
-        raise ValueError(
-            "Expected `work_group_size / (sub_group_size * sub_group_size)` to be a "
-            f"power of two, but got {base_nb_results_per_work_item} instead, with "
-            f"`work_group_size={work_group_size}` and "
-            f"`sub_group_size={sub_group_size}`."
-        )
-    else:
-        base_nb_results_per_work_item = int(base_nb_results_per_work_item)
+        * np.dtype(dtype).itemsize,
+    )
 
     # Automatically set `private_Y_t_sliding_window_width` to `sub_group_size` if
     # is `sub_group_size < private_Y_t_sliding_window_width`
@@ -203,7 +181,6 @@ def make_matmul_2d_kernel(
             result_window_height_multiplier_X = (
                 result_window_height_multiplier_Y
             ) = 2 ** ((-base_nb_results_per_work_item_log2) // 2)
-        base_nb_results_per_work_item = 1
         base_nb_results_per_work_item_log2 = 0
     else:
         result_window_height_multiplier_X = result_window_height_multiplier_Y = 1

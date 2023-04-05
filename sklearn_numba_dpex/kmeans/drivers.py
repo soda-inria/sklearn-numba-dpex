@@ -1,13 +1,10 @@
-import warnings
-
-import dpctl
 import dpctl.tensor as dpt
-import dpnp
 import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
     _divide_by,
     _get_global_mem_cache_size,
+    _get_sequential_processing_device,
     _minus,
     _plus,
     _square,
@@ -27,6 +24,7 @@ from sklearn_numba_dpex.common.reductions import (
     make_argmin_reduction_1d_kernel,
     make_sum_reduction_2d_kernel,
 )
+from sklearn_numba_dpex.common.topk import topk_idx
 from sklearn_numba_dpex.kmeans.kernels import (
     make_centroid_shifts_kernel,
     make_compute_euclidean_distances_fixed_window_kernel,
@@ -40,7 +38,6 @@ from sklearn_numba_dpex.kmeans.kernels import (
     make_reduce_centroid_data_kernel,
     make_relocate_empty_clusters_kernel,
     make_sample_center_candidates_kernel,
-    make_select_samples_far_from_centroid_kernel,
 )
 
 
@@ -421,44 +418,8 @@ def _relocate_empty_clusters(
 ):
     compute_dtype = X_t.dtype.type
     n_features, n_samples = X_t.shape
-    device = X_t.device.sycl_device
 
-    select_samples_far_from_centroid_kernel = (
-        make_select_samples_far_from_centroid_kernel(
-            n_empty_clusters, n_samples, work_group_size
-        )
-    )
-
-    # NB: partition/argpartition kernels are hard to implement right, we use dpnp
-    # implementation of `partition` and process to an additional pass on the data
-    # to finish the argpartition.
-    # ???: how does the dpnp GPU implementation of partition compare with
-    # np.partition ?
-    # TODO: if the performance compares well, we could also remove some of the
-    # kernels in .kernels.utils and replace it with dpnp functions.
-    kth = n_samples - n_empty_clusters
-    threshold = dpnp.partition(
-        dpnp.ndarray(
-            shape=sq_dist_to_nearest_centroid.shape,
-            buffer=sq_dist_to_nearest_centroid,
-        ),
-        kth=kth,
-    ).get_array()[kth : (kth + 1)]
-
-    samples_far_from_center = dpt.empty(n_samples, dtype=np.uint32, device=device)
-    n_selected_gt_threshold = dpt.zeros(1, dtype=np.int32, device=device)
-    n_selected_eq_threshold = dpt.ones(1, dtype=np.int32, device=device)
-
-    select_samples_far_from_centroid_kernel(
-        sq_dist_to_nearest_centroid,
-        threshold,
-        # OUT
-        samples_far_from_center,
-        n_selected_gt_threshold,
-        n_selected_eq_threshold,
-    )
-
-    n_selected_gt_threshold_ = int(n_selected_gt_threshold[0])
+    samples_far_from_center = topk_idx(sq_dist_to_nearest_centroid, n_empty_clusters)
 
     # Centroids of empty clusters are relocated to samples in X that are the
     # farthest from their respective centroids. new_centroids_t is updated
@@ -466,7 +427,6 @@ def _relocate_empty_clusters(
     relocate_empty_clusters_kernel = make_relocate_empty_clusters_kernel(
         n_empty_clusters,
         n_features,
-        n_selected_gt_threshold_,
         work_group_size,
         compute_dtype,
     )
@@ -803,17 +763,10 @@ def kmeans_plusplus(
     # Same retrial heuristic as scikit-learn (at least until <1.2)
     n_local_trials = 2 + int(np.log(n_clusters))
 
-    # TODO: this block is also written in common.kernel.random, factorize ?
-    from_cpu_to_device = False
-    if not device.has_aspect_cpu:
-        try:
-            cpu_device = dpctl.SyclDevice("cpu")
-            from_cpu_to_device = True
-        except dpctl.SyclDeviceCreationError:
-            warnings.warn(
-                "No CPU found, falling back to the initialization of the k-means RNG "
-                "on the default device."
-            )
+    (
+        sequential_processing_device,
+        sequential_processing_on_different_device,
+    ) = _get_sequential_processing_device(device)
 
     kmeansplusplus_init_kernel = make_kmeansplusplus_init_kernel(
         n_samples,
@@ -859,10 +812,10 @@ def kmeans_plusplus(
     random_state = create_xoroshiro128pp_states(
         n_local_trials,
         seed=random_state,
-        device=cpu_device if from_cpu_to_device else device,
+        device=sequential_processing_device,
     )
-    if from_cpu_to_device:
-        sampling_work_group_size = cpu_device.max_work_group_size
+    if sequential_processing_on_different_device:
+        sampling_work_group_size = sequential_processing_device.max_work_group_size
     else:
         sampling_work_group_size = max_work_group_size
 
@@ -918,12 +871,12 @@ def kmeans_plusplus(
         # efficient to keep it on GPU ?
         # ???: would it be bad to sample the sample weight once outside the loop and
         # reuse it at each iteration ?
-        if from_cpu_to_device:
-            candidate_ids = candidate_ids.to_device(cpu_device)
+        if sequential_processing_on_different_device:
+            candidate_ids = candidate_ids.to_device(sequential_processing_device)
 
             sample_center_candidates_kernel(
-                closest_dist_sq.to_device(cpu_device),
-                total_potential.to_device(cpu_device),
+                closest_dist_sq.to_device(sequential_processing_device),
+                total_potential.to_device(sequential_processing_device),
                 # OUT
                 random_state,
                 candidate_ids,
