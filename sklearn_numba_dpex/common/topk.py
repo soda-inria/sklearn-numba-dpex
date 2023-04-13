@@ -153,6 +153,7 @@ def topk(array_in, k, group_sizes=None):
     ) = _get_topk_threshold(array_in, k, group_sizes)
     result = dpt.empty(sh=(n_rows, k), dtype=dtype, device=device)
     index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+
     gather_topk_kernel = _make_gather_topk_kernel(
         n_rows,
         n_cols,
@@ -1092,16 +1093,18 @@ def _make_gather_topk_kernel(
 
         n_threshold_occurences_in_topk_ = n_threshold_occurences_in_topk[row_idx]
 
+        threshold_ = threshold[row_idx]
+
         if n_threshold_occurences_in_data[row_idx] == n_threshold_occurences_in_topk_:
             gather_topk_include_all_threshold_occurences(
-                row_idx, col_idx, array_in, threshold[row_idx], index_buffer, result
+                row_idx, col_idx, array_in, threshold_, index_buffer, result
             )
         else:
             gather_topk_generic(
                 row_idx,
                 col_idx,
                 array_in,
-                threshold[row_idx],
+                threshold_,
                 n_threshold_occurences_in_topk_,
                 index_buffer,
                 result,
@@ -1153,7 +1156,7 @@ def _make_gather_topk_kernel(
         # The `n_threshold_occurences_` first work items write the value of the
         # threshold at the end of the result array.
         if col_idx < n_threshold_occurences:
-            result[-col_idx-one_idx] = threshold
+            result[row_idx, k-col_idx-one_idx] = threshold
 
         # Then write the remaining `k - n_threshold_occurences_` that are strictly
         # greater than the threshold.
