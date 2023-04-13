@@ -63,7 +63,7 @@ def test_topk_1d(k, array_in, dtype, work_group_size):
 @pytest.mark.parametrize("dtype", float_dtype_params)
 @pytest.mark.parametrize("work_group_size", [4, 8, None])
 def test_topk_multirow(k, dtype, work_group_size):
-    array_in = np.array(top_k_exhaustive_test_cases)
+    array_in = np.array(top_k_exhaustive_test_cases).astype(dtype)
     array_in_dpt = dpt.asarray(top_k_exhaustive_test_cases, dtype=dtype)
 
     if work_group_size is None:
@@ -90,3 +90,22 @@ def test_topk_multirow(k, dtype, work_group_size):
     ):
         actual_from_idx = set(array_row[i] for i in row_actual_top_k_idx)
         assert actual_from_idx == set(row_expected_top_k)
+
+
+@pytest.mark.parametrize("k", [1, 3])
+@pytest.mark.parametrize("dtype", float_dtype_params)
+def test_topk_random_data(k, dtype):
+    seed = 123
+    rng = np.random.default_rng(seed)
+    array_in = rng.normal(size=(1000, 1000)).astype(dtype)
+    array_in_dpt = dpt.asarray(array_in, dtype=dtype)
+
+    actual_top_k = np.sort(dpt.asnumpy(topk(array_in_dpt, k)))
+    actual_top_k_idx = np.sort(dpt.asnumpy(topk_idx(array_in_dpt, k)))
+
+    assert actual_top_k.shape[1] == k
+    assert actual_top_k_idx.shape[1] == k
+
+    expected_top_k = np.sort(array_in)[:, -k:]
+
+    np.testing.assert_array_equal(expected_top_k, actual_top_k)

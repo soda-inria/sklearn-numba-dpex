@@ -110,8 +110,7 @@ def _make_lexicographical_unmapping_kernel_func(dtype):
 
 
 def topk(array_in, k, group_sizes=None):
-    """Return an array containing the k greatest values found in each row of
-    `array_in`.
+    """Compute the k greatest values found in each row of `array_in`.
 
     Parameters
     ----------
@@ -144,7 +143,8 @@ def topk(array_in, k, group_sizes=None):
 
     shape = array_in.shape
 
-    if is_1d := (len(shape) == 1):
+    is_1d = len(shape) == 1
+    if is_1d:
         n_rows = 1
         n_cols = shape[0]
         array_in = dpt.reshape(array_in, (1, -1))
@@ -168,14 +168,19 @@ def topk(array_in, k, group_sizes=None):
     )
 
     result = dpt.empty(sh=(n_rows, k), dtype=dtype, device=device)
-    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+
+    # For each row, maintain an atomically incremented index of the next result value
+    # to be stored:.
+    # Note that the ordering of the topk is non-deteriminstic and dependents on the
+    # concurrency of the parallel work items.
+    result_col_idx = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
 
     gather_topk_kernel(
         array_in,
         threshold,
         n_threshold_occurences_in_topk,
         n_threshold_occurences_in_data,
-        index_buffer,
+        result_col_idx,
         # OUT
         result,
     )
@@ -187,8 +192,7 @@ def topk(array_in, k, group_sizes=None):
 
 
 def topk_idx(array_in, k, group_sizes=None):
-    """Return an array containing the indices of the k greatest values found in each
-    row of `array_in`.
+    """Compute the indices of the k greatest values found in each row of `array_in`.
 
     Parameters
     ----------
@@ -224,7 +228,8 @@ def topk_idx(array_in, k, group_sizes=None):
     """
     shape = array_in.shape
 
-    if is_1d := (len(shape) == 1):
+    is_1d = len(shape) == 1
+    if is_1d:
         n_rows = 1
         n_cols = shape[0]
         array_in = dpt.reshape(array_in, (1, -1))
@@ -248,14 +253,14 @@ def topk_idx(array_in, k, group_sizes=None):
     )
 
     result = dpt.empty(sh=(n_rows, k), dtype=np.int64, device=device)
-    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+    result_col_idx = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
 
     gather_topk_idx_kernel(
         array_in,
         threshold,
         n_threshold_occurences_in_topk,
         n_threshold_occurences_in_data,
-        index_buffer,
+        result_col_idx,
         result,
     )
 
@@ -589,6 +594,9 @@ def _make_create_radix_histogram_kernel(
     n_counts_private_copies = int(
         min(n_work_groups_per_row, n_counts_private_copies, device.max_compute_units)
     )
+
+    # Safety check for edge case where `n_counts_private_copies` equals 0 because
+    # `n_counts_bytes` is too large
     n_counts_private_copies = max(n_counts_private_copies, 1)
 
     # TODO: this privatization parameter could be adjusted to actual `active_n_rows`
@@ -1144,7 +1152,7 @@ def _make_gather_topk_kernel(
         threshold,                          # IN             (n_rows,)
         n_threshold_occurences_in_topk,     # IN             (n_rows,)
         n_threshold_occurences_in_data,     # IN             (n_rows,)
-        index_buffer,                       # BUFFER         (n_rows,)
+        result_col_idx,                         # BUFFER         (n_rows,)
         result,                             # OUT            (n_rows, k)
     ):
         # fmt: on
@@ -1163,7 +1171,7 @@ def _make_gather_topk_kernel(
                 col_idx,
                 threshold_,
                 array_in,
-                index_buffer,
+                result_col_idx,
                 # OUT
                 result
             )
@@ -1174,7 +1182,7 @@ def _make_gather_topk_kernel(
                 threshold_,
                 n_threshold_occurences_in_topk_,
                 array_in,
-                index_buffer,
+                result_col_idx,
                 # OUT
                 result,
             )
@@ -1189,23 +1197,23 @@ def _make_gather_topk_kernel(
         row_idx,                           # PARAM
         col_idx,                           # PARAM
         threshold,                         # PARAM
-        array_in,                          # IN READ-ONLY (n_items,)
-        index_buffer,                      # BUFFER       (n_rows,)
+        array_in,                          # IN READ-ONLY (n_rows, n_cols)
+        result_col_idx,                    # BUFFER       (n_rows,)
         result,                            # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
             return
 
-        if index_buffer[row_idx] >= k:
+        if result_col_idx[row_idx] >= k:
             return
 
         item = array_in[row_idx, col_idx]
 
         if item >= threshold:
-            index_buffer_ = dpex.atomic.add(
-                index_buffer, row_idx, count_one_as_an_int)
-            result[row_idx, index_buffer_] = item
+            result_col_idx_ = dpex.atomic.add(
+                result_col_idx, row_idx, count_one_as_an_int)
+            result[row_idx, result_col_idx_] = item
 
     @dpex.func
     # fmt: off
@@ -1214,24 +1222,22 @@ def _make_gather_topk_kernel(
         col_idx,                       # PARAM
         threshold,                     # PARAM
         n_threshold_occurences,        # PARAM
-        array_in,                      # IN READ-ONLY (n_items,)
-        index_buffer,                  # BUFFER       (n_rows,)
+        array_in,                      # IN READ-ONLY (n_rows, n_cols,)
+        result_col_idx,                # BUFFER       (n_rows,)
         result,                        # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
             return
 
-        # The `n_threshold_occurences_` first work items write the value of the
+        # The `n_threshold_occurences` first work items write the value of the
         # threshold at the end of the result array.
         if col_idx < n_threshold_occurences:
             result[row_idx, k-col_idx-one_idx] = threshold
 
-        # Then write the remaining `k - n_threshold_occurences_` that are strictly
+        # Then write the remaining `k - n_threshold_occurences` that are strictly
         # greater than the threshold.
-        k_ = k - n_threshold_occurences
-
-        if index_buffer[row_idx] >= k_:
+        if result_col_idx[row_idx] >= (k - n_threshold_occurences):
             return
 
         item = array_in[row_idx, col_idx]
@@ -1239,8 +1245,8 @@ def _make_gather_topk_kernel(
         if item <= threshold:
             return
 
-        index_buffer_ = dpex.atomic.add(index_buffer, row_idx, count_one_as_an_int)
-        result[row_idx, index_buffer_] = item
+        result_col_idx_ = dpex.atomic.add(result_col_idx, row_idx, count_one_as_an_int)
+        result[row_idx, result_col_idx_] = item
 
     return gather_topk[global_shape, work_group_shape]
 
@@ -1264,7 +1270,7 @@ def _make_gather_topk_idx_kernel(
         threshold,                          # IN             (n_rows,)
         n_threshold_occurences_in_topk,     # IN             (n_rows,)
         n_threshold_occurences_in_data,     # IN             (n_rows,)
-        index_buffer,                       # BUFFER         (n_rows,)
+        result_col_idx,                     # BUFFER         (n_rows,)
         result,                             # OUT            (n_rows, k)
     ):
         # fmt: on
@@ -1279,7 +1285,7 @@ def _make_gather_topk_idx_kernel(
                 col_idx,
                 threshold[row_idx],
                 array_in,
-                index_buffer,
+                result_col_idx,
                 # OUT
                 result
             )
@@ -1290,7 +1296,7 @@ def _make_gather_topk_idx_kernel(
                 threshold[row_idx],
                 n_threshold_occurences_in_topk,
                 array_in,
-                index_buffer,
+                result_col_idx,
                 # OUT
                 result,
             )
@@ -1301,23 +1307,23 @@ def _make_gather_topk_idx_kernel(
         row_idx,                           # PARAM
         col_idx,                           # PARAM
         threshold,                         # PARAM
-        array_in,                          # IN READ-ONLY (n_items,)
-        index_buffer,                      # BUFFER       (n_rows,)
+        array_in,                          # IN READ-ONLY (n_rows, n_cols)
+        result_col_idx,                    # BUFFER       (n_rows,)
         result,                            # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
             return
 
-        if index_buffer[row_idx] >= k:
+        if result_col_idx[row_idx] >= k:
             return
 
         item = array_in[row_idx, col_idx]
 
         if item >= threshold:
-            index_buffer_ = dpex.atomic.add(
-                index_buffer, row_idx, count_one_as_an_int)
-            result[row_idx, index_buffer_] = col_idx
+            result_col_idx_ = dpex.atomic.add(
+                result_col_idx, row_idx, count_one_as_an_int)
+            result[row_idx, result_col_idx_] = col_idx
 
     @dpex.func
     # fmt: off
@@ -1326,15 +1332,15 @@ def _make_gather_topk_idx_kernel(
         col_idx,                       # PARAM
         threshold,                     # PARAM
         n_threshold_occurences,        # PARAM
-        array_in,                      # IN READ-ONLY (n_items,)
-        index_buffer,                  # BUFFER       (n_rows,)
+        array_in,                      # IN READ-ONLY (n_rows, n_cols)
+        result_col_idx,                # BUFFER       (n_rows,)
         result,                        # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
             return
 
-        if index_buffer[row_idx] >= k:
+        if result_col_idx[row_idx] >= k:
             return
 
         item = array_in[row_idx, col_idx]
@@ -1343,8 +1349,10 @@ def _make_gather_topk_idx_kernel(
             return
 
         if item > threshold:
-            index_buffer_ = dpex.atomic.add(index_buffer, row_idx, count_one_as_an_int)
-            result[row_idx, index_buffer_] = col_idx
+            result_col_idx_ = dpex.atomic.add(
+                result_col_idx, row_idx, count_one_as_an_int
+            )
+            result[row_idx, result_col_idx_] = col_idx
             return
 
         if n_threshold_occurences[row_idx] <= zero_idx:
@@ -1354,7 +1362,9 @@ def _make_gather_topk_idx_kernel(
             n_threshold_occurences, row_idx, count_one_as_an_int)
 
         if remaining_n_threshold_occurences > zero_idx:
-            index_buffer_ = dpex.atomic.add(index_buffer, row_idx, count_one_as_an_int)
-            result[row_idx, index_buffer_] = col_idx
+            result_col_idx_ = dpex.atomic.add(
+                result_col_idx, row_idx, count_one_as_an_int
+            )
+            result[row_idx, result_col_idx_] = col_idx
 
     return gather_topk_idx[global_shape, work_group_shape]

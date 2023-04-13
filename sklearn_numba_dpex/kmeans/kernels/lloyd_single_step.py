@@ -142,6 +142,9 @@ def make_lloyd_single_step_fixed_window_kernel(
     n_centroids_private_copies = int(
         min(n_subgroups, n_centroids_private_copies, device.max_compute_units)
     )
+
+    # Safety check for edge case where `n_centroids_private_copies` equals 0 because
+    # `n_cluster_bytes` is too large
     n_centroids_private_copies = max(n_centroids_private_copies, 1)
 
     zero_idx = np.int64(0)
