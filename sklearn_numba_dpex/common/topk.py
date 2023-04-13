@@ -138,6 +138,10 @@ def topk(array_in, k, group_sizes=None):
     The output is not deterministic: the order of the output is undefined. Successive
     calls can return the same items in different order.
     """
+    # TODO: it seems a kernel specialized for 1d arrays would show 10-20% better
+    # performance. If this case becomes specifically relevant, consider implementing
+    # this case separately rather than using the generic multirow top k for 1d arrays.
+
     shape = array_in.shape
 
     if is_1d := (len(shape) == 1):
