@@ -116,7 +116,9 @@ def topk(array_in, k, group_sizes=None):
     Parameters
     ----------
     array_in : dpctl.tensor array
-        Input array in which looking for the top k values.
+        Input array in which looking for the top k values. `array_in` is expected to be
+        one or two-dimensional. If two-dimensional, the `top-k` search is ran row-wise.
+        For best performance, it is recommended to submit C-contiguous arrays.
 
     k: int
         Number of values to search for.
@@ -133,26 +135,26 @@ def topk(array_in, k, group_sizes=None):
 
     Notes
     -----
-    `array_in` can be a 1d or 2d array. If 2d, it is recommended to submit a
-    C-contiguous array, which is the memory layout for which the top-k is optimized.
-
     The output is not deterministic: the order of the output is undefined. Successive
     calls can return the same items in different order.
     """
+    shape = array_in.shape
+
+    if is_1d := (len(shape) == 1):
+        n_rows = 1
+        n_cols = shape[0]
+        array_in = dpt.reshape(array_in, (1, -1))
+    else:
+        n_rows, n_cols = shape
+
     (
         threshold,
         n_threshold_occurences_in_topk,
         n_threshold_occurences_in_data,
-        is_1d,
-        n_rows,
-        n_cols,
-        array_in,
         work_group_size,
         dtype,
         device,
     ) = _get_topk_threshold(array_in, k, group_sizes)
-    result = dpt.empty(sh=(n_rows, k), dtype=dtype, device=device)
-    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
 
     gather_topk_kernel = _make_gather_topk_kernel(
         n_rows,
@@ -161,12 +163,16 @@ def topk(array_in, k, group_sizes=None):
         work_group_size,
     )
 
+    result = dpt.empty(sh=(n_rows, k), dtype=dtype, device=device)
+    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+
     gather_topk_kernel(
         array_in,
         threshold,
         n_threshold_occurences_in_topk,
         n_threshold_occurences_in_data,
         index_buffer,
+        # OUT
         result,
     )
 
@@ -177,13 +183,15 @@ def topk(array_in, k, group_sizes=None):
 
 
 def topk_idx(array_in, k, group_sizes=None):
-    """Return an array ontaining the indices of the k greatest values found in each
+    """Return an array containing the indices of the k greatest values found in each
     row of `array_in`.
 
     Parameters
     ----------
     array_in : dpctl.tensor array
-        Input array in which looking for the top k values.
+        Input array in which looking for the top k values. `array_in` is expected to be
+        one or two-dimensional. If two-dimensional, the `top-k` search is ran row-wise.
+        For best performance, it is recommended to submit C-contiguous arrays.
 
     k: int
         Number of values to search for.
@@ -201,10 +209,6 @@ def topk_idx(array_in, k, group_sizes=None):
 
     Notes
     -----
-    `array_in` can be a 1d or 2d array. If 2d, it is recommended to submit a
-    C-contiguous array, which is the memory layout for which the top-k is optimized.
-
-
     The output is not deterministic:
         - the order of the output is undefined. Successive calls can return the same
         items in different order.
@@ -214,27 +218,33 @@ def topk_idx(array_in, k, group_sizes=None):
         for this value can be different between two successive calls.
 
     """
+    shape = array_in.shape
+
+    if is_1d := (len(shape) == 1):
+        n_rows = 1
+        n_cols = shape[0]
+        array_in = dpt.reshape(array_in, (1, -1))
+    else:
+        n_rows, n_cols = shape
 
     (
         threshold,
         n_threshold_occurences_in_topk,
         n_threshold_occurences_in_data,
-        is_1d,
-        n_rows,
-        n_cols,
-        array_in,
         work_group_size,
         dtype,
         device,
     ) = _get_topk_threshold(array_in, k, group_sizes)
-    result = dpt.empty(sh=(n_rows, k), dtype=np.int64, device=device)
-    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+
     gather_topk_idx_kernel = _make_gather_topk_idx_kernel(
         n_rows,
         n_cols,
         k,
         work_group_size,
     )
+
+    result = dpt.empty(sh=(n_rows, k), dtype=np.int64, device=device)
+    index_buffer = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
 
     gather_topk_idx_kernel(
         array_in,
@@ -252,14 +262,7 @@ def topk_idx(array_in, k, group_sizes=None):
 
 
 def _get_topk_threshold(array_in, k, group_sizes):
-    shape = array_in.shape
-
-    if is_1d := (len(shape) == 1):
-        n_rows = 1
-        n_cols = shape[0]
-        array_in = dpt.reshape(array_in, (1, -1))
-    else:
-        n_rows, n_cols = shape
+    n_rows, n_cols = array_in.shape
 
     if n_cols < k:
         raise ValueError(
@@ -303,7 +306,11 @@ def _get_topk_threshold(array_in, k, group_sizes):
         device,
     )
 
+    # This kernel can only reduce 1d or 2d matrices but will be used to reduce the 3d
+    # matrix of private counts over axis 0. It is made possible by adequatly reshaping
+    # the 3d matrix before and after the kernel call to a 2d matrix.
     n_rows_x_radix_size = n_rows * radix_size
+
     reduce_privatized_counts = make_sum_reduction_2d_kernel(
         shape=(n_counts_private_copies, n_rows_x_radix_size),
         device=device,
@@ -316,6 +323,16 @@ def _get_topk_threshold(array_in, k, group_sizes):
     initialize_privatized_counts = make_initialize_to_zeros_kernel(
         (n_counts_private_copies, n_rows, radix_size), work_group_size, dtype
     )
+
+    # The kernel `check_radix_histogram` seems to be more adapted to cpu or gpu
+    # depending on if `n_rows` is large enough to leverage enough of the
+    # parallelization capabilities of the gpu.
+    # TODO: benchmark the improvement
+
+    # Some other steps in the main loop are more fitted for cpu than gpu.
+
+    # To this purpose the following variables check availability of a cpu and wether
+    # a data transfer is required.
 
     (check_radix_histogram_device, check_radix_histogram_on_sequential_device,) = (
         sequential_processing_device,
@@ -340,8 +357,59 @@ def _get_topk_threshold(array_in, k, group_sizes):
         radix_size, dtype, check_radix_histogram_work_group_size
     )
 
+    # In each iteration of the main loop, a lesser, decreasing amount of top values are
+    # searched for in a decreasing subset of data. The following variable records the
+    # amount of top values to search for at the given iteration.
     k_in_subset = dpt.full(
         n_rows, k, dtype=np.int32, device=check_radix_histogram_device
+    )
+
+    # Depending on the data, it's possible that the search early stops before having to
+    # scan all the bits of data (in the case where exactly top-k values can be
+    # identified with a partial sort on some given prefix length).
+
+    # If `n_rows > 1`, the search might terminate sooner in some rows than others.
+    # Let's call "active rows" the rows for which the search is still ongoing at the
+    # current iteration. Rows that are not "active rows" are finished searching and are
+    # waiting for search in other rows to complete.
+
+    # Number of currently active rows
+    n_active_rows_ = n_rows
+    n_active_rows = dpt.asarray(
+        [n_active_rows_], dtype=np.int64, device=check_radix_histogram_device
+    )
+    # Buffer to store the number of active rows in the next iteration
+    new_n_active_rows = dpt.asarray(
+        [0], dtype=np.int64, device=check_radix_histogram_device
+    )
+
+    # List of indexes of currently active rows (at a given iteration, only slots from
+    # 0 to `n_active_rows` are used)
+    active_rows_mapping = dpt.arange(n_rows, dtype=np.int64, device=device)
+    # Buffer to store the mapping that will be used in the next iteration
+    new_active_rows_mapping = dpt.zeros(
+        n_rows, dtype=np.int64, device=check_radix_histogram_device
+    )
+
+    # Position of the radix that is currently used for sorting data
+    radix_position = dpt.asarray(
+        [n_bits_per_item - radix_bits], dtype=uint_type, device=device
+    )
+
+    # mask and value used to filter the subset of the data that is currently searched
+    # at the given iteration
+    mask_for_desired_value = dpt.zeros(sh=(1,), dtype=uint_type, device=device)
+    desired_masked_value = dpt.zeros(sh=(n_rows,), dtype=uint_type, device=device)
+
+    # Buffer that stores the counts of occurences of the values at the current radix
+    # position.
+    privatized_counts = dpt.zeros(
+        sh=(n_counts_private_copies, n_rows, radix_size), dtype=np.int64, device=device
+    )
+
+    # Will store the number of occurences of the top-k threshold value in the data
+    threshold_count = dpt.zeros(
+        (n_rows,), dtype=np.int64, device=check_radix_histogram_device
     )
 
     # Reinterpret buffer as uint so we can use bitwise compute
@@ -350,32 +418,10 @@ def _get_topk_threshold(array_in, k, group_sizes):
         dtype=uint_type,
         buffer=array_in,
     )
-    active_rows_mapping = dpt.arange(n_rows, dtype=np.int64, device=device)
-    new_active_rows_mapping = dpt.zeros(
-        n_rows, dtype=np.int64, device=check_radix_histogram_device
-    )
 
-    n_active_rows_ = n_rows
-    n_active_rows = dpt.asarray(
-        [n_active_rows_], dtype=np.int64, device=check_radix_histogram_device
-    )
-    new_n_active_rows = dpt.asarray(
-        [0], dtype=np.int64, device=check_radix_histogram_device
-    )
-
-    privatized_counts = dpt.zeros(
-        sh=(n_counts_private_copies, n_rows, radix_size), dtype=np.int64, device=device
-    )
-    mask_for_desired_value = dpt.zeros(sh=(1,), dtype=uint_type, device=device)
-    desired_masked_value = dpt.zeros(sh=(n_rows,), dtype=uint_type, device=device)
-    radix_position = dpt.asarray(
-        [n_bits_per_item - radix_bits], dtype=uint_type, device=device
-    )
-
-    threshold_count = dpt.zeros(
-        (n_rows,), dtype=np.int64, device=check_radix_histogram_device
-    )
-
+    # The main loop: each iteration consists in sorting partially the data on the
+    # values of a given radix of size `radix_size`, then discarding values that are
+    # below the top k values.
     while True:
         create_radix_histogram_kernel(
             array_in_uint,
@@ -411,47 +457,47 @@ def _get_topk_threshold(array_in, k, group_sizes):
 
         check_radix_histogram(
             counts,
-            active_rows_mapping,
+            radix_position,
             n_active_rows,
+            active_rows_mapping,
             # INOUT
             k_in_subset,
-            radix_position,
             desired_masked_value,
             # OUT
             threshold_count,
-            new_active_rows_mapping,
             new_n_active_rows,
+            new_active_rows_mapping,
         )
 
+        # If the top k values have been found in all rows, can exit early.
         if (n_active_rows_ := int(new_n_active_rows[0])) == 0:
             break
 
+        # Else, update `radix_position` continue searching using the next radix
         if change_device_for_radix_update:
             radix_position = radix_position.to_device(sequential_processing_device)
             mask_for_desired_value = mask_for_desired_value.to_device(
                 sequential_processing_device
             )
-
         update_radix_position(radix_position, mask_for_desired_value)
-
-        n_active_rows, new_n_active_rows = new_n_active_rows, n_active_rows
-        new_n_active_rows[:] = 0
-
-        active_rows_mapping, new_active_rows_mapping = (
-            new_active_rows_mapping,
-            active_rows_mapping,
-        )
-
         if change_device_for_radix_update or check_radix_histogram_on_sequential_device:
             radix_position = radix_position.to_device(device)
             mask_for_desired_value = mask_for_desired_value.to_device(device)
 
+        # Prepare next iteration
+        n_active_rows, new_n_active_rows = new_n_active_rows, n_active_rows
+        new_n_active_rows[:] = 0
+        active_rows_mapping, new_active_rows_mapping = (
+            new_active_rows_mapping,
+            active_rows_mapping,
+        )
         if check_radix_histogram_on_sequential_device:
             desired_masked_value = desired_masked_value.to_device(device)
             active_rows_mapping = active_rows_mapping.to_device(device)
 
         initialize_privatized_counts(privatized_counts)
 
+    # Ensure data is located on the expected device before returning
     if check_radix_histogram_on_sequential_device:
         k_in_subset = k_in_subset.to_device(device)
         threshold_count = threshold_count.to_device(device)
@@ -466,10 +512,6 @@ def _get_topk_threshold(array_in, k, group_sizes):
         threshold,
         k_in_subset,
         threshold_count,
-        is_1d,
-        n_rows,
-        n_cols,
-        array_in,
         work_group_size,
         dtype,
         device,
@@ -543,6 +585,7 @@ def _make_create_radix_histogram_kernel(
     n_counts_private_copies = int(
         min(n_work_groups_per_row, n_counts_private_copies, device.max_compute_units)
     )
+    n_counts_private_copies = max(n_counts_private_copies, 1)
 
     # TODO: this privatization parameter could be adjusted to actual `active_n_rows`
     # rather than using `n_rows`, this might improve privatization performance,
@@ -550,8 +593,6 @@ def _make_create_radix_histogram_kernel(
     # the `n_rows` arguments rather than declaring it as a compile-time constant (or
     # suffer a much higher compile time for each possible value of `n_rows`).
     # Which is better ?
-
-    n_counts_private_copies = max(n_counts_private_copies, 1)
 
     lexicographical_mapping = _make_lexicographical_mapping_kernel_func(dtype)
 
@@ -606,7 +647,7 @@ def _make_create_radix_histogram_kernel(
             sub_group_size * dpex.get_global_id(two_idx))
 
         # Index of the subgroup and position within this sub group. Incidentally, this
-        # also matches the location to which the radix value will be written in the
+        # also indexes the location to which the radix value will be written in the
         # shared memory buffer.
         local_subgroup = dpex.get_local_id(two_idx)
         local_subgroup_work_id = dpex.get_local_id(zero_idx)
@@ -640,9 +681,9 @@ def _make_create_radix_histogram_kernel(
             col_idx,
             local_subgroup,
             local_subgroup_work_id,
+            radix_position,
             mask_for_desired_value,
             desired_masked_value,
-            radix_position,
             array_in_uint,
             # OUT
             radix_values
@@ -658,10 +699,10 @@ def _make_create_radix_histogram_kernel(
         # occurence of conflicts)
         compute_private_histogram(
             col_idx,
-            is_histogram_item,
             local_item_idx,
             local_subgroup,
             local_subgroup_work_id,
+            is_histogram_item,
             radix_values,
             # OUT
             private_counts
@@ -673,11 +714,11 @@ def _make_create_radix_histogram_kernel(
         # into the shared memory buffer, effectively sharing it with all other work
         # items. Each work item write to a different row in `local_counts`.
         share_private_histograms(
-            is_histogram_item,
             local_subgroup,
             local_subgroup_work_id,
+            is_histogram_item,
             private_counts,
-            # OUT
+            # INOUT
             local_counts
         )
 
@@ -716,18 +757,26 @@ def _make_create_radix_histogram_kernel(
             privatized_counts
         )
 
+    # HACK 906: all instructions inbetween barriers must be defined in `dpex.func`
+    # device functions.
+    # See sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
+
+    # HACK 906: start
+
     @dpex.func
+    # fmt: off
     def compute_radixes(
-        row_idx,
-        col_idx,
-        local_subgroup,
-        local_subgroup_work_id,
-        mask_for_desired_value,
-        desired_masked_value,
-        radix_position,
-        array_in_uint,
-        radix_values,
+        row_idx,                    # PARAM
+        col_idx,                    # PARAM
+        local_subgroup,             # PARAM
+        local_subgroup_work_id,     # PARAM
+        radix_position,             # IN            (1,)
+        mask_for_desired_value,     # IN            (1,)
+        desired_masked_value,       # IN            (n_rows,)
+        array_in_uint,              # IN READ-ONLY  (n_rows, n_cols)
+        radix_values,               # OUT           (n_local_histograms, radix_size)
     ):
+        # fmt: on
         # If `col_idx` is outside the bounds of the input, ignore this location.
         is_in_bounds = col_idx < n_cols
         if is_in_bounds:
@@ -737,9 +786,10 @@ def _make_create_radix_histogram_kernel(
             # equivalent to the natural order in the the source space.
             item_lexicographically_mapped = lexicographical_mapping(item)
 
-            mask_for_desired_value_ = mask_for_desired_value[zero_idx]
-            desired_masked_value_ = desired_masked_value[row_idx]
             radix_position_ = radix_position[zero_idx]
+            mask_for_desired_value_ = mask_for_desired_value[zero_idx]
+
+            desired_masked_value_ = desired_masked_value[row_idx]
 
         # The item is included to the radix histogram if the sequence of bits at the
         # positions defined by `mask_for_desired_value_` is equal to the sequence of
@@ -768,12 +818,6 @@ def _make_create_radix_histogram_kernel(
 
         radix_values[local_subgroup, local_subgroup_work_id] = value
 
-    # HACK 906: all instructions inbetween barriers must be defined in `dpex.func`
-    # device functions.
-    # See sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-
-    # HACK 906: start
-
     @dpex.func
     def initialize_private_histograms(private_counts):
         for i in range(sub_group_size):
@@ -791,15 +835,17 @@ def _make_create_radix_histogram_kernel(
         col_idx_increment_per_step = n_sub_groups_for_local_histograms * sub_group_size
 
         @dpex.func
+        # fmt: off
         def compute_private_histogram(
-            col_idx,
-            is_histogram_item,
-            local_item_idx,
-            local_subgroup,
-            local_subgroup_work_id,
-            radix_values,
-            private_counts,
+            col_idx,                    # PARAM
+            local_item_idx,             # PARAM  (UNUSED)
+            local_subgroup,             # PARAM
+            local_subgroup_work_id,     # PARAM
+            is_histogram_item,          # PARAM
+            radix_values,               # IN      (n_local_histograms, sub_group_size)
+            private_counts,             # OUT     (sub_group_size,)
         ):
+            # fmt: on
             if is_histogram_item:
                 current_subgroup = local_subgroup
                 current_col_idx = col_idx
@@ -823,15 +869,17 @@ def _make_create_radix_histogram_kernel(
         n_iter_for_radixes = sub_group_size // n_local_histograms
 
         @dpex.func
+        # fmt: off
         def compute_private_histogram(
-            col_idx,
-            is_histogram_item,
-            local_item_idx,
-            local_subgroup,
-            local_subgroup_work_id,
-            radix_values,
-            private_counts,
+            col_idx,                    # PARAM
+            local_item_idx,             # PARAM
+            local_subgroup,             # PARAM   (UNUSED)
+            local_subgroup_work_id,     # PARAM   (UNUSED)
+            is_histogram_item,          # PARAM
+            radix_values,               # IN      (n_local_histograms, sub_group_size)
+            private_counts,             # OUT     (sub_group_size,)
         ):
+            # fmt: on
             if is_histogram_item:
                 starting_col_idx = col_idx
                 for histogram_idx in range(n_local_histograms):
@@ -847,13 +895,15 @@ def _make_create_radix_histogram_kernel(
                     starting_col_idx += sub_group_size
 
     @dpex.func
+    # fmt: off
     def share_private_histograms(
-        is_histogram_item,
-        local_subgroup,
-        local_subgroup_work_id,
-        private_counts,
-        local_counts,
+        local_subgroup,             # PARAM
+        local_subgroup_work_id,     # PARAM
+        is_histogram_item,          # PARAM
+        private_counts,             # IN     (sub_group_size,)
+        local_counts,               # OUT    (n_local_histograms, radix_size)
     ):
+        # fmt: on
         if is_histogram_item:
             col_idx = local_subgroup_work_id
             starting_row_idx = local_subgroup * sub_group_size
@@ -867,23 +917,30 @@ def _make_create_radix_histogram_kernel(
                 col_idx = (col_idx + one_idx) % sub_group_size
 
     @dpex.func
+    # fmt: off
     def partial_local_histograms_reduction(
-        local_subgroup, local_subgroup_work_id, reduction_active_subgroups, local_counts
+        local_subgroup,                 # PARAM
+        local_subgroup_work_id,         # PARAM
+        reduction_active_subgroups,     # PARAM
+        local_counts                    # INOUT   (n_local_histograms, sub_group_size)
     ):
+        # fmt: on
         if local_subgroup < reduction_active_subgroups:
             local_counts[local_subgroup, local_subgroup_work_id] += local_counts[
                 local_subgroup + reduction_active_subgroups, local_subgroup_work_id
             ]
 
     @dpex.func
+    # fmt: off
     def merge_histogram_in_global_memory(
-        row_idx,
-        col_idx,
-        local_subgroup,
-        local_subgroup_work_id,
-        local_counts,
-        privatized_counts,
+        row_idx,                    # PARAM
+        col_idx,                    # PARAM
+        local_subgroup,             # PARAM
+        local_subgroup_work_id,     # PARAM
+        local_counts,               # IN    (n_local_histograms, sub_group_size)
+        privatized_counts,          # OUT   (n_counts_private_copies, n_rows, radix_size)  # noqa
     ):
+        # fmt: on
         # Each work group is assigned an array of centroids in a round robin manner
         privatization_idx = (col_idx // work_group_size) % n_counts_private_copies
 
@@ -896,8 +953,8 @@ def _make_create_radix_histogram_kernel(
 
     # HACK 906: end
 
-    # adjust group size dynamically depending on the number of rows that require the
-    # next iteration
+    # Adjust group size dynamically depending on the number of rows that are active for
+    # the ongoing iteration
     def _create_radix_histogram(
         array_in_uint,
         n_active_rows,
@@ -940,14 +997,14 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
     # fmt: off
     def check_radix_histogram(
         counts,                        # IN           (n_rows, radix_size,)
-        active_rows_mapping,           # IN           (n_rows,)
+        radix_position,                # IN           (1,)
         n_active_rows,                 # IN           (1,)
+        active_rows_mapping,           # IN           (n_rows,)
         k_in_subset,                   # INOUT        (n_rows,)
-        radix_position,                # INOUT        (1,)
         desired_masked_value,          # INOUT        (n_rows,)
         threshold_count,               # OUT          (n_rows,)
-        new_active_rows_mapping,       # OUT          (n_rows,)
         new_n_active_rows,             # OUT          (1,)
+        new_active_rows_mapping,       # OUT          (n_rows,)
     ):
         # fmt: on
         work_item_idx = dpex.get_global_id(zero_idx)
@@ -1068,26 +1125,25 @@ def _make_gather_topk_kernel(
 ):
     """The gather_topk kernel is the last step. By now the k-th greatest values and
     its number of occurences among the top-k values in the search space have been
-    identified. The top-k values that are equal or greater than k, including the
-    `n_threshold_occurrences` occurrences equal to the k-th greatest value, are written
-    into the result array.
-
-    The kernel is specialized depending on the value of `n_threshold_occurences`, since
-    some optimizations are possible if this value is known at compile time.
+    identified in reach row. The top-k values that are equal or greater than k,
+    including the `n_threshold_occurrences` occurrences equal to the k-th greatest
+    value, are written into the result array.
     """
     n_work_groups_per_row = math.ceil(n_cols / work_group_size)
     work_group_shape = (1, work_group_size)
     global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
     @dpex.kernel
+    # fmt: off
     def gather_topk(
-        array_in,
-        threshold,
-        n_threshold_occurences_in_topk,
-        n_threshold_occurences_in_data,
-        index_buffer,
-        result,
+        array_in,                           # IN READONLY    (n_rows, n_cols)
+        threshold,                          # IN             (n_rows,)
+        n_threshold_occurences_in_topk,     # IN             (n_rows,)
+        n_threshold_occurences_in_data,     # IN             (n_rows,)
+        index_buffer,                       # BUFFER         (n_rows,)
+        result,                             # OUT            (n_rows, k)
     ):
+        # fmt: on
         row_idx = dpex.get_global_id(zero_idx)
         col_idx = dpex.get_global_id(one_idx)
 
@@ -1095,18 +1151,27 @@ def _make_gather_topk_kernel(
 
         threshold_ = threshold[row_idx]
 
+        # Different branches depending on the value of `n_threshold_occurences`, since
+        # some optimizations are possible depending on the value.
         if n_threshold_occurences_in_data[row_idx] == n_threshold_occurences_in_topk_:
             gather_topk_include_all_threshold_occurences(
-                row_idx, col_idx, array_in, threshold_, index_buffer, result
+                row_idx,
+                col_idx,
+                threshold_,
+                array_in,
+                index_buffer,
+                # OUT
+                result
             )
         else:
             gather_topk_generic(
                 row_idx,
                 col_idx,
-                array_in,
                 threshold_,
                 n_threshold_occurences_in_topk_,
+                array_in,
                 index_buffer,
+                # OUT
                 result,
             )
 
@@ -1117,12 +1182,12 @@ def _make_gather_topk_kernel(
     @dpex.func
     # fmt: off
     def gather_topk_include_all_threshold_occurences(
-        row_idx,
-        col_idx,
+        row_idx,                           # PARAM
+        col_idx,                           # PARAM
+        threshold,                         # PARAM
         array_in,                          # IN READ-ONLY (n_items,)
-        threshold,                         # IN           (1,)
-        index_buffer,                      # BUFFER       (1,)
-        result,                            # OUT          (k,)
+        index_buffer,                      # BUFFER       (n_rows,)
+        result,                            # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
@@ -1141,13 +1206,13 @@ def _make_gather_topk_kernel(
     @dpex.func
     # fmt: off
     def gather_topk_generic(
-        row_idx,
-        col_idx,
+        row_idx,                       # PARAM
+        col_idx,                       # PARAM
+        threshold,                     # PARAM
+        n_threshold_occurences,        # PARAM
         array_in,                      # IN READ-ONLY (n_items,)
-        threshold,                     # IN           (1,)
-        n_threshold_occurences,        # IN           (1,)
-        index_buffer,                  # BUFFER       (1,)
-        result,                        # OUT          (k,)
+        index_buffer,                  # BUFFER       (n_rows,)
+        result,                        # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
@@ -1189,14 +1254,16 @@ def _make_gather_topk_idx_kernel(
     global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
     @dpex.kernel
+    # fmt: off
     def gather_topk_idx(
-        array_in,
-        threshold,
-        n_threshold_occurences_in_topk,
-        n_threshold_occurences_in_data,
-        index_buffer,
-        result,
+        array_in,                           # IN READONLY    (n_rows, n_cols)
+        threshold,                          # IN             (n_rows,)
+        n_threshold_occurences_in_topk,     # IN             (n_rows,)
+        n_threshold_occurences_in_data,     # IN             (n_rows,)
+        index_buffer,                       # BUFFER         (n_rows,)
+        result,                             # OUT            (n_rows, k)
     ):
+        # fmt: on
         row_idx = dpex.get_global_id(zero_idx)
         col_idx = dpex.get_global_id(one_idx)
 
@@ -1204,28 +1271,35 @@ def _make_gather_topk_idx_kernel(
 
         if n_threshold_occurences_in_data[row_idx] == n_threshold_occurences_in_topk_:
             gather_topk_idx_include_all_threshold_occurences(
-                row_idx, col_idx, array_in, threshold[row_idx], index_buffer, result
+                row_idx,
+                col_idx,
+                threshold[row_idx],
+                array_in,
+                index_buffer,
+                # OUT
+                result
             )
         else:
             gather_topk_idx_generic(
                 row_idx,
                 col_idx,
-                array_in,
                 threshold[row_idx],
                 n_threshold_occurences_in_topk,
+                array_in,
                 index_buffer,
+                # OUT
                 result,
             )
 
     @dpex.func
     # fmt: off
     def gather_topk_idx_include_all_threshold_occurences(
-        row_idx,
-        col_idx,
+        row_idx,                           # PARAM
+        col_idx,                           # PARAM
+        threshold,                         # PARAM
         array_in,                          # IN READ-ONLY (n_items,)
-        threshold,                         # IN           (1,)
-        index_buffer,                      # BUFFER       (1,)
-        result,                            # OUT          (k,)
+        index_buffer,                      # BUFFER       (n_rows,)
+        result,                            # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
@@ -1244,13 +1318,13 @@ def _make_gather_topk_idx_kernel(
     @dpex.func
     # fmt: off
     def gather_topk_idx_generic(
-        row_idx,
-        col_idx,
-        array_in,                          # IN READ-ONLY (n_items,)
-        threshold,                         # IN           (1,)
-        n_threshold_occurences,            # BUFFER       (1,)
-        index_buffer,                      # BUFFER       (1,)
-        result,                            # OUT          (k,)
+        row_idx,                       # PARAM
+        col_idx,                       # PARAM
+        threshold,                     # PARAM
+        n_threshold_occurences,        # PARAM
+        array_in,                      # IN READ-ONLY (n_items,)
+        index_buffer,                  # BUFFER       (n_rows,)
+        result,                        # OUT          (n_rows, k)
     ):
         # fmt: on
         if col_idx >= n_cols:
