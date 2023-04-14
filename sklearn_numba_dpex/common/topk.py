@@ -573,7 +573,7 @@ def _make_create_radix_histogram_kernel(
 
     # Number of iterations when reducing the per-sub group histograms to per-work group
     # histogram in work groups
-    n_sum_reduction_steps = math.log2(n_local_histograms)
+    n_sum_reduction_steps = int(math.log2(n_local_histograms))
 
     n_work_groups_per_row = math.ceil(n_cols / work_group_size)
 
@@ -843,7 +843,6 @@ def _make_create_radix_histogram_kernel(
         # NB: because of how parameters have been validated,
         # `n_sub_groups_for_local_histograms` is always divisible by
         # `sub_group_size` here.
-
         col_idx_increment_per_step = n_sub_groups_for_local_histograms * sub_group_size
 
         @dpex.func
