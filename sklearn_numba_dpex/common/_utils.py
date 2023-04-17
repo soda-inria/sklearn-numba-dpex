@@ -156,10 +156,8 @@ def _enforce_matmul_like_work_group_geometry(
     work_group_size_ratio_log2 = math.floor(math.log2(work_group_size_ratio))
 
     if work_group_size != input_work_group_size:
-        base_nb_results_per_work_item = 2**work_group_size_ratio_log2
-        work_group_size = int(
-            base_nb_results_per_work_item * sub_group_size * sub_group_size
-        )
+        work_group_size_ratio = 2**work_group_size_ratio_log2
+        work_group_size = int(work_group_size_ratio * sub_group_size * sub_group_size)
 
     elif work_group_size != (
         (2**work_group_size_ratio_log2) * sub_group_size * sub_group_size
@@ -171,6 +169,7 @@ def _enforce_matmul_like_work_group_geometry(
             f"`sub_group_size={sub_group_size}`."
         )
 
-    work_group_size_ratio = int(work_group_size_ratio)
+    else:
+        work_group_size_ratio = int(work_group_size_ratio)
 
     return work_group_size, work_group_size_ratio, work_group_size_ratio_log2
