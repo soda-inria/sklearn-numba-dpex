@@ -106,7 +106,7 @@ def make_matmul_2d_kernel(
     - https://triton-lang.org/master/getting-started/tutorials/03-matrix-multiplication.html  # noqa
 
     """
-    if work_group_size in [None, "max"]:
+    if work_group_size is None:
         work_group_size = 512
     if sub_group_size is None:
         sub_group_size = 32
