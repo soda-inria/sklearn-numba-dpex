@@ -36,11 +36,11 @@ def make_matmul_2d_kernel(
     # rather than memory-bound.
     # Setting it too high might pressure local or private memory too much for it to be
     # worth.
-    arithmetic_intensity_multiplier_X=4,
-    arithmetic_intensity_multiplier_Y=2,
+    arithmetic_intensity_multiplier_X=2,
+    arithmetic_intensity_multiplier_Y=4,
     # Width of the window of values of Y_t stored in registries - lower means less
     # values in registries, but more iterations in main loop.
-    private_Y_t_sliding_window_width=4,  # must divide `sub_group_size`,
+    private_Y_t_sliding_window_width=1,  # must divide `sub_group_size`,
 ):
     """Returns a matmul kernel.
 
@@ -107,9 +107,9 @@ def make_matmul_2d_kernel(
 
     """
     if work_group_size in [None, "max"]:
-        work_group_size = 128
+        work_group_size = 512
     if sub_group_size is None:
-        sub_group_size = 4
+        sub_group_size = 32
 
     # NB: The following implementation not only works for the best parameters found so
     # far but for other combinations too, to enable exhaustive grid searches on all
@@ -195,18 +195,8 @@ def make_matmul_2d_kernel(
 
     # Such a work group loads two sliding windows that span relevant rows and colums
     # of the inputs X and Y_t.
-    local_X_sliding_window_shape = (
-        result_window_height,
-        2 * sub_group_size,  # allocate twice the space to let padding against bank
-        # conflicts
-    )
-    local_Y_t_sliding_window_shape = (
-        result_window_width,
-        2 * sub_group_size,  # allocate twice the space to let padding against bank
-        # conflicts
-    )
-    # TODO: it's surprising to see bank conflicts here, however the padding add
-    # 10% better performance on iGPUs. Why ?
+    local_X_sliding_window_shape = (sub_group_size, result_window_height)
+    local_Y_t_sliding_window_shape = (sub_group_size, result_window_width)
 
     # Amount of temporary sliding windows that are needed to accumulate the partial
     # results until the final result
@@ -405,7 +395,7 @@ def make_matmul_2d_kernel(
                 loaded_X_value = zero
 
             local_X_sliding_window[
-                X_local_loaded_row_idx, work_item_col_idx_padded
+                work_item_col_idx, X_local_loaded_row_idx
             ] = loaded_X_value
             X_loaded_row_idx += base_result_window_side
             X_local_loaded_row_idx += base_result_window_side
@@ -419,7 +409,7 @@ def make_matmul_2d_kernel(
                 loaded_Y_t_value = zero
 
             local_Y_t_sliding_window[
-                Y_t_local_loaded_row_idx, work_item_col_idx_padded
+                work_item_col_idx, Y_t_local_loaded_row_idx
             ] = loaded_Y_t_value
             Y_t_loaded_row_idx += base_result_window_side
             Y_t_local_loaded_row_idx += base_result_window_side
@@ -444,8 +434,8 @@ def make_matmul_2d_kernel(
             for i in range(private_result_array_width):
                 for j in range(private_Y_t_sliding_window_width):
                     private_Y_t_sliding_window[i, j] = local_Y_t_sliding_window[
+                        private_array_first_col + j,
                         private_loaded_sliding_Y_t_value_idx,
-                        two_as_long * (private_array_first_col + j),
                     ]
                 private_loaded_sliding_Y_t_value_idx += nb_work_items_for_Y_t_window
 
@@ -455,8 +445,8 @@ def make_matmul_2d_kernel(
             for i in range(private_result_array_height):
                 for j in range(private_Y_t_sliding_window_width):
                     private_loaded_X_value = local_X_sliding_window[
+                        private_array_first_col + j,
                         private_loaded_sliding_X_value_idx,
-                        two_as_long * (private_array_first_col + j),
                     ]
 
                     _accumulate_step_unrolled(

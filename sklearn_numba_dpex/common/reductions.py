@@ -378,7 +378,7 @@ def make_sum_reduction_2d_kernel(
         if sum_axis_size == 0:
             # By convention the sum of all elements of an empty array is equal to 0. (
             # likewise with numpy np.sum([]) returns 0).
-            summands = dpt.zeros(sh=get_result_shape(1))
+            summands = dpt.zeros(get_result_shape(1))
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, sizes, result in kernels_and_empty_tensors_pairs:

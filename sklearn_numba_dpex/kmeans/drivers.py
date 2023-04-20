@@ -56,7 +56,7 @@ def lloyd(
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = min(device.sub_group_sizes)
+    sub_group_size = 4
     global_mem_cache_size = _get_global_mem_cache_size(device)
 
     # The following parameter controls the fraction of the device global cache memory
@@ -623,9 +623,9 @@ def get_nb_distinct_clusters(labels, n_clusters):
         device=device,
     )
 
-    clusters_seen = dpt.zeros(sh=(n_clusters,), dtype=np.int32, device=device)
+    clusters_seen = dpt.zeros((n_clusters,), dtype=np.int32, device=device)
 
-    nb_distinct_clusters = dpt.zeros(sh=(1,), dtype=np.int32, device=device)
+    nb_distinct_clusters = dpt.zeros((1,), dtype=np.int32, device=device)
 
     get_nb_distinct_clusters_kernel(
         labels,
@@ -644,7 +644,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     n_clusters = centroids_t.shape[1]
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = min(device.sub_group_sizes)
+    sub_group_size = 4
 
     label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
         n_samples,
@@ -715,7 +715,7 @@ def get_euclidean_distances(X_t, Y_t):
     n_features, n_samples = X_t.shape
     n_clusters = Y_t.shape[1]
     device = X_t.device.sycl_device
-    sub_group_size = min(device.sub_group_sizes)
+    sub_group_size = 4
 
     euclidean_distances_fixed_window_kernel = (
         make_compute_euclidean_distances_fixed_window_kernel(
@@ -753,7 +753,7 @@ def kmeans_plusplus(
     n_features, n_samples = X_t.shape
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = min(device.sub_group_sizes)
+    sub_group_size = 4
 
     # NB: the implementation differs from sklearn implementation with regards to
     # sample_weight, which is ignored in sklearn, but used here.
@@ -826,19 +826,17 @@ def kmeans_plusplus(
         compute_dtype,
     )
 
-    centers_t = dpt.empty(
-        sh=(n_features, n_clusters), dtype=compute_dtype, device=device
-    )
+    centers_t = dpt.empty((n_features, n_clusters), dtype=compute_dtype, device=device)
 
     center_indices = dpt.full((n_clusters,), -1, dtype=np.int32)
 
     sq_distances_t = dpt.empty(
-        sh=(n_local_trials, n_samples), dtype=compute_dtype, device=device
+        (n_local_trials, n_samples), dtype=compute_dtype, device=device
     )
 
-    closest_dist_sq = dpt.empty(sh=(n_samples,), dtype=compute_dtype, device=device)
+    closest_dist_sq = dpt.empty((n_samples,), dtype=compute_dtype, device=device)
 
-    candidate_ids = dpt.empty(sh=(n_local_trials,), dtype=np.int32, device=device)
+    candidate_ids = dpt.empty((n_local_trials,), dtype=np.int32, device=device)
 
     # Pick first center randomly
     # Use numpy type to work around https://github.com/IntelPython/dpnp/issues/1238

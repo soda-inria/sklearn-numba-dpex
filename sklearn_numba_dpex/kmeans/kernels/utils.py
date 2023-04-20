@@ -205,7 +205,7 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
     # - early stop
 
     def is_same_clustering(labels1, labels2):
-        mapping = dpt.empty(sh=(n_clusters,), dtype=np.int32, device=device)
+        mapping = dpt.empty((n_clusters,), dtype=np.int32, device=device)
         result = dpt.asarray([1], dtype=np.int32, device=device)
         _build_mapping[global_size, work_group_size](labels1, labels2, mapping)
         _is_same_clustering[global_size, work_group_size](

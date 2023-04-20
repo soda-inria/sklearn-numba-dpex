@@ -33,7 +33,7 @@ def get_random_raw(states):
 
     Note, this always uses and updates state states[0].
     """
-    result = dpt.empty(sh=(1,), dtype=np.uint64, device=states.device)
+    result = dpt.empty((1,), dtype=np.uint64, device=states.device)
     make_random_raw_kernel()(states, result)
     return result
 
@@ -171,7 +171,7 @@ def create_xoroshiro128pp_states(n_states, subsequence_start=0, seed=None, devic
     ) = _get_sequential_processing_device(device)
 
     states = dpt.empty(
-        sh=(n_states, 2), dtype=np.uint64, device=sequential_processing_device
+        (n_states, 2), dtype=np.uint64, device=sequential_processing_device
     )
 
     seed = dpt.asarray([seed], dtype=np.uint64, device=sequential_processing_device)

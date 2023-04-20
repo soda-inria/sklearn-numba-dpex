@@ -167,13 +167,13 @@ def topk(array_in, k, group_sizes=None):
         work_group_size,
     )
 
-    result = dpt.empty(sh=(n_rows, k), dtype=dtype, device=device)
+    result = dpt.empty((n_rows, k), dtype=dtype, device=device)
 
     # For each row, maintain an atomically incremented index of the next result value
     # to be stored:.
     # Note that the ordering of the topk is non-deteriminstic and dependents on the
     # concurrency of the parallel work items.
-    result_col_idx = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+    result_col_idx = dpt.zeros((n_rows,), dtype=np.int32, device=device)
 
     gather_topk_kernel(
         array_in,
@@ -252,8 +252,8 @@ def topk_idx(array_in, k, group_sizes=None):
         work_group_size,
     )
 
-    result = dpt.empty(sh=(n_rows, k), dtype=np.int64, device=device)
-    result_col_idx = dpt.zeros(sh=(n_rows,), dtype=np.int32, device=device)
+    result = dpt.empty((n_rows, k), dtype=np.int64, device=device)
+    result_col_idx = dpt.zeros((n_rows,), dtype=np.int32, device=device)
 
     gather_topk_idx_kernel(
         array_in,
@@ -407,13 +407,13 @@ def _get_topk_threshold(array_in, k, group_sizes):
 
     # mask and value used to filter the subset of the data that is currently searched
     # at the given iteration
-    mask_for_desired_value = dpt.zeros(sh=(1,), dtype=uint_type, device=device)
-    desired_masked_value = dpt.zeros(sh=(n_rows,), dtype=uint_type, device=device)
+    mask_for_desired_value = dpt.zeros((1,), dtype=uint_type, device=device)
+    desired_masked_value = dpt.zeros((n_rows,), dtype=uint_type, device=device)
 
     # Buffer that stores the counts of occurences of the values at the current radix
     # position.
     privatized_counts = dpt.zeros(
-        sh=(n_counts_private_copies, n_rows, radix_size), dtype=np.int64, device=device
+        (n_counts_private_copies, n_rows, radix_size), dtype=np.int64, device=device
     )
 
     # Will store the number of occurences of the top-k threshold value in the data
