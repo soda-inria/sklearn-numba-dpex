@@ -174,7 +174,7 @@ def make_matmul_2d_kernel(
     if base_nb_results_per_work_item_log2 < 1:
         if base_nb_results_per_work_item_log2 % 2:
             result_window_height_multiplier_Y = 2 ** (
-                (1 - base_nb_results_per_work_item_log2) // 2
+                (-1 - base_nb_results_per_work_item_log2) // 2
             )
             result_window_height_multiplier_X = 2 * result_window_height_multiplier_Y
         else:
@@ -491,8 +491,21 @@ def make_matmul_2d_kernel(
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
-    return matmul[global_size, work_group_size]
+    if (
+        nb_private_memory := (
+            (
+                thread_private_result_array_shape[0]
+                * thread_private_result_array_shape[1]
+            )
+            + (
+                private_Y_t_sliding_window_shape[0]
+                * private_Y_t_sliding_window_shape[1]
+            )
+        )
+    ) > 96:
+        raise ValueError
 
+    return nb_private_memory, matmul[global_size, work_group_size]
 
 def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multiply_fn):
 
@@ -569,4 +582,164 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
                 private_loaded_X_value, private_Y_t_sliding_window[7, j]
             )
 
+    elif private_result_array_width == 16:
+
+        @dpex.func
+        def _accumulate_step_unrolled(
+            i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
+        ):
+            private_result[i, 0] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[0, j]
+            )
+            private_result[i, 1] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[1, j]
+            )
+            private_result[i, 2] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[2, j]
+            )
+            private_result[i, 3] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[3, j]
+            )
+            private_result[i, 4] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[4, j]
+            )
+            private_result[i, 5] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[5, j]
+            )
+            private_result[i, 6] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[6, j]
+            )
+            private_result[i, 7] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[7, j]
+            )
+            private_result[i, 8] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[8, j]
+            )
+            private_result[i, 9] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[9, j]
+            )
+            private_result[i, 10] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[10, j]
+            )
+            private_result[i, 11] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[11, j]
+            )
+            private_result[i, 12] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[12, j]
+            )
+            private_result[i, 13] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[13, j]
+            )
+            private_result[i, 14] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[14, j]
+            )
+            private_result[i, 15] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[15, j]
+            )
+
+    elif private_result_array_width == 32:
+
+        @dpex.func
+        def _accumulate_step_unrolled(
+            i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
+        ):
+            private_result[i, 0] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[0, j]
+            )
+            private_result[i, 1] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[1, j]
+            )
+            private_result[i, 2] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[2, j]
+            )
+            private_result[i, 3] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[3, j]
+            )
+            private_result[i, 4] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[4, j]
+            )
+            private_result[i, 5] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[5, j]
+            )
+            private_result[i, 6] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[6, j]
+            )
+            private_result[i, 7] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[7, j]
+            )
+            private_result[i, 8] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[8, j]
+            )
+            private_result[i, 9] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[9, j]
+            )
+            private_result[i, 10] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[10, j]
+            )
+            private_result[i, 11] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[11, j]
+            )
+            private_result[i, 12] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[12, j]
+            )
+            private_result[i, 13] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[13, j]
+            )
+            private_result[i, 14] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[14, j]
+            )
+            private_result[i, 15] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[15, j]
+            )
+
+            private_result[i, 16] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[16, j]
+            )
+            private_result[i, 17] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[17, j]
+            )
+            private_result[i, 18] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[18, j]
+            )
+            private_result[i, 19] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[19, j]
+            )
+            private_result[i, 20] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[20, j]
+            )
+            private_result[i, 21] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[21, j]
+            )
+            private_result[i, 22] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[22, j]
+            )
+            private_result[i, 23] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[23, j]
+            )
+            private_result[i, 24] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[24, j]
+            )
+            private_result[i, 25] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[25, j]
+            )
+            private_result[i, 26] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[26, j]
+            )
+            private_result[i, 27] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[27, j]
+            )
+            private_result[i, 28] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[28, j]
+            )
+            private_result[i, 29] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[29, j]
+            )
+            private_result[i, 30] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[30, j]
+            )
+            private_result[i, 31] += multiply_fn(
+                private_loaded_X_value, private_Y_t_sliding_window[31, j]
+            )
+
     return _accumulate_step_unrolled
+
