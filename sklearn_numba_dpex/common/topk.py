@@ -7,6 +7,7 @@
 # (https://dl.acm.org/doi/pdf/10.1145/3458817.3476141)
 
 import math
+import os
 from functools import lru_cache
 
 import dpctl.tensor as dpt
@@ -307,8 +308,10 @@ def _get_topk_threshold(array_in, k, group_sizes):
     ) = _make_create_radix_histogram_kernel(
         n_rows,
         n_cols,
-        "max" if group_sizes is None else work_group_size,
-        4 if group_sizes is None else sub_group_size,
+        # "max" if group_sizes is None else work_group_size,
+        # 4 if group_sizes is None else sub_group_size,
+        os.environ["TOPK_WORK_GROUP_SIZE"],
+        os.environ["TOPK_SUB_GROUP_SIZE"],
         global_mem_cache_size,
         counts_private_copies_max_cache_occupancy,
         dtype,
