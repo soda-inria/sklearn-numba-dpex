@@ -36,11 +36,11 @@ def make_matmul_2d_kernel(
     # rather than memory-bound.
     # Setting it too high might pressure local or private memory too much for it to be
     # worth.
-    arithmetic_intensity_multiplier_X=4,
-    arithmetic_intensity_multiplier_Y=2,
+    arithmetic_intensity_multiplier_X=1,
+    arithmetic_intensity_multiplier_Y=1,
     # Width of the window of values of Y_t stored in registries - lower means less
     # values in registries, but more iterations in main loop.
-    private_Y_t_sliding_window_width=4,  # must divide `sub_group_size`,
+    private_Y_t_sliding_window_width=1,  # must divide `sub_group_size`,
 ):
     """Returns a matmul kernel.
 
@@ -106,7 +106,7 @@ def make_matmul_2d_kernel(
     - https://triton-lang.org/master/getting-started/tutorials/03-matrix-multiplication.html  # noqa
 
     """
-    if work_group_size in [None, "max"]:
+    if work_group_size is None:
         work_group_size = 128
     if sub_group_size is None:
         sub_group_size = 4
@@ -174,7 +174,7 @@ def make_matmul_2d_kernel(
     if base_nb_results_per_work_item_log2 < 1:
         if base_nb_results_per_work_item_log2 % 2:
             result_window_height_multiplier_Y = 2 ** (
-                (1 - base_nb_results_per_work_item_log2) // 2
+                (-1 - base_nb_results_per_work_item_log2) // 2
             )
             result_window_height_multiplier_X = 2 * result_window_height_multiplier_Y
         else:

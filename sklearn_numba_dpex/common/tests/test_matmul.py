@@ -50,9 +50,6 @@ def _test_matmul_2d(
 
     device = X.device.sycl_device
 
-    if sub_group_size is None:
-        sub_group_size = min(device.sub_group_sizes)
-
     matmul_2d_kernel = make_matmul_2d_kernel(
         X_n_rows,
         Y_t_n_rows,
@@ -73,7 +70,7 @@ def _test_matmul_2d(
 
 @pytest.mark.parametrize("array_fn", ["arange", "random"])
 @pytest.mark.parametrize(
-    "work_group_size, sub_group_size", [(1, 1), (4, 2), (16, 4), ("max", None)]
+    "work_group_size, sub_group_size", [(1, 1), (4, 2), (16, 4), (None, None)]
 )
 @pytest.mark.parametrize("dtype", [np.float32])
 @pytest.mark.parametrize(

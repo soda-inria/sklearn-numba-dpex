@@ -39,8 +39,6 @@ def make_lloyd_single_step_fixed_window_kernel(
     return_assignments,
     check_strict_convergence,
     sub_group_size,
-    global_mem_cache_size,
-    centroids_private_copies_max_cache_occupancy,
     work_group_size,
     dtype,
     device,
@@ -111,22 +109,9 @@ def make_lloyd_single_step_fixed_window_kernel(
 
     n_subgroups = math.ceil(n_samples / window_n_centroids)
 
-    n_cluster_items = n_clusters * (n_features + 1)
-    n_cluster_bytes = np.dtype(dtype).itemsize * n_cluster_items
-    # TODO: control that this value is not higher than the number of sub-groups of size
-    # sub_group_size that can effectively run concurrently. We should fetch this
-    # information and apply it here.
-
     # NB: for more details about the privatization strategy the following variables
     # refer too, please read the inline commenting that address it in the kernel
     # definition.
-
-    # Ensure that the memory allocated for privatization will not saturate the global
-    # memory cache size. For this purpose we limit the number of private copies to
-    # a fraction of the available global memory cache size.
-    n_centroids_private_copies = (
-        global_mem_cache_size * centroids_private_copies_max_cache_occupancy
-    ) // n_cluster_bytes
 
     # Each set of `sub_group_size` consecutive work items is assigned one private
     # copy, and several such sets can be assigned to the same private copy. Thus, at
@@ -139,12 +124,10 @@ def make_lloyd_single_step_fixed_window_kernel(
     # that highlight complexity of the execution model:
     # - https://github.com/IntelPython/dpctl/issues/1033
     # - https://stackoverflow.com/a/6490897
-    n_centroids_private_copies = int(
-        min(n_subgroups, n_centroids_private_copies, device.max_compute_units)
-    )
+    n_centroids_private_copies = int(min(n_subgroups, device.max_compute_units))
 
     # Safety check for edge case where `n_centroids_private_copies` equals 0 because
-    # `n_cluster_bytes` is too large
+    # `n_samples` is null.
     n_centroids_private_copies = max(n_centroids_private_copies, 1)
 
     zero_idx = np.int64(0)

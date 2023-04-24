@@ -154,14 +154,14 @@ def test_rng_quality(dtype):
 def _get_single_rand_value(random_state, dtype):
     """Return a single rand value sampled uniformly in [0, 1)"""
     _get_single_rand_value_kernel = _make_get_single_rand_value_kernel(dtype)
-    single_rand_value = dpt.empty(sh=1, dtype=dtype)
+    single_rand_value = dpt.empty(1, dtype=dtype)
     _get_single_rand_value_kernel[1, 1](random_state, single_rand_value)
     return dpt.asnumpy(single_rand_value)[0]
 
 
 def _rand_uniform(size, dtype, seed, n_work_items=1000):
     """Return an array of floats sampled uniformly in [0, 1)"""
-    out = dpt.empty(sh=(size,), dtype=dtype)
+    out = dpt.empty((size,), dtype=dtype)
     work_group_size = out.device.sycl_device.max_work_group_size
     size_per_work_item = math.ceil(size / n_work_items)
 
