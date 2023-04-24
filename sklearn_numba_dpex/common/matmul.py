@@ -304,6 +304,9 @@ def make_matmul_2d_kernel(
             shape=local_Y_t_sliding_window_shape, dtype=dtype
         )
 
+        # NB: private arrays are assumed to be created already initialized with
+        # zero values
+
         # Allocate private memory for the result window
         private_result = dpex.private.array(
             shape=thread_private_result_array_shape, dtype=dtype

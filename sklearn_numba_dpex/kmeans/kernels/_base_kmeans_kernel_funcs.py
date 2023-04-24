@@ -1,6 +1,8 @@
 import numba_dpex as dpex
 import numpy as np
 
+zero_as_a_long = np.int64(0)
+
 
 def make_pairwise_ops_base_kernel_funcs(
     n_samples,
@@ -137,7 +139,6 @@ def make_pairwise_ops_base_kernel_funcs(
         is_last_centroid_window,
         # OUT
         window_of_centroids_half_l2_norms,
-        dot_products,
     ):
         if is_last_centroid_window:
             initialize_last_window_of_centroids(
@@ -147,7 +148,6 @@ def make_pairwise_ops_base_kernel_funcs(
                 centroids_half_l2_norm,
                 # OUT
                 window_of_centroids_half_l2_norms,
-                dot_products,
             )
         else:
             initialize_full_window_of_centroids(
@@ -157,7 +157,6 @@ def make_pairwise_ops_base_kernel_funcs(
                 centroids_half_l2_norm,
                 # OUT
                 window_of_centroids_half_l2_norms,
-                dot_products,
             )
 
     return (
@@ -185,8 +184,6 @@ class _KMeansKernelFuncFactory:
         self.dtype = dtype
 
     def make_initialize_window_half_l2_norm_kernel_func(self, window_n_centroids):
-        zero_as_a_long = np.int64(0)
-
         @dpex.func
         # fmt: off
         def _initialize_window_of_centroids(
@@ -195,7 +192,6 @@ class _KMeansKernelFuncFactory:
             first_centroid_idx,                 # PARAM
             centroids_half_l2_norm,             # IN       (self.n_clusters,)
             window_of_centroids_half_l2_norms,  # OUT      (work_group_shape[0],)
-            results,                            # OUT      (work_group_shape[0],)
         ):
             # fmt: on
             # The work items are indexed in a 2D grid of shape
@@ -284,6 +280,8 @@ class _KMeansKernelFuncFactory:
                 else:
                     X_value = zero
 
+                is_first_feature = feature_idx == zero_as_a_long
+
                 # For this given feature, loop on all centroids in the current
                 # window and accumulate the partial results
                 for window_centroid_idx in range(window_n_centroids):
@@ -291,10 +289,16 @@ class _KMeansKernelFuncFactory:
                         centroids_window[window_feature_idx, window_centroid_idx]
                     )
                     if accumulate_dot_product:
-                        result[window_centroid_idx] += centroid_value * X_value
+                        increment = centroid_value * X_value
                     else:
                         diff = centroid_value - X_value
-                        result[window_centroid_idx] += diff * diff
+                        increment = diff * diff
+
+                    if is_first_feature:
+                        result[window_centroid_idx] = increment
+
+                    else:
+                        result[window_centroid_idx] += increment
 
         return _accumulate_sum_of_ops
 

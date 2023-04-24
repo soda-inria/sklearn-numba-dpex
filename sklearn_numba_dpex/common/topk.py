@@ -681,6 +681,8 @@ def _make_create_radix_histogram_kernel(
         )
 
         # Initialize private memory
+        # NB: private arrays are assumed to be created already initialized with
+        # zero values
         private_counts = dpex.private.array(sub_group_size, dtype=histogram_dtype)
 
         # Compute the radix value of `array_in_uint` at location `(row_idx, col_idx)`,

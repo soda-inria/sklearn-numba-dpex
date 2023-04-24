@@ -112,7 +112,6 @@ def make_label_assignment_fixed_window_kernel(
                 centroids_half_l2_norm,
                 is_last_centroid_window,
                 window_of_centroids_half_l2_norms,
-                dot_products,
             )
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx

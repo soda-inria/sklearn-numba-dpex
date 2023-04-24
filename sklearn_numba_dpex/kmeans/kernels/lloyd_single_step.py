@@ -272,7 +272,6 @@ def make_lloyd_single_step_fixed_window_kernel(
                 is_last_centroid_window,
                 # OUT
                 window_of_centroids_half_l2_norms,
-                dot_products,
             )
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
