@@ -174,7 +174,7 @@ def make_matmul_2d_kernel(
     if base_nb_results_per_work_item_log2 < 1:
         if base_nb_results_per_work_item_log2 % 2:
             result_window_height_multiplier_Y = 2 ** (
-                (1 - base_nb_results_per_work_item_log2) // 2
+                (-1 - base_nb_results_per_work_item_log2) // 2
             )
             result_window_height_multiplier_X = 2 * result_window_height_multiplier_Y
         else:
