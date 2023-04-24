@@ -39,7 +39,6 @@ def make_lloyd_single_step_fixed_window_kernel(
     return_assignments,
     check_strict_convergence,
     sub_group_size,
-    centroids_private_copies_max_cache_occupancy,
     work_group_size,
     dtype,
     device,
