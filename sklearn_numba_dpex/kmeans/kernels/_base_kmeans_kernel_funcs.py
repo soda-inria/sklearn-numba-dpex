@@ -1,6 +1,8 @@
 import numba_dpex as dpex
 import numpy as np
 
+zero_as_a_long = np.int64(0)
+
 
 def make_pairwise_ops_base_kernel_funcs(
     n_samples,
@@ -42,70 +44,10 @@ def make_pairwise_ops_base_kernel_funcs(
         n_clusters,
         ops,
         dtype,
-        initialize_window_of_centroids_half_l2_norms,
     )
 
     last_window_n_centroids = n_clusters % window_n_centroids or window_n_centroids
     last_window_n_features = n_features % window_n_features or window_n_features
-
-    make_initialize_window_kernel_func = (
-        kmeans_kernel_func_factory.make_initialize_window_kernel_func
-    )
-
-    initialize_full_window_of_centroids = make_initialize_window_kernel_func(
-        window_n_centroids
-    )
-
-    initialize_last_window_of_centroids = make_initialize_window_kernel_func(
-        last_window_n_centroids
-    )
-
-    if initialize_window_of_centroids_half_l2_norms:
-
-        @dpex.func
-        def initialize_window_of_centroids(
-            local_row_idx,
-            local_col_idx,
-            first_centroid_idx,
-            centroids_half_l2_norm,
-            is_last_centroid_window,
-            # OUT
-            window_of_centroids_half_l2_norms,
-            dot_products,
-        ):
-            if is_last_centroid_window:
-                initialize_last_window_of_centroids(
-                    local_row_idx,
-                    local_col_idx,
-                    first_centroid_idx,
-                    centroids_half_l2_norm,
-                    # OUT
-                    window_of_centroids_half_l2_norms,
-                    dot_products,
-                )
-            else:
-                initialize_full_window_of_centroids(
-                    local_row_idx,
-                    local_col_idx,
-                    first_centroid_idx,
-                    centroids_half_l2_norm,
-                    # OUT
-                    window_of_centroids_half_l2_norms,
-                    dot_products,
-                )
-
-    else:
-
-        @dpex.func
-        def initialize_window_of_centroids(
-            is_last_centroid_window,
-            # OUT
-            dot_products,
-        ):
-            if is_last_centroid_window:
-                initialize_last_window_of_centroids(dot_products)
-            else:
-                initialize_full_window_of_centroids(dot_products)
 
     load_window_of_centroids_and_features = (
         kmeans_kernel_func_factory.make_load_window_kernel_func()
@@ -170,23 +112,62 @@ def make_pairwise_ops_base_kernel_funcs(
                 sample_idx, first_feature_idx, X_t, centroids_window, dot_products
             )
 
+    if not initialize_window_of_centroids_half_l2_norms:
+        return (
+            load_window_of_centroids_and_features,
+            accumulate_dot_products,
+        )
+
+    make_initialize_window_kernel_func = (
+        kmeans_kernel_func_factory.make_initialize_window_half_l2_norm_kernel_func
+    )
+
+    initialize_full_window_of_centroids = make_initialize_window_kernel_func(
+        window_n_centroids
+    )
+
+    initialize_last_window_of_centroids = make_initialize_window_kernel_func(
+        last_window_n_centroids
+    )
+
+    @dpex.func
+    def initialize_window_half_l2_norm(
+        local_row_idx,
+        local_col_idx,
+        first_centroid_idx,
+        centroids_half_l2_norm,
+        is_last_centroid_window,
+        # OUT
+        window_of_centroids_half_l2_norms,
+    ):
+        if is_last_centroid_window:
+            initialize_last_window_of_centroids(
+                local_row_idx,
+                local_col_idx,
+                first_centroid_idx,
+                centroids_half_l2_norm,
+                # OUT
+                window_of_centroids_half_l2_norms,
+            )
+        else:
+            initialize_full_window_of_centroids(
+                local_row_idx,
+                local_col_idx,
+                first_centroid_idx,
+                centroids_half_l2_norm,
+                # OUT
+                window_of_centroids_half_l2_norms,
+            )
+
     return (
-        initialize_window_of_centroids,
         load_window_of_centroids_and_features,
         accumulate_dot_products,
+        initialize_window_half_l2_norm,
     )
 
 
 class _KMeansKernelFuncFactory:
-    def __init__(
-        self,
-        n_samples,
-        n_features,
-        n_clusters,
-        ops,
-        dtype,
-        initialize_window_of_centroids_half_l2_norms,
-    ):
+    def __init__(self, n_samples, n_features, n_clusters, ops, dtype):
         self.n_samples = n_samples
         self.n_features = n_features
         self.n_clusters = n_clusters
@@ -201,24 +182,8 @@ class _KMeansKernelFuncFactory:
             )
 
         self.dtype = dtype
-        self.initialize_window_of_centroids_half_l2_norms = (
-            initialize_window_of_centroids_half_l2_norms
-        )
 
-    def make_initialize_window_kernel_func(self, window_n_centroids):
-        zero = self.dtype(0.0)
-        zero_as_a_long = np.int64(0)
-
-        @dpex.func
-        def _initialize_results(results):
-            # Initialize the partial pseudo inertia dot product for each
-            # of the window_n_centroids centroids in the window.
-            for i in range(window_n_centroids):
-                results[i] = zero
-
-        if not self.initialize_window_of_centroids_half_l2_norms:
-            return _initialize_results
-
+    def make_initialize_window_half_l2_norm_kernel_func(self, window_n_centroids):
         @dpex.func
         # fmt: off
         def _initialize_window_of_centroids(
@@ -227,11 +192,8 @@ class _KMeansKernelFuncFactory:
             first_centroid_idx,                 # PARAM
             centroids_half_l2_norm,             # IN       (self.n_clusters,)
             window_of_centroids_half_l2_norms,  # OUT      (work_group_shape[0],)
-            results,                            # OUT      (work_group_shape[0],)
         ):
             # fmt: on
-            _initialize_results(results)
-
             # The work items are indexed in a 2D grid of shape
             # `work_group_shape = (centroids_window_height, window_n_centroids)`, where
             # `centroids_window_height` and `window_n_centroids` refer to a window of
@@ -318,6 +280,8 @@ class _KMeansKernelFuncFactory:
                 else:
                     X_value = zero
 
+                is_first_feature = feature_idx == zero_as_a_long
+
                 # For this given feature, loop on all centroids in the current
                 # window and accumulate the partial results
                 for window_centroid_idx in range(window_n_centroids):
@@ -325,10 +289,16 @@ class _KMeansKernelFuncFactory:
                         centroids_window[window_feature_idx, window_centroid_idx]
                     )
                     if accumulate_dot_product:
-                        result[window_centroid_idx] += centroid_value * X_value
+                        increment = centroid_value * X_value
                     else:
                         diff = centroid_value - X_value
-                        result[window_centroid_idx] += diff * diff
+                        increment = diff * diff
+
+                    if is_first_feature:
+                        result[window_centroid_idx] = increment
+
+                    else:
+                        result[window_centroid_idx] += increment
 
         return _accumulate_sum_of_ops
 

@@ -37,7 +37,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     work_group_shape = (window_n_centroids, centroids_window_height)
 
     (
-        initialize_window_of_centroids,
         load_window_of_centroids_and_features,
         accumulate_sq_distances,
     ) = make_pairwise_ops_base_kernel_funcs(
@@ -88,7 +87,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
         for centroid_window_idx in range(n_windows_for_centroids):
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
-            initialize_window_of_centroids(is_last_centroid_window, sq_distances)
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx
 

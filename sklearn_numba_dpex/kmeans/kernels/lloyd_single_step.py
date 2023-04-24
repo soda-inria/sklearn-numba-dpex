@@ -82,9 +82,9 @@ def make_lloyd_single_step_fixed_window_kernel(
     work_group_shape = (window_n_centroids, centroids_window_height)
 
     (
-        initialize_window_of_centroids,
         load_window_of_centroids_and_features,
         accumulate_dot_products,
+        initialize_window_half_l2_norm,
     ) = make_pairwise_ops_base_kernel_funcs(
         n_samples,
         n_features,
@@ -247,7 +247,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             # window_of_centroids_half_l2_norms and dot_products
             # are modified in place.
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
-            initialize_window_of_centroids(
+            initialize_window_half_l2_norm(
                 local_row_idx,
                 local_col_idx,
                 first_centroid_idx,
@@ -255,7 +255,6 @@ def make_lloyd_single_step_fixed_window_kernel(
                 is_last_centroid_window,
                 # OUT
                 window_of_centroids_half_l2_norms,
-                dot_products,
             )
 
             loading_centroid_idx = first_centroid_idx + window_loading_centroid_idx

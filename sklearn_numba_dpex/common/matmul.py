@@ -304,6 +304,9 @@ def make_matmul_2d_kernel(
             shape=local_Y_t_sliding_window_shape, dtype=dtype
         )
 
+        # NB: private arrays are assumed to be created already initialized with
+        # zero values
+
         # Allocate private memory for the result window
         private_result = dpex.private.array(
             shape=thread_private_result_array_shape, dtype=dtype
@@ -327,8 +330,6 @@ def make_matmul_2d_kernel(
         first_private_loaded_sliding_Y_t_value_idx = (
             work_item_idx % nb_work_items_for_Y_t_window
         )
-
-        _initialize_private_result(private_result)
 
         work_item_col_idx_padded = two_as_long * work_item_col_idx
         first_X_loaded_row_idx = group_first_row_idx + work_item_row_idx
@@ -373,12 +374,6 @@ def make_matmul_2d_kernel(
             # OUT
             result
         )
-
-    @dpex.func
-    def _initialize_private_result(private_result):
-        for i in range(private_result_array_height):
-            for j in range(private_result_array_width):
-                private_result[i, j] = zero
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func

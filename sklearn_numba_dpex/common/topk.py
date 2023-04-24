@@ -681,8 +681,9 @@ def _make_create_radix_histogram_kernel(
         )
 
         # Initialize private memory
+        # NB: private arrays are assumed to be created already initialized with
+        # zero values
         private_counts = dpex.private.array(sub_group_size, dtype=histogram_dtype)
-        initialize_private_histograms(private_counts)
 
         # Compute the radix value of `array_in_uint` at location `(row_idx, col_idx)`,
         # and store it in `radix_values[local_subgroup, local_subgroup_work_id]`. If
@@ -829,11 +830,6 @@ def _make_create_radix_histogram_kernel(
             value = histogram_dtype(minus_one_idx)
 
         radix_values[local_subgroup, local_subgroup_work_id] = value
-
-    @dpex.func
-    def initialize_private_histograms(private_counts):
-        for i in range(sub_group_size):
-            private_counts[i] = zero_idx
 
     # The `compute_private_histogram` function is written differently depending on how
     # the number of histogram work items compare to the size of the sub groups.
