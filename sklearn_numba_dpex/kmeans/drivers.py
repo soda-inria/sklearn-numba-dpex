@@ -3,7 +3,6 @@ import numpy as np
 
 from sklearn_numba_dpex.common._utils import (
     _divide_by,
-    _get_global_mem_cache_size,
     _get_sequential_processing_device,
     _minus,
     _plus,
@@ -57,7 +56,6 @@ def lloyd(
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
     sub_group_size = 8
-    global_mem_cache_size = _get_global_mem_cache_size(device)
 
     # Create a set of kernels
     (
@@ -74,7 +72,6 @@ def lloyd(
         return_assignments=True,
         check_strict_convergence=True,
         sub_group_size=sub_group_size,
-        global_mem_cache_size=global_mem_cache_size,
         work_group_size="max",
         dtype=compute_dtype,
         device=device,
