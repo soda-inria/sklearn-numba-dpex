@@ -328,8 +328,6 @@ def make_matmul_2d_kernel(
             work_item_idx % nb_work_items_for_Y_t_window
         )
 
-        _initialize_private_result(private_result)
-
         work_item_col_idx_padded = two_as_long * work_item_col_idx
         first_X_loaded_row_idx = group_first_row_idx + work_item_row_idx
         first_Y_t_loaded_row_idx = group_first_col_idx + work_item_row_idx
@@ -373,12 +371,6 @@ def make_matmul_2d_kernel(
             # OUT
             result
         )
-
-    @dpex.func
-    def _initialize_private_result(private_result):
-        for i in range(private_result_array_height):
-            for j in range(private_result_array_width):
-                private_result[i, j] = zero
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
     @dpex.func

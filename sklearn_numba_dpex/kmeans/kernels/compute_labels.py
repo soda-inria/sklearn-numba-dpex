@@ -43,9 +43,9 @@ def make_label_assignment_fixed_window_kernel(
     work_group_shape = (window_n_centroids, centroids_window_height)
 
     (
-        initialize_window_of_centroids,
         load_window_of_centroids_and_features,
         accumulate_dot_products,
+        initialize_window_half_l2_norm,
     ) = make_pairwise_ops_base_kernel_funcs(
         n_samples,
         n_features,
@@ -105,7 +105,7 @@ def make_label_assignment_fixed_window_kernel(
         for centroid_window_idx in range(n_windows_for_centroids):
             is_last_centroid_window = centroid_window_idx == last_centroid_window_idx
 
-            initialize_window_of_centroids(
+            initialize_window_half_l2_norm(
                 local_row_idx,
                 local_col_idx,
                 first_centroid_idx,

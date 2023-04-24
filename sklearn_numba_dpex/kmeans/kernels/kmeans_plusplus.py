@@ -128,7 +128,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     work_group_shape = (window_n_candidates, candidates_window_height)
 
     (
-        initialize_window_of_candidates,
         load_window_of_candidates_and_features,
         accumulate_sq_distances,
     ) = make_pairwise_ops_base_kernel_funcs(
@@ -180,7 +179,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
         for candidate_window_idx in range(n_windows_for_candidates):
             is_last_candidate_window = candidate_window_idx == last_candidate_window_idx
-            initialize_window_of_candidates(is_last_candidate_window, sq_distances)
 
             loading_candidate_idx = first_candidate_idx + window_loading_candidate_idx
             if loading_candidate_idx < n_candidates:
