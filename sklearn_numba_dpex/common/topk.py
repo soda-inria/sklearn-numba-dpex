@@ -307,8 +307,8 @@ def _get_topk_threshold(array_in, k, group_sizes):
     ) = _make_create_radix_histogram_kernel(
         n_rows,
         n_cols,
-        "max" if group_sizes is None else work_group_size,
-        4 if group_sizes is None else sub_group_size,
+        64 if group_sizes is None else work_group_size,
+        16 if group_sizes is None else sub_group_size,
         global_mem_cache_size,
         counts_private_copies_max_cache_occupancy,
         dtype,

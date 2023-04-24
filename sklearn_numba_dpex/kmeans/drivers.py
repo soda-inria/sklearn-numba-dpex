@@ -56,15 +56,8 @@ def lloyd(
 
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = 4
+    sub_group_size = 8
     global_mem_cache_size = _get_global_mem_cache_size(device)
-
-    # The following parameter controls the fraction of the device global cache memory
-    # that can be relied upon to reduce the probability of collision of atomic
-    # ops during execution (see `lloyd_single_step` kernel for more information). The
-    # following value has been chosen empirically and it might be beneficial to test it
-    # further on different hardware.
-    centroids_private_copies_max_cache_occupancy = 0.7
 
     # Create a set of kernels
     (
@@ -82,7 +75,6 @@ def lloyd(
         check_strict_convergence=True,
         sub_group_size=sub_group_size,
         global_mem_cache_size=global_mem_cache_size,
-        centroids_private_copies_max_cache_occupancy=centroids_private_copies_max_cache_occupancy,  # noqa
         work_group_size="max",
         dtype=compute_dtype,
         device=device,
@@ -644,7 +636,7 @@ def get_labels_inertia(X_t, centroids_t, sample_weight, with_inertia):
     n_clusters = centroids_t.shape[1]
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = 4
+    sub_group_size = 8
 
     label_assignment_fixed_window_kernel = make_label_assignment_fixed_window_kernel(
         n_samples,
@@ -715,7 +707,7 @@ def get_euclidean_distances(X_t, Y_t):
     n_features, n_samples = X_t.shape
     n_clusters = Y_t.shape[1]
     device = X_t.device.sycl_device
-    sub_group_size = 4
+    sub_group_size = 8
 
     euclidean_distances_fixed_window_kernel = (
         make_compute_euclidean_distances_fixed_window_kernel(
@@ -753,7 +745,7 @@ def kmeans_plusplus(
     n_features, n_samples = X_t.shape
     device = X_t.device.sycl_device
     max_work_group_size = device.max_work_group_size
-    sub_group_size = 4
+    sub_group_size = 8
 
     # NB: the implementation differs from sklearn implementation with regards to
     # sample_weight, which is ignored in sklearn, but used here.

@@ -417,7 +417,6 @@ def test_error_raised_on_invalid_group_sizes():
     return_assignments = False
     check_strict_convergence = False
     global_mem_cache_size = 123456789
-    centroids_private_copies_max_cache_occupancy = 0.7
 
     with pytest.raises(ValueError, match=expected_msg):
         make_lloyd_single_step_fixed_window_kernel(
@@ -428,7 +427,6 @@ def test_error_raised_on_invalid_group_sizes():
             check_strict_convergence,
             sub_group_size,
             global_mem_cache_size,
-            centroids_private_copies_max_cache_occupancy,
             work_group_size,
             dtype,
             device,
