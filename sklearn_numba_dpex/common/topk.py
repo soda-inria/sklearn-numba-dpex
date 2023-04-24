@@ -324,7 +324,7 @@ def _get_topk_threshold(array_in, k, group_sizes):
         shape=(n_counts_private_copies, n_rows_x_radix_size),
         device=device,
         dtype=np.int64,
-        work_group_size=work_group_size,
+        work_group_size="max",
         axis=0,
         sub_group_size=sub_group_size,
     )
