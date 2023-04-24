@@ -37,7 +37,7 @@ def test_need_to_workaround_numba_dpex_906():
         if local_idx < 1:
             result[0] = 10
 
-    result = dpt.zeros(sh=(1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
+    result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
     kernel[32, 32](result)
 
     rationale = """If this test fails, it means that the bug reported at
@@ -62,7 +62,7 @@ def test_need_to_workaround_numba_dpex_906():
 
     _setitem_if = make_setitem_if_kernel_func()
 
-    result = dpt.zeros(sh=(1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
+    result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
     kernel[32, 32](result)
 
     assert dpt.asnumpy(result)[0] == 10
