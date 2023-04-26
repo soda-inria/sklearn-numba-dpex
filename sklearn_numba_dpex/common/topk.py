@@ -137,7 +137,7 @@ def topk(array_in, k, group_sizes=None):
     The output is not deterministic: the order of the output is undefined. Successive
     calls can return the same items in different order.
     """
-    _get_topk_kernel = _make_get_topk_kernel(
+    _initialize_result, _get_topk_kernel = _make_get_topk_kernel(
         k,
         array_in.shape,
         array_in.dtype.type,
@@ -146,7 +146,8 @@ def topk(array_in, k, group_sizes=None):
         output="values",
     )
 
-    return _get_topk_kernel(array_in)
+    result = _initialize_result()
+    return _get_topk_kernel(array_in, result)
 
 
 def topk_idx(array_in, k, group_sizes=None):
@@ -184,7 +185,7 @@ def topk_idx(array_in, k, group_sizes=None):
         for this value can be different between two successive calls.
 
     """
-    _get_topk_kernel = _make_get_topk_kernel(
+    _initialize_result, _get_topk_kernel = _make_get_topk_kernel(
         k,
         array_in.shape,
         array_in.dtype.type,
@@ -192,17 +193,28 @@ def topk_idx(array_in, k, group_sizes=None):
         group_sizes,
         output="idx",
     )
+    result = _initialize_result()
+    return _get_topk_kernel(array_in, result)
 
-    return _get_topk_kernel(array_in)
+
+1
 
 
+@lru_cache
 def _make_get_topk_kernel(
-    k, shape, dtype, device, group_sizes, output, reuse_result_buffer=False
+    k,
+    shape,
+    dtype,
+    device,
+    group_sizes,
+    output,
+    return_result_initializer=True,
 ):
     """Returns a `_get_topk_kernel` closure.
 
-    The closure can be passed an array with attributes `shape`, `dtype` and `device`
-    and will perform a TopK search, returning requested top-k items.
+    The closure can be passed an array with attributes `shape`, `dtype` and `device`,
+    along with a result array, and will perform a TopK search, returning requested
+    top-k items stored in the result array.
 
     As long as a closure is referenced, it keeps in cache pre-allocated buffers and
     pre-defined kernel functions. Thus, it is more efficient to perform sequential
@@ -213,10 +225,9 @@ def _make_get_topk_kernel(
     instead. They include definition of kernels, allocation of buffers, and
     cleaning of said allocations afterwards.
 
-    By default, the memory allocation for the result array is not reused. This is to
-    avoid a previously computed result to be erased by a subsequent call to the same
-    closure without the user noticing. Reusing the same buffer can still be enforced by
-    setting `reuse_result_buffer=True`.
+    `_make_get_topk_kernel` also returns an initializer closure for the result array.
+    This is optional and is deactivated by setting `return_result_initializer`
+    parameter to `False`, then the user can use instead a preferred buffer.
     """
     # TODO: it seems a kernel specialized for 1d arrays would show 10-20% better
     # performance. If this case becomes specifically relevant, consider implementing
@@ -237,10 +248,17 @@ def _make_get_topk_kernel(
         _initialize_result_col_idx,
         gather_results_kernel,
     ) = _get_gather_results_kernels(
-        n_rows, n_cols, k, work_group_size, dtype, device, output, reuse_result_buffer
+        n_rows,
+        n_cols,
+        k,
+        work_group_size,
+        dtype,
+        device,
+        output,
+        return_result_initializer,
     )
 
-    def _get_topk(array_in):
+    def _get_topk(array_in, result):
         if is_1d:
             array_in = dpt.reshape(array_in, (1, -1))
 
@@ -250,8 +268,8 @@ def _make_get_topk_kernel(
             n_threshold_occurences_in_data,
         ) = get_topk_threshold(array_in)
 
+        # TODO: can be optimized if array_in.shape[0] < n_rows
         result_col_idx = _initialize_result_col_idx()
-        result = _initialize_result(array_in.dtype.type)
 
         gather_results_kernel(
             array_in,
@@ -268,47 +286,36 @@ def _make_get_topk_kernel(
 
         return result
 
-    return _get_topk
+    return _initialize_result, _get_topk
 
 
 @lru_cache
 def _get_gather_results_kernels(
-    n_rows, n_cols, k, work_group_size, dtype, device, output, reuse_result_buffer
+    n_rows, n_cols, k, work_group_size, dtype, device, output, return_result_initializer
 ):
+    _initialize_result = None
+
     if output == "values":
         gather_results_kernel = _make_gather_topk_kernel(
-            n_rows,
             n_cols,
             k,
             work_group_size,
         )
-        if reuse_result_buffer:
-            result = dpt.empty((n_rows, k), dtype=dtype, device=device)
 
-            def _initialize_result(dtype):
-                return result
+        if return_result_initializer:
 
-        else:
-
-            def _initialize_result(dtype):
+            def _initialize_result():
                 return dpt.empty((n_rows, k), dtype=dtype, device=device)
 
     elif output == "idx":
         gather_results_kernel = _make_gather_topk_idx_kernel(
-            n_rows,
             n_cols,
             k,
             work_group_size,
         )
-        if reuse_result_buffer:
-            result = dpt.empty((n_rows, k), dtype=np.int64, device=device)
+        if return_result_initializer:
 
-            def _initialize_result(dtype):
-                return result
-
-        else:
-
-            def _initialize_result(dtype):
+            def _initialize_result():
                 return dpt.empty((n_rows, k), dtype=np.int64, device=device)
 
     elif output == "values+idx":
@@ -563,7 +570,9 @@ def _make_get_topk_threshold_kernel(n_rows, n_cols, k, dtype, device, group_size
 
         # Initialize all buffers
         initialize_k_in_subset_kernel(k_in_subset)
-        n_active_rows[0] = n_active_rows_scalar = n_rows
+
+        # TODO: a few things can be optimized if effective_n_rows < n_rows
+        n_active_rows[0] = n_active_rows_scalar = effective_n_rows = array_in.shape[0]
         initialize_threshold_count_kernel(threshold_count)
         active_rows_mapping, new_active_rows_mapping = initialize_active_rows_mapping()
         desired_masked_value = initialize_desired_masked_value()
@@ -571,7 +580,7 @@ def _make_get_topk_threshold_kernel(n_rows, n_cols, k, dtype, device, group_size
 
         # Reinterpret input as uint so we can use bitwise compute
         array_in_uint = dpt.usm_ndarray(
-            shape=(n_rows, n_cols),
+            shape=(effective_n_rows, n_cols),
             dtype=uint_type,
             buffer=array_in,
         )
@@ -1275,7 +1284,6 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
 
 @lru_cache
 def _make_gather_topk_kernel(
-    n_rows,
     n_cols,
     k,
     work_group_size,
@@ -1288,7 +1296,6 @@ def _make_gather_topk_kernel(
     """
     n_work_groups_per_row = math.ceil(n_cols / work_group_size)
     work_group_shape = (1, work_group_size)
-    global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
     @dpex.kernel
     # fmt: off
@@ -1297,7 +1304,7 @@ def _make_gather_topk_kernel(
         threshold,                          # IN             (n_rows,)
         n_threshold_occurences_in_topk,     # IN             (n_rows,)
         n_threshold_occurences_in_data,     # IN             (n_rows,)
-        result_col_idx,                         # BUFFER         (n_rows,)
+        result_col_idx,                     # BUFFER         (n_rows,)
         result,                             # OUT            (n_rows, k)
     ):
         # fmt: on
@@ -1393,12 +1400,31 @@ def _make_gather_topk_kernel(
         result_col_idx_ = dpex.atomic.add(result_col_idx, row_idx, count_one_as_an_int)
         result[row_idx, result_col_idx_] = item
 
-    return gather_topk[global_shape, work_group_shape]
+    # TODO: write decorator instead
+    def _gather_topk(
+        array_in,
+        threshold,
+        n_threshold_occurences_in_topk,
+        n_threshold_occurences_in_data,
+        result_col_idx,
+        result,
+    ):
+        n_rows = array_in.shape[0]
+        global_shape = (n_rows, n_work_groups_per_row * work_group_size)
+        gather_topk[global_shape, work_group_shape](
+            array_in,
+            threshold,
+            n_threshold_occurences_in_topk,
+            n_threshold_occurences_in_data,
+            result_col_idx,
+            result,
+        )
+
+    return _gather_topk
 
 
 @lru_cache
 def _make_gather_topk_idx_kernel(
-    n_rows,
     n_cols,
     k,
     work_group_size,
@@ -1406,7 +1432,6 @@ def _make_gather_topk_idx_kernel(
     """Same than gather_topk kernel but return top-k indices rather than top-k values"""
     n_work_groups_per_row = math.ceil(n_cols / work_group_size)
     work_group_shape = (1, work_group_size)
-    global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
     @dpex.kernel
     # fmt: off
@@ -1512,4 +1537,24 @@ def _make_gather_topk_idx_kernel(
             )
             result[row_idx, result_col_idx_] = col_idx
 
-    return gather_topk_idx[global_shape, work_group_shape]
+    # TODO: write decorator instead
+    def _gather_topk_idx(
+        array_in,
+        threshold,
+        n_threshold_occurences_in_topk,
+        n_threshold_occurences_in_data,
+        result_col_idx,
+        result,
+    ):
+        n_rows = array_in.shape[0]
+        global_shape = (n_rows, n_work_groups_per_row * work_group_size)
+        gather_topk_idx[global_shape, work_group_shape](
+            array_in,
+            threshold,
+            n_threshold_occurences_in_topk,
+            n_threshold_occurences_in_data,
+            result_col_idx,
+            result,
+        )
+
+    return _gather_topk_idx
