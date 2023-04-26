@@ -142,8 +142,8 @@ def topk(array_in, k, group_sizes=None):
         array_in.shape,
         array_in.dtype.type,
         array_in.device.sycl_device,
-        group_sizes,
         output="values",
+        group_sizes=group_sizes,
     )
 
     result = _initialize_result()
@@ -190,8 +190,8 @@ def topk_idx(array_in, k, group_sizes=None):
         array_in.shape,
         array_in.dtype.type,
         array_in.device.sycl_device,
-        group_sizes,
         output="idx",
+        group_sizes=group_sizes,
     )
     result = _initialize_result()
     return _get_topk_kernel(array_in, result)
@@ -206,8 +206,8 @@ def _make_get_topk_kernel(
     shape,
     dtype,
     device,
-    group_sizes,
     output,
+    group_sizes=None,
     return_result_initializer=True,
 ):
     """Returns a `_get_topk_kernel` closure.

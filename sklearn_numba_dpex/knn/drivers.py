@@ -18,16 +18,17 @@ def kneighbors(
     n_queries, n_features = query.shape
     n_samples = data.shape[0]
     compute_dtype = query.dtype.type
-    device = compute_dtype.device.sycl_device
+    compute_dtype_itemsize = np.dtype(compute_dtype).itemsize
+    device = query.device.sycl_device
 
     index_itemsize = np.dtype(np.int64).itemsize
 
-    pairwise_distance_required_bytes_per_query = n_samples * compute_dtype.itemsize
+    pairwise_distance_required_bytes_per_query = n_samples * compute_dtype_itemsize
 
     # TODO: better way to ensure this remains synchronized with future changes to
     # TopK ?
     topk_required_bytes_per_query = (
-        (n_neighbors + 1 + 1 + 1) * compute_dtype.itemsize
+        (n_neighbors + 1 + 1 + 1) * compute_dtype_itemsize
     ) + ((1 + 1 + 2 + 4) * index_itemsize)
     if return_distance:
         topk_required_bytes_per_query += n_neighbors * index_itemsize
@@ -41,7 +42,7 @@ def kneighbors(
     if max_slice_size < 1:
         raise RuntimeError("Buffer size is too small")
 
-    slice_size = math.floor(max_slice_size)
+    slice_size = min(math.floor(max_slice_size), n_queries)
 
     n_slices = math.ceil(n_queries / slice_size)
     n_full_slices = n_slices - 1
@@ -70,14 +71,12 @@ def kneighbors(
     squared_pairwise_distance_buffer = dpt.empty(
         (slice_size, n_samples), dtype=compute_dtype, device=device
     )
+    last_slice_squared_pairwise_distance_buffer = dpt.asarray(
+        squared_pairwise_distance_buffer[:last_slice_size], copy=False
+    )
 
-    get_topk_kernel = _make_get_topk_kernel(
-        n_neighbors,
-        (slice_size, n_samples),
-        compute_dtype,
-        device,
-        output="idx",
-        reuse_result_buffer=True,
+    _, get_topk_kernel = _make_get_topk_kernel(
+        n_neighbors, (slice_size, n_samples), compute_dtype, device, output="idx"
     )
 
     result = dpt.empty((n_queries, n_neighbors), dtype=compute_dtype, device=device)
@@ -96,9 +95,10 @@ def kneighbors(
 
     query_slice = query[slice_sample_idx:]
     last_slice_squared_pairwise_distance_kernel(
-        query_slice, data, squared_pairwise_distance_buffer
+        query_slice, data, last_slice_squared_pairwise_distance_buffer
     )
     result_slice = dpt.asarray(result[slice_sample_idx:], copy=False)
+
     get_topk_kernel(
         squared_pairwise_distance_buffer,
         result_slice,
