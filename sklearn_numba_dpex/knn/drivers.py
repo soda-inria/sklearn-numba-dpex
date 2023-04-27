@@ -50,7 +50,7 @@ def kneighbors(
 
     def pairwise_distance_multiply_fn(x, y):
         diff = x - y
-        return diff * diff
+        return -(diff * diff)
 
     squared_pairwise_distance_kernel = make_matmul_2d_kernel(
         slice_size,
@@ -60,28 +60,14 @@ def kneighbors(
         device,
         multiply_fn=pairwise_distance_multiply_fn,
     )
-    last_slice_squared_pairwise_distance_kernel = make_matmul_2d_kernel(
-        last_slice_size,
-        n_samples,
-        n_features,
-        compute_dtype,
-        device,
-        multiply_fn=pairwise_distance_multiply_fn,
-    )
     squared_pairwise_distance_buffer = dpt.empty(
         (slice_size, n_samples), dtype=compute_dtype, device=device
-    )
-    last_slice_squared_pairwise_distance_buffer = dpt.asarray(
-        squared_pairwise_distance_buffer[:last_slice_size], copy=False
     )
 
     _, get_topk_kernel = _make_get_topk_kernel(
         n_neighbors, (slice_size, n_samples), compute_dtype, device, output="idx"
     )
 
-    result_slice_buffer = dpt.empty(
-        (slice_size, n_neighbors), dtype=compute_dtype, device=device
-    )
     result = dpt.empty((n_queries, n_neighbors), dtype=compute_dtype, device=device)
 
     slice_sample_idx = 0
@@ -91,29 +77,24 @@ def kneighbors(
             query_slice, data, squared_pairwise_distance_buffer
         )
 
-        # # TODO: This should work instead and avoir having an intermediate buffer
-        # # Might be fixed with latest numba_dpex commit and load_numba_dpex patches
-        # # removal ?
-        # result_slice = dpt.asarray(
-        #     result[slice_sample_idx : (slice_sample_idx + slice_size)], copy=False
-        # )
-        # get_topk_kernel(squared_pairwise_distance_buffer, result_slice)
-
-        get_topk_kernel(squared_pairwise_distance_buffer, result_slice_buffer)
-        result[
-            slice_sample_idx : (slice_sample_idx + slice_size)
-        ] = result_slice_buffer[:]
+        # TODO: This should work instead and avoir having an intermediate buffer
+        # Might be fixed with latest numba_dpex commit and load_numba_dpex patches
+        # removal ?
+        result_slice = result[slice_sample_idx : (slice_sample_idx + slice_size)]
+        get_topk_kernel(squared_pairwise_distance_buffer, result_slice)
 
         slice_sample_idx += slice_size
 
-    query_slice = query[slice_sample_idx:]
-    last_slice_squared_pairwise_distance_kernel(
-        query_slice, data, last_slice_squared_pairwise_distance_buffer
+    # NB: some pairwise distance are computed twice for no reason but it's cheaper than
+    # to re-compile a kernel specifically for the last slice.
+    query_slice = query[-slice_sample_idx:]
+    squared_pairwise_distance_kernel(
+        query_slice, data, squared_pairwise_distance_buffer
     )
-    result_slice = dpt.asarray(result[slice_sample_idx:], copy=False)
+    result_slice = result[-last_slice_size:]
 
     get_topk_kernel(
-        squared_pairwise_distance_buffer,
+        squared_pairwise_distance_buffer[-last_slice_size:],
         result_slice,
     )
 
