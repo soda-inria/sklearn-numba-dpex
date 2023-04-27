@@ -88,9 +88,6 @@ ARG CMAKE_VERSION_BUILD=3
 
 # Versions of the intel python packages
 
-ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
-ARG DPCPP_LLVM_SPIRV_GIT_URL=https://github.com/IntelPython/dpcpp-llvm-spirv/
-
 ARG DPCTL_GIT_BRANCH=0.14.3dev1
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
@@ -99,6 +96,10 @@ ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 ARG NUMBA_DPEX_GIT_BRANCH=main
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
+
+ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
+ARG DPCPP_LLVM_SPIRV_GIT_URL=https://github.com/IntelPython/dpcpp-llvm-spirv/
+
 
 # Version of other python packages explicitly installed either within the
 # build environment or the runtime environment.
@@ -252,6 +253,14 @@ RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" \
         wheel${WHEEL_VERSION} cython${CYTHON_VERSION} \
         scikit-build${SCIKIT_BUILD_VERSION} \
+    # HACK: the dependency tree for some of the intel runtime packages is broken. See
+    # the issue tracker at https://github.com/IntelPython/dpctl/issues/1190 .
+    # In the meantime, we manually force a dependency tree that, despite having
+    # conflicts, works with the rest of the software stack.
+    && pip install --no-deps \
+        dpcpp-cpp-rt==2023.1.0 intel-cmplr-lib-rt==2023.1.0 \
+        intel-cmplr-lic-rt==2023.1.0 intel-fortran-rt==2023.1.0 intel-openmp==2023.1.0 \
+        intel-opencl-rt==2023.0.0 \
     && pip cache purge
 # install the oneapi devel environment
 ENV CMAKE_GENERATOR="Ninja"
@@ -385,6 +394,14 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
         # HACK this package is not in the dependency tree of any of the top
         # packages but probably should, in the meantime we add it manually
         mkl-dpcpp \
+    # HACK: the dependency tree for some of the intel runtime packages is broken. See
+    # the issue tracker at https://github.com/IntelPython/dpctl/issues/1190 .
+    # In the meantime, we manually force a dependency tree that, despite having
+    # conflicts, works with the rest of the software stack.
+    && pip install --no-deps \
+        dpcpp-cpp-rt==2023.1.0 intel-cmplr-lib-rt==2023.1.0 \
+        intel-cmplr-lic-rt==2023.1.0 intel-fortran-rt==2023.1.0 intel-openmp==2023.1.0 \
+        intel-opencl-rt==2023.0.0 \
     && pip cache purge \
     && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
         $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())")
