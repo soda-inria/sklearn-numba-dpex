@@ -79,6 +79,9 @@ def kneighbors(
         n_neighbors, (slice_size, n_samples), compute_dtype, device, output="idx"
     )
 
+    result_slice_buffer = dpt.empty(
+        (slice_size, n_neighbors), dtype=compute_dtype, device=device
+    )
     result = dpt.empty((n_queries, n_neighbors), dtype=compute_dtype, device=device)
 
     slice_sample_idx = 0
@@ -87,10 +90,20 @@ def kneighbors(
         squared_pairwise_distance_kernel(
             query_slice, data, squared_pairwise_distance_buffer
         )
-        result_slice = dpt.asarray(
-            result[slice_sample_idx : (slice_sample_idx + slice_size)], copy=False
-        )
-        get_topk_kernel(squared_pairwise_distance_buffer, result_slice)
+
+        # # TODO: This should work instead and avoir having an intermediate buffer
+        # # Might be fixed with latest numba_dpex commit and load_numba_dpex patches
+        # # removal ?
+        # result_slice = dpt.asarray(
+        #     result[slice_sample_idx : (slice_sample_idx + slice_size)], copy=False
+        # )
+        # get_topk_kernel(squared_pairwise_distance_buffer, result_slice)
+
+        get_topk_kernel(squared_pairwise_distance_buffer, result_slice_buffer)
+        result[
+            slice_sample_idx : (slice_sample_idx + slice_size)
+        ] = result_slice_buffer[:]
+
         slice_sample_idx += slice_size
 
     query_slice = query[slice_sample_idx:]
