@@ -74,7 +74,7 @@ ARG PYTHON_VERSION=3.9.16
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7deeaac4-f605-4bcf-a81b-ea7531577c61
+ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7deeaac4-f605-4bcf-a81b-ea7531577c61
 ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.1.0.46401.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
@@ -88,7 +88,7 @@ ARG CMAKE_VERSION_BUILD=3
 
 # Versions of the intel python packages
 
-ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=2254042d628bcafe72a31b548c98c4c4f45cd926
+ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
 ARG DPCPP_LLVM_SPIRV_GIT_URL=https://github.com/IntelPython/dpcpp-llvm-spirv/
 
 ARG DPCTL_GIT_BRANCH=0.14.3dev1
@@ -97,7 +97,7 @@ ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 ARG DPNP_GIT_BRANCH=0.11.2dev0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=000d5cd3aaf0f57db31c4142be0b5333fa0eb95a
+ARG NUMBA_DPEX_GIT_BRANCH=main
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
@@ -139,7 +139,9 @@ ARG ONEAPI_CACHE_DIR=$TMPDIR/intel/cache
 ARG ONEAPI_DOWNLOAD_DIR=$TMPDIR/intel/download
 ARG ONEAPI_LOG_DIR=$TMPDIR/intel/log
 ARG ONEAPI_COMPONENTS="intel.oneapi.lin.dpcpp-cpp-compiler:intel.oneapi.lin.tbb.devel:intel.oneapi.lin.mkl.devel"
-RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
+RUN apt-get update --quiet && apt-get install -y --no-install-recommends gawk \
+    && rm -Rf /var/lib/apt/lists/* \
+    && mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_LOG_DIR \
     && wget -P $ONEAPI_DOWNLOAD_DIR $ONEAPI_INSTALLER_URL/$ONEAPI_INSTALL_BINARY_NAME \
     && chmod +x $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME \
     && $ONEAPI_DOWNLOAD_DIR/$ONEAPI_INSTALL_BINARY_NAME -a -s --eula accept \
@@ -167,7 +169,7 @@ FROM base_config AS python_builder
 ARG PYTHON_VERSION
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYENV_INSTALLER_REF
-RUN apt-get update --quiet; apt-get install -y --no-install-recommends \
+RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         make \
         build-essential \
         libssl-dev \
@@ -310,12 +312,14 @@ ARG ONEAPI_INSTALL_DIR
 ARG DPCPP_LLVM_SPIRV_GIT_BRANCH
 ARG DPCPP_LLVM_SPIRV_GIT_URL
 ARG DPCPP_LLVM_SPIRV_BUILD_DIR=$TMPDIR/dpcpp_llvm_spirv
-RUN mkdir -p $DPCPP_LLVM_SPIRV_BUILD_DIR \
+RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
+    mkdir -p $DPCPP_LLVM_SPIRV_BUILD_DIR \
     && cd $DPCPP_LLVM_SPIRV_BUILD_DIR \
     && git clone --recursive -b $DPCPP_LLVM_SPIRV_GIT_BRANCH --depth 1 $DPCPP_LLVM_SPIRV_GIT_URL . \
+    && cd pkg \
     && python setup.py clean --all \
     && python setup.py bdist_wheel \
-    && cp dist/dpcpp-llvm-spirv*.whl $TMPDIR \
+    && cp dist/dpcpp_llvm_spirv*.whl $TMPDIR \
     && cp $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $TMPDIR \
     && rm -Rf $DPCPP_LLVM_SPIRV_BUILD_DIR
 
@@ -333,7 +337,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
     --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
     pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
-        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl $TMPDIR/dpcpp_llvm_spirv/dpcpp-llvm-spirv*.whl \
+        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl $TMPDIR/dpcpp_llvm_spirv/dpcpp_llvm_spirv*.whl \
     && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
         $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
     && pip cache purge \
@@ -376,14 +380,14 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
-        $TMPDIR/dpcpp_llvm_spirv/dpcpp-llvm-spirv*.whl $TMPDIR/numba_dpex/numba_dpex*.whl \
+        $TMPDIR/dpcpp_llvm_spirv/dpcpp_llvm_spirv*.whl $TMPDIR/numba_dpex/numba_dpex*.whl \
         packaging${PACKAGING_VERSION} \
         # HACK this package is not in the dependency tree of any of the top
         # packages but probably should, in the meantime we add it manually
         mkl-dpcpp \
     && pip cache purge \
     && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
-        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
+        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())")
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         spirv-tools spirv-headers \
     && rm -Rf /var/lib/apt/lists/*
