@@ -195,7 +195,7 @@ class KMeansEngine(KMeansCythonEngine):
             # TODO: write a kernel ? or replace with better equivalent when available ?
             # Relevant issue: https://github.com/IntelPython/dpctl/issues/1003
             centers_t = dpt.concat(
-                [dpt.expand_dims(X[center_idx], axes=1) for center_idx in centers_idx],
+                [dpt.expand_dims(X[center_idx], axis=1) for center_idx in centers_idx],
                 axis=1,
             )
 
