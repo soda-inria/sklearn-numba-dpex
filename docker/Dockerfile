@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-7c9bd09e184c4d60b6776c5a3a407cef123d6315
+ARG BASE_IMAGE_VERSION=latest-0ce9b5f9a67034ba11f5d9854c66d2bfba97d0f9
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -39,8 +39,8 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
-ARG L0_LOADER_DEB_VERSION=1.9.9
-ARG L0_LOADER_DEB_PLATFORM=u18.04
+ARG L0_LOADER_DEB_VERSION=1.10.0
+ARG L0_LOADER_DEB_PLATFORM=u22.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
 ARG BASE_PYPI_URL=https://pypi.org/simple
@@ -60,7 +60,10 @@ ARG INTEL_SCIPY_VERSION="==1.7.3"
 # content of the intel pypi or not. (this Dockerfile currently assumes that
 # it is not limited to intel pypi. The opposite assumption seems to create
 # impossible build conditions.)
-ARG INTEL_NUMBA_VERSION=""
+# NB: there are currently compatibility issues with "numba>=0.57", see the following
+# issue tracker: https://github.com/IntelPython/numba-dpex/issues/1000 and bump
+# when compatiiblity is fixed.
+ARG INTEL_NUMBA_VERSION="<0.57"
 
 
 # So far, the intel numpy python package is not built for python>=3.10
@@ -71,28 +74,30 @@ ARG PYTHON_VERSION=3.9.16
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/irc_nas/19079
-ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.0.0.25537.sh
+ARG ONEAPI_INSTALLER_URL=wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7deeaac4-f605-4bcf-a81b-ea7531577c61
+ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.1.0.46401.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
-ARG LLVM_SPIRV_INSTALL_DIR=/opt/llvm-spirv
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
 ARG CMAKE_VERSION=3.26
-ARG CMAKE_VERSION_BUILD=0
+ARG CMAKE_VERSION_BUILD=3
 
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.14.2
+ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=2254042d628bcafe72a31b548c98c4c4f45cd926
+ARG DPCPP_LLVM_SPIRV_GIT_URL=https://github.com/IntelPython/dpcpp-llvm-spirv/
+
+ARG DPCTL_GIT_BRANCH=0.14.3dev1
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.11.1
+ARG DPNP_GIT_BRANCH=0.11.2dev0
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.20.0
+ARG NUMBA_DPEX_GIT_BRANCH=000d5cd3aaf0f57db31c4142be0b5333fa0eb95a
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 # Version of other python packages explicitly installed either within the
@@ -145,7 +150,6 @@ RUN mkdir -p $ONEAPI_INSTALL_DIR $ONEAPI_CACHE_DIR $ONEAPI_DOWNLOAD_DIR $ONEAPI_
 
 
 FROM l0_base AS base_config
-ARG LLVM_SPIRV_INSTALL_DIR
 ENV PYENV_ROOT=/opt/pyenv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
@@ -153,8 +157,6 @@ ENV LD_LIBRARY_PATH="$VIRTUAL_ENV/lib:$LD_LIBRARY_PATH"
 # Those environment variables are required by the dpnp runtime
 ENV OCL_ICD_FILENAMES_RESET=1
 ENV OCL_ICD_FILENAMES=libintelocl.so
-# Needed by the numba-dpex runtime
-ENV PATH=$LLVM_SPIRV_INSTALL_DIR:$PATH
 
 # The following blocks script a convenient way of installing python
 # It installs a python binary that is separate from the system binary
@@ -253,7 +255,7 @@ RUN pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
 ENV CMAKE_GENERATOR="Ninja"
 
 
-# Build the three intel python packages
+# Build the four intel python packages
 
 FROM build_environment AS dpctl_builder
 SHELL ["/bin/bash", "-c"]
@@ -301,6 +303,22 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && cp dist/dpnp*.whl $TMPDIR \
     && rm -Rf $DPNP_BUILD_DIR
 
+FROM build_environment AS dpcpp_llvm_spirv_builder
+SHELL ["/bin/bash", "-c"]
+ARG TMPDIR
+ARG ONEAPI_INSTALL_DIR
+ARG DPCPP_LLVM_SPIRV_GIT_BRANCH
+ARG DPCPP_LLVM_SPIRV_GIT_URL
+ARG DPCPP_LLVM_SPIRV_BUILD_DIR=$TMPDIR/dpcpp_llvm_spirv
+RUN mkdir -p $DPCPP_LLVM_SPIRV_BUILD_DIR \
+    && cd $DPCPP_LLVM_SPIRV_BUILD_DIR \
+    && git clone --recursive -b $DPCPP_LLVM_SPIRV_GIT_BRANCH --depth 1 $DPCPP_LLVM_SPIRV_GIT_URL . \
+    && python setup.py clean --all \
+    && python setup.py bdist_wheel \
+    && cp dist/dpcpp-llvm-spirv*.whl $TMPDIR \
+    && cp $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $TMPDIR \
+    && rm -Rf $DPCPP_LLVM_SPIRV_BUILD_DIR
+
 FROM build_environment AS numba_dpex_builder
 SHELL ["/bin/bash", "-c"]
 ARG TMPDIR
@@ -313,8 +331,11 @@ ARG BASE_PYPI_URL
 RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
     --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
     --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
+    --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
     pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
-        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
+        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl $TMPDIR/dpcpp_llvm_spirv/dpcpp-llvm-spirv*.whl \
+    && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
+        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
     && pip cache purge \
     && mkdir -p $NUMBA_DPEX_BUILD_DIR \
     && cd $NUMBA_DPEX_BUILD_DIR \
@@ -332,21 +353,11 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
 FROM base_config AS runtime_environment
-ARG ONEAPI_INSTALL_DIR
-ARG LLVM_SPIRV_INSTALL_DIR
-# There are python packages uploaded by Intel on pypi in the python dependency tree that
-# ship all the oneapi binaries that are required by the runtime, so that a full install
-# of the oneapi basekit, which is mandatory for building, is not necessary for runtime.
-# However it lacks the `llvm-spirv` binary, that we extract from the oneapi basekit
-# and that we can keep as a standalone binary, since it does not link against any of
-# the other binaries of the oneapi basekit (see
-# https://github.com/IntelPython/numba-dpex/issues/778#issuecomment-1271617194 )
-COPY --from=oneapi_devel_installer $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $LLVM_SPIRV_INSTALL_DIR/
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 
 
-# Install the 3 packages and the spirv-tools binaries and headers
+# Install the 4 packages and the spirv-tools binaries and headers
 FROM runtime_environment AS numba_dpex_dev
 ARG TMPDIR
 ARG INTEL_PYPI_URL
@@ -359,16 +370,20 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
     --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
     --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
     --mount=type=bind,target=$TMPDIR/numba_dpex,source=$TMPDIR,from=numba_dpex_builder \
+    --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
     pip install -U -i $INTEL_PYPI_URL "numpy${INTEL_NUMPY_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" --no-deps \
     && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         "numpy${INTEL_NUMPY_VERSION}" "numba${INTEL_NUMBA_VERSION}" \
         "scipy${INTEL_SCIPY_VERSION}" $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
-        $TMPDIR/numba_dpex/numba_dpex*.whl packaging${PACKAGING_VERSION} \
+        $TMPDIR/dpcpp_llvm_spirv/dpcpp-llvm-spirv*.whl $TMPDIR/numba_dpex/numba_dpex*.whl \
+        packaging${PACKAGING_VERSION} \
         # HACK this package is not in the dependency tree of any of the top
         # packages but probably should, in the meantime we add it manually
         mkl-dpcpp \
-    && pip cache purge
+    && pip cache purge \
+    && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
+        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         spirv-tools spirv-headers \
     && rm -Rf /var/lib/apt/lists/*
