@@ -50,7 +50,10 @@ def kneighbors(
 
     def pairwise_distance_multiply_fn(x, y):
         diff = x - y
-        return -(diff * diff)
+        return diff * diff
+
+    def negative_value(x):
+        return -x
 
     squared_pairwise_distance_kernel = make_matmul_2d_kernel(
         slice_size,
@@ -59,6 +62,7 @@ def kneighbors(
         compute_dtype,
         device,
         multiply_fn=pairwise_distance_multiply_fn,
+        out_fused_elementwise_fn=negative_value,
     )
     squared_pairwise_distance_buffer = dpt.empty(
         (slice_size, n_samples), dtype=compute_dtype, device=device
@@ -77,9 +81,6 @@ def kneighbors(
             query_slice, data, squared_pairwise_distance_buffer
         )
 
-        # TODO: This should work instead and avoir having an intermediate buffer
-        # Might be fixed with latest numba_dpex commit and load_numba_dpex patches
-        # removal ?
         result_slice = result[slice_sample_idx : (slice_sample_idx + slice_size)]
         get_topk_kernel(squared_pairwise_distance_buffer, result_slice)
 
@@ -87,7 +88,7 @@ def kneighbors(
 
     # NB: some pairwise distance are computed twice for no reason but it's cheaper than
     # to re-compile a kernel specifically for the last slice.
-    query_slice = query[-slice_sample_idx:]
+    query_slice = query[-slice_size:]
     squared_pairwise_distance_kernel(
         query_slice, data, squared_pairwise_distance_buffer
     )
@@ -96,6 +97,7 @@ def kneighbors(
     get_topk_kernel(
         squared_pairwise_distance_buffer[-last_slice_size:],
         result_slice,
+        offset=slice_size - last_slice_size,
     )
 
     return result

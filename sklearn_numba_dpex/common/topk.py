@@ -258,7 +258,7 @@ def _make_get_topk_kernel(
         return_result_initializer,
     )
 
-    def _get_topk(array_in, result):
+    def _get_topk(array_in, result, offset=0):
         if is_1d:
             array_in = dpt.reshape(array_in, (1, -1))
 
@@ -266,7 +266,7 @@ def _make_get_topk_kernel(
             threshold,
             n_threshold_occurences_in_topk,
             n_threshold_occurences_in_data,
-        ) = get_topk_threshold(array_in)
+        ) = get_topk_threshold(array_in, offset)
 
         # TODO: can be optimized if array_in.shape[0] < n_rows
         result_col_idx = _initialize_result_col_idx()
@@ -558,7 +558,7 @@ def _make_get_topk_threshold_kernel(n_rows, n_cols, k, dtype, device, group_size
         fill_value=0, shape=(n_rows,), work_group_size=work_group_size, dtype=np.int64
     )
 
-    def _get_topk_threshold(array_in):
+    def _get_topk_threshold(array_in, offset=0):
         # Use variables that are local to the closure, so it can be manipulated more
         # easily in the main loop
         k_in_subset, n_active_rows, new_n_active_rows, threshold_count = (
@@ -582,7 +582,8 @@ def _make_get_topk_threshold_kernel(n_rows, n_cols, k, dtype, device, group_size
         array_in_uint = dpt.usm_ndarray(
             shape=(effective_n_rows, n_cols),
             dtype=uint_type,
-            buffer=array_in,
+            buffer=array_in.usm_data,
+            offset=offset * n_cols,
         )
 
         # The main loop: each iteration consists in sorting partially the data on the
