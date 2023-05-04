@@ -12,8 +12,10 @@ This package requires working with the following branch of scikit-learn:
 A step-by-step guide is provided in this README for installing `numba-dpex`, along with
 the `feature/engine-api` branch of `scikit-learn` and this plugin from source.
 
-🚧 TODO: package `feature/engine-api` and `sklearn-numba-dpex` to have everything
-installable in `conda` with a single one-liner.
+🚧 TODO: at the moment it is unusually complicated to install this plugin and its
+dependencies. Once `feature/engine-api` is merge and released in scikit-learn and we aim
+to make it possible to install `sklearn-numba-dpex` and all its dependencies with a one
+liner `conda install` command or `pip install` or both.
 
 ## List of Included Engines
 
