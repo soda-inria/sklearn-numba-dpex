@@ -48,7 +48,7 @@ class KMeansEngine(KMeansCythonEngine):
     Notes
     -----
     The implementation has been extensively inspired by the "Fused Fixed" strategy
-    exposed in [1]_, along with its reference implementatino by the same authors [2]_,
+    exposed in [1]_, along with its reference implementation by the same authors [2]_,
     and the reader can also refer to the complementary slide deck [3]_  with schemas
     that intuitively explain the main computation.
 
