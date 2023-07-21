@@ -48,7 +48,7 @@ class KMeansEngine(KMeansCythonEngine):
     Notes
     -----
     The implementation has been extensively inspired by the "Fused Fixed" strategy
-    exposed in [1]_, along with its reference implementatino by the same authors [2]_,
+    exposed in [1]_, along with its reference implementation by the same authors [2]_,
     and the reader can also refer to the complementary slide deck [3]_  with schemas
     that intuitively explain the main computation.
 
@@ -195,7 +195,7 @@ class KMeansEngine(KMeansCythonEngine):
             # TODO: write a kernel ? or replace with better equivalent when available ?
             # Relevant issue: https://github.com/IntelPython/dpctl/issues/1003
             centers_t = dpt.concat(
-                [dpt.expand_dims(X[center_idx], axes=1) for center_idx in centers_idx],
+                [dpt.expand_dims(X[center_idx], axis=1) for center_idx in centers_idx],
                 axis=1,
             )
 

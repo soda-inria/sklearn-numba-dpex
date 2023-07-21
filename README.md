@@ -127,22 +127,11 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             numba-dpex=0.20.0=py310hfc4b9b4_1 "intel::dpcpp_linux-64"
+             numba-dpex=0.21.1=py310h776878d_35
 ```
 
 Note that different versions of `sklearn_numba_dpex` can require to pin different
 versions, builds or channels in this last command.
-
-An additional command is currently required to work around missing Intel CPU OpenCL
-runtime activation. To resolve it, one needs to set environment variables for the
-newly created environment:
-
-```bash
-conda env config vars set \
-        OCL_ICD_FILENAMES_RESET=1 \
-        OCL_ICD_FILENAMES=libintelocl.so \
-        --name "$CONDA_DPEX_ENV_NAME"
-```
 
 `scikit-learn` must be installed from source using an experimental version available on
 [`feature/engine-api`](https://github.com/scikit-learn/scikit-learn/tree/feature/engine-api), a
