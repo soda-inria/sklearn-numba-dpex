@@ -73,9 +73,13 @@ ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 ARG DPNP_GIT_BRANCH=0.12.1
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
-ARG NUMBA_DPEX_GIT_BRANCH=0.21.1
+# `numba_dpex` often requires to install from arbitrary git commits, so the
+# full history of the given branch will be cloned (as opposed to only fetching
+# files for the most recent ref), and arbirary references on this branch can be
+# selected.
+ARG NUMBA_DPEX_GIT_BRANCH=main
+ARG NUMBA_DPEX_GIT_REF=4d4fc12b80423f7c1f9c845faeba5a3438464190
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
-ARG NUMBA_DPEX_ACTIVATE_ATOMICS_FP_NATIVE=1
 
 ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
 ARG DPCPP_LLVM_SPIRV_GIT_URL=https://github.com/IntelPython/dpcpp-llvm-spirv/
@@ -151,6 +155,8 @@ FROM base_config AS python_builder
 ARG PYTHON_VERSION
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYENV_INSTALLER_REF
+ARG INTEL_PYPI_URL
+ARG BASE_PYPI_URL
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         make \
         build-essential \
@@ -182,6 +188,8 @@ RUN CFLAGS="-O2 -pipe" \
 RUN python -m venv $VIRTUAL_ENV \
     && pip install -U pip \
     && pip install -U setuptools \
+    && pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
+        numpy${NUMPY_VERSION} numba${NUMBA_VERSION} \
     && pip cache purge
 
 
@@ -223,7 +231,6 @@ COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
 COPY --from=python_builder $VIRTUAL_ENV $VIRTUAL_ENV
 # install some common python prerequisites for dpctl, dpnp and numba-dpex builds
 RUN pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
-        numpy${NUMPY_VERSION} numba${NUMBA_VERSION} \
         wheel${WHEEL_VERSION} cython${CYTHON_VERSION} \
         scikit-build${SCIKIT_BUILD_VERSION} \
     && pip cache purge
@@ -301,6 +308,7 @@ ARG TMPDIR
 ARG ONEAPI_INSTALL_DIR
 ARG NUMBA_DPEX_BUILD_DIR=$TMPDIR/numba_dpex
 ARG NUMBA_DPEX_GIT_BRANCH
+ARG NUMBA_DPEX_GIT_REF
 ARG NUMBA_DPEX_GIT_URL
 ARG INTEL_PYPI_URL
 ARG BASE_PYPI_URL
@@ -315,7 +323,8 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && pip cache purge \
     && mkdir -p $NUMBA_DPEX_BUILD_DIR \
     && cd $NUMBA_DPEX_BUILD_DIR \
-    && git clone --recursive -b $NUMBA_DPEX_GIT_BRANCH --depth 1 $NUMBA_DPEX_GIT_URL . \
+    && git clone --recursive -b $NUMBA_DPEX_GIT_BRANCH $NUMBA_DPEX_GIT_URL . \
+    && git checkout $NUMBA_DPEX_GIT_REF \
     && source $ONEAPI_INSTALL_DIR/setvars.sh \
     # HACK: currently, there is an issue with the bdist_wheel configuration for numba_dpex
     # that causes missing files in the final tarball.
@@ -358,6 +367,4 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         spirv-tools spirv-headers \
     && rm -Rf /var/lib/apt/lists/*
-ARG NUMBA_DPEX_ACTIVATE_ATOMICS_FP_NATIVE
-ENV NUMBA_DPEX_ACTIVATE_ATOMICS_FP_NATIVE=$NUMBA_DPEX_ACTIVATE_ATOMICS_FP_NATIVE
 CMD ["/bin/bash"]
