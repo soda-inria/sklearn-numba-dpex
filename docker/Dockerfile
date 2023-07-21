@@ -178,7 +178,7 @@ RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         ca-certificates \
      && rm -rf /var/lib/apt/lists/*
 RUN curl -L \
-    https://github.com/pyenv/pyenv-installer/raw/${PYENV_INSTALLER_REF}/bin/pyenv-installer \
+    https://raw.githubusercontent.com/pyenv/pyenv-installer/${PYENV_INSTALLER_REF}/bin/pyenv-installer \
     | bash
 RUN CFLAGS="-O2 -pipe" \
     CONFIGURE_OPTS="--enable-shared" \
