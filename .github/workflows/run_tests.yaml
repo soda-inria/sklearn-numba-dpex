@@ -26,8 +26,18 @@ jobs:
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
+      # HACK: We force the test `test_need_to_workaround_numba_dpex_906` to run
+      # in a separate process. Indeed, the test only requires action if it fails
+      # in all circumstances, but should be ignored as long as it fails only
+      # occasionally. With recent updates the test started to fail when ran
+      # along all the other tests, while still succeeding when singled out. See
+      #  https://github.com/IntelPython/numba-dpex/issues/906 for more context
+      # on the issue.
     - name: Run sklearn_numba_dpex tests
-      run: pytest -v sklearn_numba_dpex/
+      run: pytest -v sklearn_numba_dpex/ -k "not test_need_to_workaround_numba_dpex_906"
+
+    - name: Run sklearn_numba_dpex tests
+      run: pytest -v sklearn_numba_dpex/ -k test_need_to_workaround_numba_dpex_906
 
       # TODO: run those tests in a separate pipeline
       # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type
