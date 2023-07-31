@@ -136,7 +136,7 @@ class KMeansEngine(KMeansCythonEngine):
         X = self._validate_data(X)
         estimator._check_params_vs_input(X)
 
-        self.sample_weight = self._check_sample_weight(sample_weight, X)
+        sample_weight = self._check_sample_weight(sample_weight, X)
 
         init = self.estimator.init
         init_is_array_like = _is_arraylike_not_scalar(init)
@@ -150,7 +150,7 @@ class KMeansEngine(KMeansCythonEngine):
             self.tol,
             self.sample_weight_is_uniform,
         ) = prepare_data_for_lloyd(
-            X.T, init, estimator.tol, self.sample_weight, estimator.copy_x
+            X.T, init, estimator.tol, sample_weight, estimator.copy_x
         )
 
         if self._is_in_testing_mode and X_mean is not None:
@@ -160,7 +160,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         self.random_state = check_random_state(estimator.random_state)
 
-        return X_t.T, y, self.sample_weight
+        return X_t.T, y, sample_weight
 
     def unshift_centers(self, X, best_centers):
         if (X_mean := self.X_mean) is None:
@@ -171,7 +171,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         restore_data_after_lloyd(X.T, best_centers.T, X_mean, self.estimator.copy_x)
 
-    def init_centroids(self, X):
+    def init_centroids(self, X, sample_weight):
         init = self.init
         n_clusters = self.estimator.n_clusters
 
@@ -179,7 +179,7 @@ class KMeansEngine(KMeansCythonEngine):
             centers_t = init
 
         elif isinstance(init, str) and init == "k-means++":
-            centers_t, _ = self._kmeans_plusplus(X)
+            centers_t, _ = self._kmeans_plusplus(X, sample_weight)
 
         elif callable(init):
             centers = init(X, self.estimator.n_clusters, random_state=self.random_state)
@@ -201,11 +201,11 @@ class KMeansEngine(KMeansCythonEngine):
 
         return centers_t
 
-    def _kmeans_plusplus(self, X):
+    def _kmeans_plusplus(self, X, sample_weight):
         n_clusters = self.estimator.n_clusters
 
         centers_t, center_indices = kmeans_plusplus(
-            X.T, self.sample_weight, n_clusters, self.random_state
+            X.T, sample_weight, n_clusters, self.random_state
         )
         return centers_t, center_indices
 
@@ -312,9 +312,10 @@ class KMeansEngine(KMeansCythonEngine):
             accepted_dtypes = [np.float64, np.float32]
         else:
             accepted_dtypes = [np.float32]
+        accepted_dtypes = [np.dtype(dtype) for dtype in accepted_dtypes]
 
         if self._is_in_testing_mode and reset:
-            if (X_dtype := X.dtype) not in accepted_dtypes:
+            if (X_dtype := np.dtype(X.dtype)) not in accepted_dtypes:
                 self.estimator._output_dtype = np.float64
             else:
                 self.estimator._output_dtype = X_dtype
@@ -342,7 +343,7 @@ class KMeansEngine(KMeansCythonEngine):
         """Adapted from sklearn.utils.validation._check_sample_weight to be compatible
         with Array API dispatch"""
         n_samples = X.shape[0]
-        dtype = X.dtype
+        dtype = np.dtype(X.dtype)
         device = X.device.sycl_device
         if sample_weight is None:
             sample_weight = dpt.ones(n_samples, dtype=dtype, device=device)
@@ -381,7 +382,7 @@ class KMeansEngine(KMeansCythonEngine):
         with _validate_with_array_api(device):
             init = check_array(
                 init,
-                dtype=X.dtype,
+                dtype=np.dtype(X.dtype),
                 accept_sparse=False,
                 copy=False,
                 order=self.order,

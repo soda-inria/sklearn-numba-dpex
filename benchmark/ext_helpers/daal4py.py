@@ -24,7 +24,7 @@ class DAAL4PYEngine(KMeansCythonEngine):
         return super().prepare_fit(X, y, sample_weight)
 
     @support_usm_ndarray()
-    def init_centroids(self, X):
+    def init_centroids(self, X, sample_weight):
         init = self.init
         try:
             _, centers_init = _daal4py_compute_starting_centroids(

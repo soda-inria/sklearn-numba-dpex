@@ -155,9 +155,9 @@ conda create --yes --name sklearn-dev \
                    "numpy==$DPEX_NUMPY_VERSION" \
                    scipy cython joblib threadpoolctl pytest compilers
 conda activate sklearn-dev
-git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api" --depth 1
+git clone https://github.com/fcharras/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
-git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
+git checkout 80f58bf10d2f8b8cb43f6253bbe13413985a1413
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
 cd dist/
@@ -218,9 +218,9 @@ Once you have loaded into the container, follow those instructions to install th
 `feature/engine-api` branch of scikit-learn:
 
 ```bash
-git clone https://github.com/scikit-learn/scikit-learn -b "feature/engine-api" --depth 1
+git clone https://github.com/fcharras/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
-git checkout a897a34d7d989bf317de17f80948639c0fd5ecf1
+git checkout 80f58bf10d2f8b8cb43f6253bbe13413985a1413
 pip install -e .
 cd ..
 ```
