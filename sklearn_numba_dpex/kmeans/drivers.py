@@ -744,8 +744,6 @@ def kmeans_plusplus(
     max_work_group_size = device.max_work_group_size
     sub_group_size = 8
 
-    # NB: the implementation differs from sklearn implementation with regards to
-    # sample_weight, which is ignored in sklearn, but used here.
     # TODO: check that this implementation is correct when samples weights aren't
     # uniform.
 

@@ -12,6 +12,7 @@ def make_pairwise_ops_base_kernel_funcs(
     window_n_centroids,
     ops,
     dtype,
+    device,
     initialize_window_of_centroids_half_l2_norms=False,
 ):
     # The kernel funcs in this file must behave differently depending on whether the
@@ -44,6 +45,7 @@ def make_pairwise_ops_base_kernel_funcs(
         n_clusters,
         ops,
         dtype,
+        device,
     )
 
     last_window_n_centroids = n_clusters % window_n_centroids or window_n_centroids
@@ -167,7 +169,7 @@ def make_pairwise_ops_base_kernel_funcs(
 
 
 class _KMeansKernelFuncFactory:
-    def __init__(self, n_samples, n_features, n_clusters, ops, dtype):
+    def __init__(self, n_samples, n_features, n_clusters, ops, dtype, device):
         self.n_samples = n_samples
         self.n_features = n_features
         self.n_clusters = n_clusters
@@ -182,6 +184,7 @@ class _KMeansKernelFuncFactory:
             )
 
         self.dtype = dtype
+        self.device = device
 
     def make_initialize_window_half_l2_norm_kernel_func(self, window_n_centroids):
         @dpex.func
@@ -261,6 +264,8 @@ class _KMeansKernelFuncFactory:
         n_samples = self.n_samples
         accumulate_dot_product = self.accumulate_dot_product
 
+        is_cpu = self.device.has_aspect_cpu
+
         @dpex.func
         # fmt: off
         def _accumulate_sum_of_ops(
@@ -298,7 +303,20 @@ class _KMeansKernelFuncFactory:
                         result[window_centroid_idx] = increment
 
                     else:
-                        result[window_centroid_idx] += increment
+                        # HACK: with 2023.2.0 some tests on CPU started to
+                        # fail and it was tracked down to this instruction
+                        # that seems to be translated into incorrect compiled
+                        # code. There would be no other reason to use atomic
+                        # add here since result is private, there can't be
+                        # any conflicts between threads.
+                        # TODO: find a minimal reproducer and report upstream.
+                        if is_cpu:
+                            dpex.atomic.add(
+                                result, window_centroid_idx, increment
+                            )
+
+                        else:
+                            result[window_centroid_idx] += increment
 
         return _accumulate_sum_of_ops
 

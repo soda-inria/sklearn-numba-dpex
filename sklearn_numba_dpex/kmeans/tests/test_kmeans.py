@@ -111,6 +111,18 @@ def test_kmeans_same_results(dtype, array_constr, test_attributes_auto_convert):
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_predict_centers(dtype):
+    kmeans = KMeans(n_clusters=10)
+    kmeans._n_threads = 1
+    cluster_centers = kmeans.cluster_centers_ = dpt.asarray(
+        dpt.reshape(dpt.arange(0, 100, dtype=dtype), (10, 10)), copy=True
+    )
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        cluster_centers_score = asnumpy(kmeans.predict(cluster_centers))
+    assert_array_equal(cluster_centers_score, np.arange(10))
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_kmeans_relocated_clusters(dtype):
     """Copied and adapted from sklearn's test_kmeans_relocated_clusters"""
 
@@ -276,8 +288,10 @@ def test_kmeans_plusplus_same_quality(dtype):
 
         kmeans.set_params(random_state=random_state)
         engine = KMeansEngine(kmeans)
-        X_prepared, *_ = engine.prepare_fit(X)
-        engine_kmeans_plusplus_centers_t = engine.init_centroids(X_prepared)
+        X_prepared, _, sample_weight = engine.prepare_fit(X)
+        engine_kmeans_plusplus_centers_t = engine.init_centroids(
+            X_prepared, sample_weight
+        )
         engine_kmeans_plusplus_centers = engine_kmeans_plusplus_centers_t.T
         engine.unshift_centers(X_prepared, engine_kmeans_plusplus_centers)
         scores_engine_kmeans_plusplus.append(
@@ -305,7 +319,7 @@ def test_kmeans_plusplus_same_quality(dtype):
         ],
         [
             -1827.22702,
-            -1027.674243,
+            -892.39115,
             -865.257501,
         ],
     )
@@ -330,9 +344,9 @@ def test_kmeans_plusplus_output(array_constr, dtype):
         init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    X_prepared, *_ = engine.prepare_fit(X, sample_weight=sample_weight)
+    X_prepared, _, sample_weight = engine.prepare_fit(X, sample_weight=sample_weight)
 
-    centers_t, indices = engine._kmeans_plusplus(X_prepared)
+    centers_t, indices = engine._kmeans_plusplus(X_prepared, sample_weight)
     centers = centers_t.T
     engine.unshift_centers(X_prepared, centers)
     centers = asnumpy(centers)
@@ -364,15 +378,15 @@ def test_kmeans_plusplus_dataorder():
         init="k-means++", n_clusters=n_clusters_sklearn_test, random_state=random_state
     )
     engine = KMeansEngine(estimator)
-    X_sklearn_test_prepared, *_ = engine.prepare_fit(X_sklearn_test)
-    centers_c = engine.init_centroids(X_sklearn_test_prepared)
+    X_sklearn_test_prepared, _, sample_weight = engine.prepare_fit(X_sklearn_test)
+    centers_c = engine.init_centroids(X_sklearn_test_prepared, sample_weight)
     centers_c = asnumpy(centers_c.T)
 
     X_fortran = np.asfortranarray(X_sklearn_test)
     # The engine is re-created to reset random state
     engine = KMeansEngine(estimator)
-    X_fortran_prepared, *_ = engine.prepare_fit(X_fortran)
-    centers_fortran = engine.init_centroids(X_fortran_prepared)
+    X_fortran_prepared, _, sample_weight = engine.prepare_fit(X_fortran)
+    centers_fortran = engine.init_centroids(X_fortran_prepared, sample_weight)
     centers_fortran = asnumpy(centers_fortran.T)
 
     assert_allclose(centers_c, centers_fortran)
