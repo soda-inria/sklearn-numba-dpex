@@ -111,6 +111,18 @@ def test_kmeans_same_results(dtype, array_constr, test_attributes_auto_convert):
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
+def test_kmeans_predict_centers(dtype):
+    kmeans = KMeans(n_clusters=10)
+    kmeans._n_threads = 1
+    cluster_centers = kmeans.cluster_centers_ = dpt.asarray(
+        dpt.reshape(dpt.arange(0, 100, dtype=dtype), (10, 10)), copy=True
+    )
+    with config_context(engine_provider="sklearn_numba_dpex"):
+        cluster_centers_score = asnumpy(kmeans.predict(cluster_centers))
+    assert_array_equal(cluster_centers_score, np.arange(10))
+
+
+@pytest.mark.parametrize("dtype", float_dtype_params)
 def test_kmeans_relocated_clusters(dtype):
     """Copied and adapted from sklearn's test_kmeans_relocated_clusters"""
 
