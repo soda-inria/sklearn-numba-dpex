@@ -157,7 +157,7 @@ conda create --yes --name sklearn-dev \
 conda activate sklearn-dev
 git clone https://github.com/fcharras/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
-git checkout 80f58bf10d2f8b8cb43f6253bbe13413985a1413
+git checkout 2ccfc8c4bdf66db005d7681757b4145842944fb9
 python setup.py bdist_wheel
 conda activate $CONDA_DPEX_ENV_NAME
 cd dist/
@@ -220,7 +220,7 @@ Once you have loaded into the container, follow those instructions to install th
 ```bash
 git clone https://github.com/fcharras/scikit-learn -b "feature/engine-api" --depth 1
 cd scikit-learn
-git checkout 80f58bf10d2f8b8cb43f6253bbe13413985a1413
+git checkout 2ccfc8c4bdf66db005d7681757b4145842944fb9
 pip install -e .
 cd ..
 ```
