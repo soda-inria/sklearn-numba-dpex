@@ -815,7 +815,7 @@ def kmeans_plusplus(
 
     centers_t = dpt.empty((n_features, n_clusters), dtype=compute_dtype, device=device)
 
-    center_indices = dpt.full((n_clusters,), -1, dtype=np.int32)
+    center_indices = dpt.full((n_clusters,), -1, dtype=np.int32, device=device)
 
     sq_distances_t = dpt.empty(
         (n_local_trials, n_samples), dtype=compute_dtype, device=device

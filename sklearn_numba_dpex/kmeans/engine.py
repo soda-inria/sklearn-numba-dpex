@@ -187,13 +187,12 @@ class KMeansEngine(KMeansCythonEngine):
 
         else:
             # NB: sampling without replacement must be executed sequentially so
-            # it's better done on CPU
+            # it's better done on CPU ?
             sample_weight_numpy = dpt.asnumpy(sample_weight)
             p = sample_weight_numpy / sample_weight_numpy.sum()
             centers_idx = self.random_state.choice(
                 X.shape[0], size=n_clusters, replace=False, p=p
             )
-            # Poor man's fancy indexing
             centers_t = dpt.take(X.T, dpt.asarray(centers_idx), axis=1)
 
         return centers_t
@@ -324,7 +323,7 @@ class KMeansEngine(KMeansCythonEngine):
                     accept_sparse=False,
                     dtype=accepted_dtypes,
                     order=self.order,
-                    copy=False,
+                    copy=self.estimator.copy_x,
                     reset=reset,
                     force_all_finite=True,
                     estimator=self.estimator,
@@ -381,7 +380,7 @@ class KMeansEngine(KMeansCythonEngine):
                 init,
                 dtype=np.dtype(X.dtype),
                 accept_sparse=False,
-                copy=False,
+                copy=True,
                 order=self.order,
                 force_all_finite=True,
                 ensure_2d=True,
