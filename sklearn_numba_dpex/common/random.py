@@ -14,7 +14,7 @@ from ._utils import _get_sequential_processing_device
 # same algorithm in the package `randomgen`.
 
 # numba.cuda.random: https://github.com/numba/numba/blob/0.56.3/numba/cuda/random.py
-# randomgen: https://github.com/bashtage/randomgen/blob/v1.23.1/randomgen/xoroshiro128.pyx  # noqa
+# randomgen: https://github.com/bashtage/randomgen/blob/v1.26.0/randomgen/xoroshiro128.pyx  # noqa
 
 # NB1: we implement xoroshiro128++ rather than just xoroshiro128+, which is preferred.
 # Reference resource about PRNG: https://prng.di.unimi.it/
@@ -230,63 +230,6 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
         states[state_idx, one_idx] = s1
 
     init_const_1 = np.uint64(0)
-
-    # TODO: it seems that the reference python implementation in the package
-    # `randomgen` that inspired this code contains errors.
-    # There's an issue here: https://github.com/bashtage/randomgen/issues/321
-    # This website https://prng.di.unimi.it/ seems to provide a ground truth
-    # implementation at https://prng.di.unimi.it/xoroshiro128plusplus.c but is not
-    # interfaced with python.
-    # We choose to mimic the reference implementation given in C even if there's no
-    # easy, reproducible set of instructions to test that it's working as expected.
-    # If the `randomgen` current implementation proves to be good, then the following
-    # block should be used instead, and the tests should be adapted. Else, the block
-    # can be removed.
-
-    # jump_const_1 = uint64(0xDF900294D8F554A5)
-    # jump_const_2 = uint64(0x170865DF4B3201FC)
-    # jump_const_3 = uint64(1)
-    # jump_init = uint64(0)
-    # long_2 = int64(2)
-    # long_64 = int64(64)
-
-    # @dpex.func
-    # def _xoroshiro128pp_jump(states, state_idx):
-    #     """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
-    #     s0 = jump_init
-    #     s1 = jump_init
-
-    #     for i in range(long_2):
-    #         if i == zero_idx:
-    #             jump_const = jump_const_1
-    #         else:
-    #             jump_const = jump_const_2
-    #         for b in range(long_64):
-    #             if jump_const & jump_const_3 << uint32(b):
-    #                 s0 ^= states[state_idx, zero_idx]
-    #                 s1 ^= states[state_idx, one_idx]
-    #             # NB: this is _xoroshiro128p_next, not _xoroshiro128pp_next
-    #             _xoroshiro128p_next(states, state_idx)
-
-    #     states[state_idx, zero_idx] = s0
-    #     states[state_idx, one_idx] = s1
-
-    # next_rot_p_1 = uint32(24)
-    # next_rot_p_2 = uint32(16)
-    # next_rot_p_3 = uint32(37)
-
-    # @dpex.func
-    # def _xoroshiro128p_next(states, state_idx):
-    #     """Return the next random uint64 and advance the RNG in states[state_idx]."""
-    #     s0 = states[state_idx, zero_idx]
-    #     s1 = states[state_idx, one_idx]
-    #     result = s0 + s1
-
-    #     s1 ^= s0
-    #     states[state_idx, zero_idx] = _rotl(s0, next_rot_p_1) ^ s1 ^ (s1 << next_rot_p_2)  # noqa
-    #     states[state_idx, one_idx] = _rotl(s1, next_rot_p_3)
-
-    #     return result
 
     @dpex.kernel
     def init_xoroshiro128pp_states(states, seed):

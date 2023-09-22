@@ -309,7 +309,7 @@ class _KMeansKernelFuncFactory:
                         # code. There would be no other reason to use atomic
                         # add here since result is private, there can't be
                         # any conflicts between threads.
-                        # TODO: find a minimal reproducer and report upstream.
+                        # see https://github.com/IntelPython/numba-dpex/issues/1106
                         if is_cpu:
                             dpex.atomic.add(
                                 result, window_centroid_idx, increment
