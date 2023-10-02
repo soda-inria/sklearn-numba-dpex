@@ -33,8 +33,6 @@ classifiers = [
 ]
 
 
-# TODO: remove pyopencl when dpctl exposes preferred_work_group_size_multiple
-# see https://github.com/IntelPython/dpctl/issues/886
 dependencies = [
     "scikit-learn",
     "array_api_compat",

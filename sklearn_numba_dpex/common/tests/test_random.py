@@ -51,23 +51,6 @@ def test_xoroshiro128pp_raw():
 
     assert expected_res_1 == actual_res_1
 
-    # TODO: currently the `randomgen` code snippet returns the following result:
-    # expected_res_2 = [
-    #     9942514532200612717,
-    #     9103904774276862560,
-    #     11668728844103653792,
-    #     15855991950793068140,
-    #     757481706500168315,
-    #     9624528390636036977,
-    #     5518335522560806466,
-    #     11098424226258286153,
-    #     8475596632683116788,
-    #     12040925107571057860,
-    # ]
-    # but it seems to be wrong. Refer to the sklearn_numba_dpex/common/random.py file
-    # and https://github.com/bashtage/randomgen/issues/321 for more details on the
-    # issue, and adapt the test or remove this block once it is resolved.
-
     expected_res_2 = [
         16052925335932940643,
         13241858892588731496,
