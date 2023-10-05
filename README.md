@@ -32,15 +32,14 @@ are available.
 
 ⚠⚠⚠ **WARNING** ⚠⚠⚠: the guide provides instructions to install the most recent
 `numba_dpex` release that this repo is known to be compatible with for gpu execution.
-However, recent releases dropped support for atomics operations on cpu, and as a
-consequence running on cpu does not work anymore. For keeping compatibility with cpu
-execution, the recommended `numba_dpex` tag is
+However, recent releases were found sometimes unstable on cpu. For keeping
+stable compatibility with cpu execution, the recommended `numba_dpex` tag is
 [0.21.0dev1](https://github.com/IntelPython/numba-dpex/releases/tag/0.21.0dev1) .
 Refer to local instructions to build it from source. A python wheel is also
 included in the docker image at the location `/opt/numba_dpex/stable-cpu` and is used
 to run the tests on cpu with our default github workflow cpu-only runner. Information
-about support for atomics on cpu will be updated on the corresponding [ticket at
-`numba_dpex` issue tracker](https://github.com/IntelPython/numba-dpex/issues/1156).
+about stability issues on cpu for newer releases will be updated on the corresponding
+[ticket at `numba_dpex` issue tracker](https://github.com/IntelPython/numba-dpex/issues/1156).
 
 #### Using a conda installation
 

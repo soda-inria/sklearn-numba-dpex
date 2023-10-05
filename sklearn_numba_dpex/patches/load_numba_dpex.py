@@ -1,4 +1,5 @@
 import inspect
+import warnings
 
 from llvmlite import binding as ll
 from numba_dpex import config
@@ -47,9 +48,9 @@ def _load_numba_dpex_with_patches(with_patches=True):
     )
 
     if _actual_optimize_final_module_code != _expected_optimize_final_module_code:
-        raise RuntimeError(
-            "Cannot apply patches to `numba_dpex` because the source code is has"
-            " changed."
+        warnings.warn(
+            "Cannot apply patches to `numba_dpex` because the source code has changed.",
+            RuntimeWarning,
         )
 
     def _monkey_patch_optimize_final_module(self):

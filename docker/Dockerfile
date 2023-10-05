@@ -336,8 +336,9 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && cp dist/numba_dpex*.whl $TMPDIR \
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
-# HACK: because it's the last version that supports atomics on CPU, also build a wheel
-# and add it to the image to it can be used for test pipeline on cpu-only runners.
+# HACK: because it's the last version on which sklearn_numba_dpex is stable on cpu, also
+# build a wheel and add it to the image so it can be used for test pipeline on cpu-only
+# runners.
 FROM build_environment AS numba_dpex_builder_cpu_stable
 SHELL ["/bin/bash", "-c"]
 ARG TMPDIR
@@ -389,7 +390,7 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
     --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
     --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
     --mount=type=bind,target=$TMPDIR/numba_dpex,source=$TMPDIR,from=numba_dpex_builder \
-    --mount=type=bind,target=$TMPDIR/cpu-stable,source=$TMPDIR,from=numba_dpex_builder_cpu_stable \
+    --mount=type=bind,target=$TMPDIR/cpu-stable,source=$TMPDIR/cpu-stable,from=numba_dpex_builder_cpu_stable \
     --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
     pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \

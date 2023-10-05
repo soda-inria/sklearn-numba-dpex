@@ -23,8 +23,8 @@ jobs:
     - name: Install pytest, sklearn branch "feature/engine-api", and sklearn-numba-dpex
       run: pip install pytest git+https://github.com/scikit-learn/scikit-learn.git@2ccfc8c4bdf66db005d7681757b4145842944fb9#egg=scikit-learn -e .
 
-      # HACK: install a version of numba_dpex that supports cpu atomics and can run all
-      # unit tests on cpu.
+      # HACK: install a version of numba_dpex that is known to be stable on cpu and can
+      # run all unit tests on cpu.
       # See https://github.com/IntelPython/numba-dpex/issues/1156
     - name: Install a numba_dpex version that supports atomics on cpu
       run: pip install /opt/numba_dpex/cpu-stable/numba_dpex*.whl
