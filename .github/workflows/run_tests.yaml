@@ -23,21 +23,17 @@ jobs:
     - name: Install pytest, sklearn branch "feature/engine-api", and sklearn-numba-dpex
       run: pip install pytest git+https://github.com/scikit-learn/scikit-learn.git@2ccfc8c4bdf66db005d7681757b4145842944fb9#egg=scikit-learn -e .
 
+      # HACK: install a version of numba_dpex that is known to be stable on cpu and can
+      # run all unit tests on cpu.
+      # See https://github.com/IntelPython/numba-dpex/issues/1156
+    - name: Install a numba_dpex version that supports atomics on cpu
+      run: pip install /opt/numba_dpex/cpu-stable/numba_dpex*.whl
+
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
-      # HACK: We force the test `test_need_to_workaround_numba_dpex_906` to run
-      # in a separate process. Indeed, the test only requires action if it fails
-      # in all circumstances, but should be ignored as long as it fails only
-      # occasionally. With recent updates the test started to fail when ran
-      # along all the other tests, while still succeeding when singled out. See
-      #  https://github.com/IntelPython/numba-dpex/issues/906 for more context
-      # on the issue.
     - name: Run sklearn_numba_dpex tests
-      run: pytest -v sklearn_numba_dpex/ -k "not test_need_to_workaround_numba_dpex_906"
-
-    - name: Run sklearn_numba_dpex tests
-      run: pytest -v sklearn_numba_dpex/ -k test_need_to_workaround_numba_dpex_906
+      run: pytest -v sklearn_numba_dpex/
 
       # TODO: run those tests in a separate pipeline
       # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type

@@ -105,8 +105,8 @@ def _check_max_work_group_size(
         return work_group_size
 
 
-# This is the value found for Intel Corpowork_group_size_ration TigerLake-LP GT2
-# [Iris Xe Graphics] GPU.
+# This is the value found for Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics]
+# GPU.
 _GLOBAL_MEM_CACHE_SIZE_DEFAULT = 1048576  # 2**20
 
 
