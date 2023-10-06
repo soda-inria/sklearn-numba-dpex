@@ -30,16 +30,11 @@ Getting started requires a working environment for using `numba_dpex`. Currently
 [conda install](#using-a-conda-installation) or a [docker image](#using-the-docker-image)
 are available.
 
-⚠⚠⚠ **WARNING** ⚠⚠⚠: the guide provides instructions to install the most recent
-`numba_dpex` release that this repo is known to be compatible with for gpu execution.
-However, recent releases were found sometimes unstable on cpu. For keeping
-stable compatibility with cpu execution, the recommended `numba_dpex` tag is
-[0.21.0dev1](https://github.com/IntelPython/numba-dpex/releases/tag/0.21.0dev1) .
-Refer to local instructions to build it from source. A python wheel is also
-included in the docker image at the location `/opt/numba_dpex/stable-cpu` and is used
-to run the tests on cpu with our default github workflow cpu-only runner. Information
-about stability issues on cpu for newer releases will be updated on the corresponding
-[ticket at `numba_dpex` issue tracker](https://github.com/IntelPython/numba-dpex/issues/1156).
+⚠⚠⚠ **WARNING** ⚠⚠⚠: latest `numba_dpex` releases might have stability issues. If you
+run into segfaults or wrong outputs, try disabling JIT compilation optimizations by
+setting the environment variable `NUMBA_DPEX_OPT=0`. If you discover minimal
+reproducers for such stability issues, please report at
+[`numba_dpex` issue tracker](https://github.com/IntelPython/numba-dpex/issues/).
 
 #### Using a conda installation
 

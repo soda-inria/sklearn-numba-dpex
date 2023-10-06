@@ -47,7 +47,6 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         window_n_centroids,
         ops="squared_diff",
         dtype=dtype,
-        device=device,
         initialize_window_of_centroids_half_l2_norms=False,
     )
 

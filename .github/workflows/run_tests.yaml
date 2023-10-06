@@ -23,17 +23,11 @@ jobs:
     - name: Install pytest, sklearn branch "feature/engine-api", and sklearn-numba-dpex
       run: pip install pytest git+https://github.com/scikit-learn/scikit-learn.git@2ccfc8c4bdf66db005d7681757b4145842944fb9#egg=scikit-learn -e .
 
-      # HACK: install a version of numba_dpex that is known to be stable on cpu and can
-      # run all unit tests on cpu.
-      # See https://github.com/IntelPython/numba-dpex/issues/1156
-    - name: Install a numba_dpex version that is stable on cpu
-      run: pip install /opt/numba_dpex/cpu-stable/numba_dpex*.whl
-
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
     - name: Run sklearn_numba_dpex tests
-      run: pytest -v sklearn_numba_dpex/
+      run: NUMBA_DPEX_OPT=0 pytest -v sklearn_numba_dpex/
 
       # TODO: run those tests in a separate pipeline
       # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type
@@ -46,4 +40,4 @@ jobs:
       # activated when the environment variable SKLEARN_NUMBA_DPEX_TESTING_MODE is set
       # to 1.
     - name: Run sklearn test suites with sklearn_numba_dpex engines
-      run: SKLEARN_RUN_FLOAT32_TESTS=1 SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
+      run: NUMBA_DPEX_OPT=0 SKLEARN_RUN_FLOAT32_TESTS=1 SKLEARN_NUMBA_DPEX_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_numba_dpex --pyargs sklearn.cluster.tests.test_k_means
