@@ -77,8 +77,14 @@ ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 # full history of the given branch will be cloned (as opposed to only fetching
 # files for the most recent ref), and arbirary references on this branch can be
 # selected.
-ARG NUMBA_DPEX_GIT_BRANCH=0.22.0dev0
-ARG NUMBA_DPEX_GIT_REF=0.22.0dev0
+ARG NUMBA_DPEX_GIT_BRANCH=main
+ARG NUMBA_DPEX_GIT_REF=511241f1956eff7c916ebe876a7b3586400b5a9a
+# If not blank, this will override the version that is inferred by versioneer based on
+# the reference of the commit being used for the build. Use it especially when
+# installing an arbitrary commit from the main branch, in which case versioneer
+# resolve the version to 0.0.0 which can cause downstream dependency resolution issues
+# for packages that depend on numba_dpex .
+ARG NUMBA_DPEX_VERSION_OVERRIDE=0.22.0dev0
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
@@ -309,6 +315,7 @@ ARG NUMBA_DPEX_BUILD_DIR=$TMPDIR/numba_dpex
 ARG NUMBA_DPEX_GIT_BRANCH
 ARG NUMBA_DPEX_GIT_REF
 ARG NUMBA_DPEX_GIT_URL
+ARG NUMBA_DPEX_VERSION_OVERRIDE
 ARG INTEL_PYPI_URL
 ARG BASE_PYPI_URL
 RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
@@ -324,13 +331,8 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && cd $NUMBA_DPEX_BUILD_DIR \
     && git clone --recursive -b $NUMBA_DPEX_GIT_BRANCH $NUMBA_DPEX_GIT_URL . \
     && git checkout $NUMBA_DPEX_GIT_REF \
+    && if [ -n "${NUMBA_DPEX_VERSION_OVERRIDE}" ]; then git tag -f "${NUMBA_DPEX_VERSION_OVERRIDE}"; fi \
     && source $ONEAPI_INSTALL_DIR/setvars.sh \
-    # HACK: currently, there is an issue with the bdist_wheel configuration for numba_dpex
-    # that causes missing files in the final tarball.
-    # The workaround consists in triggering building steps by running `setup.py develop`
-    # before running `setup.py bdist_wheel`.
-    # See https://github.com/soda-inria/sklearn-numba-dpex/issues/5
-    && python setup.py develop \
     # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
     && python setup.py bdist_wheel \
     && cp dist/numba_dpex*.whl $TMPDIR \

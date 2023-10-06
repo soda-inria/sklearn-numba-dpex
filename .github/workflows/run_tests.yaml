@@ -26,7 +26,7 @@ jobs:
       # HACK: install a version of numba_dpex that is known to be stable on cpu and can
       # run all unit tests on cpu.
       # See https://github.com/IntelPython/numba-dpex/issues/1156
-    - name: Install a numba_dpex version that supports atomics on cpu
+    - name: Install a numba_dpex version that is stable on cpu
       run: pip install /opt/numba_dpex/cpu-stable/numba_dpex*.whl
 
     - name: Check device
