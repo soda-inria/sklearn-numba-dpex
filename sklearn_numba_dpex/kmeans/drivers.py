@@ -246,13 +246,13 @@ def lloyd(
             # if verbose is True and if sample_weight is uniform, distances to
             # closest centroids already have been computed in the main kernel
             if not verbose or not use_uniform_weights:
-                # Note that we intentionally we pass unit weights instead of
+                # Note that we intentionally pass unit weights instead of
                 # sample_weight so that per_sample_inertia will be updated to the
                 # (unweighted) squared distance to the nearest centroid.
                 compute_inertia_kernel(
                     X_t,
                     dpt.ones_like(sample_weight),
-                    centroids_t,
+                    new_centroids_t,
                     new_assignments_idx,
                     # OUT:
                     sq_dist_to_nearest_centroid,

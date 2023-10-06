@@ -26,8 +26,17 @@ jobs:
     - name: Check device
       run: python -c "import dpctl; dpctl.select_default_device().print_device_info()"
 
+
+    # TODO: once compiler optimization flags are properly balanced in `numba_dpex`,
+    # remove the environment variable `NUMBA_DPEX_OPT=0` that is currently required
+    # for succeeding on CPU some of the tests. So far no issue on GPUs has been
+    # observed.
+    # More information at https://github.com/IntelPython/numba-dpex/issues/1106
     - name: Run sklearn_numba_dpex tests
-      run: NUMBA_DPEX_OPT=0 pytest -v sklearn_numba_dpex/
+      run: pytest -v sklearn_numba_dpex/ -k "not test_kmeans_predict_centers"
+
+    - name: Run sklearn_numba_dpex tests
+      run: NUMBA_DPEX_OPT=0 pytest -v sklearn_numba_dpex/ -k test_kmeans_predict_centers
 
       # TODO: run those tests in a separate pipeline
       # NB: `sklearn_numba_dpex` engine set the estimators to output arrays of type
