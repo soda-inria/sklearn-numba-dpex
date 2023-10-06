@@ -338,44 +338,6 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && cp dist/numba_dpex*.whl $TMPDIR \
     && rm -Rf $NUMBA_DPEX_BUILD_DIR
 
-# HACK: because it's the last version on which sklearn_numba_dpex is stable on cpu, also
-# build a wheel and add it to the image so it can be used for test pipeline on cpu-only
-# runners.
-FROM build_environment AS numba_dpex_builder_cpu_stable
-SHELL ["/bin/bash", "-c"]
-ARG TMPDIR
-ARG ONEAPI_INSTALL_DIR
-ARG NUMBA_DPEX_BUILD_DIR=$TMPDIR/cpu-stable/numba_dpex
-ARG NUMBA_DPEX_GIT_BRANCH=0.21.0dev1
-ARG NUMBA_DPEX_GIT_REF=0.21.0dev1
-ARG NUMBA_DPEX_GIT_URL
-ARG INTEL_PYPI_URL
-ARG BASE_PYPI_URL
-RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from=oneapi_devel_installer \
-    --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
-    --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
-    --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
-    pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
-        $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl $TMPDIR/dpcpp_llvm_spirv/dpcpp_llvm_spirv*.whl \
-    && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
-        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
-    && pip cache purge \
-    && mkdir -p $NUMBA_DPEX_BUILD_DIR \
-    && cd $NUMBA_DPEX_BUILD_DIR \
-    && git clone --recursive -b $NUMBA_DPEX_GIT_BRANCH $NUMBA_DPEX_GIT_URL . \
-    && git checkout $NUMBA_DPEX_GIT_REF \
-    && source $ONEAPI_INSTALL_DIR/setvars.sh \
-    # HACK: currently, there is an issue with the bdist_wheel configuration for numba_dpex
-    # that causes missing files in the final tarball.
-    # The workaround consists in triggering building steps by running `setup.py develop`
-    # before running `setup.py bdist_wheel`.
-    # See https://github.com/soda-inria/sklearn-numba-dpex/issues/5
-    && python setup.py develop \
-    # XXX: is it needed to pass manylinux wheel build arg to the setup command ?
-    && python setup.py bdist_wheel \
-    && cp dist/numba_dpex*.whl $TMPDIR/cpu-stable/ \
-    && rm -Rf $NUMBA_DPEX_BUILD_DIR
-
 
 FROM base_config AS runtime_environment
 COPY --from=python_builder $PYENV_ROOT $PYENV_ROOT
@@ -392,7 +354,6 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
     --mount=type=bind,target=$TMPDIR/dpctl,source=$TMPDIR,from=dpctl_builder \
     --mount=type=bind,target=$TMPDIR/dpnp,source=$TMPDIR,from=dpnp_builder \
     --mount=type=bind,target=$TMPDIR/numba_dpex,source=$TMPDIR,from=numba_dpex_builder \
-    --mount=type=bind,target=$TMPDIR/cpu-stable,source=$TMPDIR/cpu-stable,from=numba_dpex_builder_cpu_stable \
     --mount=type=bind,target=$TMPDIR/dpcpp_llvm_spirv,source=$TMPDIR,from=dpcpp_llvm_spirv_builder \
     pip install -U -i $INTEL_PYPI_URL --extra-index-url $BASE_PYPI_URL \
         $TMPDIR/dpctl/dpctl*.whl $TMPDIR/dpnp/dpnp*.whl \
@@ -404,9 +365,7 @@ RUN --mount=type=tmpfs,target=$TMPDIR \
         mkl-dpcpp \
     && pip cache purge \
     && cp $TMPDIR/dpcpp_llvm_spirv/llvm-spirv \
-        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())") \
-    && mkdir -p /opt/numba_dpex/cpu-stable \
-    && cp $TMPDIR/cpu-stable/numba_dpex*.whl /opt/numba_dpex/cpu-stable/
+        $(python -c "import dpcpp_llvm_spirv as p; print(p.get_llvm_spirv_path())")
 RUN apt-get update --quiet && apt-get install -y --no-install-recommends \
         spirv-tools spirv-headers \
     && rm -Rf /var/lib/apt/lists/*

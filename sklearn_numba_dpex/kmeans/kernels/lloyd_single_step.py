@@ -93,7 +93,6 @@ def make_lloyd_single_step_fixed_window_kernel(
         window_n_centroids,
         ops="product",
         dtype=dtype,
-        device=device,
         initialize_window_of_centroids_half_l2_norms=True,
     )
 

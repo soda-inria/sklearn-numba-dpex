@@ -138,7 +138,6 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         window_n_candidates,
         ops="squared_diff",
         dtype=dtype,
-        device=device,
         initialize_window_of_centroids_half_l2_norms=False,
     )
 

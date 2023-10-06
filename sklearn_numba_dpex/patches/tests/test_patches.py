@@ -2,8 +2,17 @@ import dpctl
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
+import pytest
 
 
+# TODO: remove this test after going through the code base and reverting unnecessary
+# additions that are tagged with "HACK 906"
+@pytest.mark.xfail(
+    reason=(
+        "The issue has now been fixed upstream, the test should now be removed and all "
+        "workarounds that have been added to `sklearn_numba_dpex` can now be reverted."
+    )
+)
 def test_need_to_workaround_numba_dpex_906():
     """This test will raise when all hacks tagged with HACK 906 can be reverted.
 
