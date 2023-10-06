@@ -138,7 +138,7 @@ conda create --yes --name $CONDA_DPEX_ENV_NAME \
              --channel dppy/label/dev \
              --channel conda-forge \
              --channel intel \
-             numba-dpex=0.21.3=py310h776878d_14
+             numba-dpex=0.22.0dev0=py310h776878d_2
 ```
 
 Note that different versions of `sklearn_numba_dpex` can require to pin different
