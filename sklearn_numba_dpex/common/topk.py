@@ -792,6 +792,11 @@ def _make_create_radix_histogram_kernel(
         # fmt: on
         # If `col_idx` is outside the bounds of the input, ignore this location.
         is_in_bounds = col_idx < n_cols
+
+        mask_for_desired_value_ = uint_type(0) # workaround
+        item_lexicographically_mapped = uint_type(0) # workaround
+        desired_masked_value_ = uint_type(0) # workaround
+        radix_position_ = uint_type(0) # workaround
         if is_in_bounds:
             item = array_in_uint[row_idx, col_idx]
 
@@ -1030,6 +1035,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         # NB: `numba_dpex` seem to produce inefficient (branching) code for `break`,
         # use `if/else` instead
         desired_mask_value_search = True
+        count = np.int64(0) # workaround
         for _ in range(radix_size):
             if desired_mask_value_search:
                 count = counts[row_idx, current_count_idx]
