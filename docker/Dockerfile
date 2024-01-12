@@ -24,7 +24,7 @@
 #
 # TODO: make a custom build with other base images to test compatibility
 # with other OSes.
-ARG BASE_IMAGE_VERSION=latest-57b016e6e031950e5e5abda2d69afc355e7c7b61
+ARG BASE_IMAGE_VERSION=latest-865092f2b51feebd7aa8caaba486e7b66951d982
 ARG BASE_IMAGE_TAG=ghcr.io/intel/llvm/ubuntu2204_intel_drivers
 
 ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
@@ -39,7 +39,7 @@ ARG BASE=${BASE_IMAGE_TAG}:${BASE_IMAGE_VERSION}
 # FIXME: The base image is missing a package required for enabling the `level_zero`
 # backend, see https://github.com/intel/llvm/issues/6342
 # Until it is fixed upstream we need to explicitly install the oneAPI level_zero loader.
-ARG L0_LOADER_DEB_VERSION=1.14.0
+ARG L0_LOADER_DEB_VERSION=1.15.8
 ARG L0_LOADER_DEB_PLATFORM=u22.04
 
 ARG INTEL_PYPI_URL=https://pypi.anaconda.org/intel/simple
@@ -53,24 +53,23 @@ ARG PYTHON_VERSION=3.10.13
 # It can be found at https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?operatingsystem=linux&distributions=webdownload&options=online
 # The installer CLI is documented here: https://www.intel.com/content/www/us/en/develop/documentation/installation-guide-for-intel-oneapi-toolkits-linux/top/installation/install-with-command-line.html#install-with-command-line_interactive
 
-ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/992857b9-624c-45de-9701-f6445d845359
-ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2023.2.0.49397.sh
+ARG ONEAPI_INSTALLER_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/163da6e4-56eb-4948-aba3-debcec61c064
+ARG ONEAPI_INSTALL_BINARY_NAME=l_BaseKit_p_2024.0.1.46.sh
 
 ARG ONEAPI_INSTALL_DIR=/opt/intel/oneapi
 
 # Some build steps require a high enough version of cmake.
 # Bump it if necessary.
 
-ARG CMAKE_VERSION=3.27
-ARG CMAKE_VERSION_BUILD=6
-
+ARG CMAKE_VERSION=3.28
+ARG CMAKE_VERSION_BUILD=1
 
 # Versions of the intel python packages
 
-ARG DPCTL_GIT_BRANCH=0.15.1dev0
+ARG DPCTL_GIT_BRANCH=0.15.1dev2
 ARG DPCTL_GIT_URL=https://github.com/IntelPython/dpctl.git
 
-ARG DPNP_GIT_BRANCH=0.13.1dev0
+ARG DPNP_GIT_BRANCH=0.13.1dev2
 ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 
 # `numba_dpex` often requires to install from arbitrary git commits, so the
@@ -78,13 +77,13 @@ ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 # files for the most recent ref), and arbirary references on this branch can be
 # selected.
 ARG NUMBA_DPEX_GIT_BRANCH=main
-ARG NUMBA_DPEX_GIT_REF=511241f1956eff7c916ebe876a7b3586400b5a9a
+ARG NUMBA_DPEX_GIT_REF=0.21.4
 # If not blank, this will override the version that is inferred by versioneer based on
 # the reference of the commit being used for the build. Use it especially when
 # installing an arbitrary commit from the main branch, in which case versioneer
 # resolve the version to 0.0.0 which can cause downstream dependency resolution issues
 # for packages that depend on numba_dpex .
-ARG NUMBA_DPEX_VERSION_OVERRIDE=0.22.0dev0
+ARG NUMBA_DPEX_VERSION_OVERRIDE=
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
@@ -304,7 +303,7 @@ RUN --mount=type=bind,target=$ONEAPI_INSTALL_DIR,source=$ONEAPI_INSTALL_DIR,from
     && python setup.py clean --all \
     && python setup.py bdist_wheel \
     && cp dist/dpcpp_llvm_spirv*.whl $TMPDIR \
-    && cp $ONEAPI_INSTALL_DIR/compiler/latest/linux/bin-llvm/llvm-spirv $TMPDIR \
+    && cp $ONEAPI_INSTALL_DIR/2024.0/bin/compiler/llvm-spirv $TMPDIR \
     && rm -Rf $DPCPP_LLVM_SPIRV_BUILD_DIR
 
 FROM build_environment AS numba_dpex_builder
