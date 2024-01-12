@@ -77,13 +77,13 @@ ARG DPNP_GIT_URL=https://github.com/IntelPython/dpnp.git
 # files for the most recent ref), and arbirary references on this branch can be
 # selected.
 ARG NUMBA_DPEX_GIT_BRANCH=main
-ARG NUMBA_DPEX_GIT_REF=0.21.4
+ARG NUMBA_DPEX_GIT_REF=511241f1956eff7c916ebe876a7b3586400b5a9a
 # If not blank, this will override the version that is inferred by versioneer based on
 # the reference of the commit being used for the build. Use it especially when
 # installing an arbitrary commit from the main branch, in which case versioneer
 # resolve the version to 0.0.0 which can cause downstream dependency resolution issues
 # for packages that depend on numba_dpex .
-ARG NUMBA_DPEX_VERSION_OVERRIDE=
+ARG NUMBA_DPEX_VERSION_OVERRIDE=0.22.0dev0
 ARG NUMBA_DPEX_GIT_URL=https://github.com/IntelPython/numba-dpex.git
 
 ARG DPCPP_LLVM_SPIRV_GIT_BRANCH=main
