@@ -977,7 +977,9 @@ def _make_create_radix_histogram_kernel(
             n_active_rows,
             n_local_histograms * n_work_groups_per_row,
         )
-        create_radix_histogram[NdRange(global_shape, work_group_shape)](
+        dpex.call_kernel(
+            create_radix_histogram,
+            NdRange(global_shape, work_group_shape),
             array_in_uint,
             active_rows_mapping,
             mask_for_desired_value,
@@ -1109,7 +1111,9 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         n_active_rows_ = int(n_active_rows[0])
         global_size = math.ceil(n_active_rows_ / work_group_size) * work_group_size
 
-        check_radix_histogram[NdRange((global_size,), (work_group_size,))](
+        dpex.call_kernel(
+            check_radix_histogram,
+            NdRange((global_size,), (work_group_size,)),
             counts,
             active_rows_mapping,
             n_active_rows,
@@ -1121,7 +1125,10 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
             new_n_active_rows,
         )
 
-    return update_radix_position[NdRange((1,), (1,))], _check_radix_histogram
+    def kernel_call(*args):
+        dpex.call_kernel(update_radix_position, NdRange((1,), (1,)), *args)
+
+    return kernel_call, _check_radix_histogram
 
 
 @lru_cache
@@ -1244,7 +1251,10 @@ def _make_gather_topk_kernel(
         result_col_idx_ = dpex.atomic.add(result_col_idx, row_idx, count_one_as_an_int)
         result[row_idx, result_col_idx_] = item
 
-    return gather_topk[NdRange(global_shape, work_group_shape)]
+    def kernel_call(*args):
+        dpex.call_kernel(gather_topk, NdRange(global_shape, work_group_shape), *args)
+
+    return kernel_call
 
 
 @lru_cache
@@ -1363,4 +1373,9 @@ def _make_gather_topk_idx_kernel(
             )
             result[row_idx, result_col_idx_] = col_idx
 
-    return gather_topk_idx[NdRange(global_shape, work_group_shape)]
+    def kernel_call(*args):
+        dpex.call_kernel(
+            gather_topk_idx, NdRange(global_shape, work_group_shape), *args
+        )
+
+    return kernel_call

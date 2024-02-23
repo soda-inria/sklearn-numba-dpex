@@ -74,7 +74,12 @@ def make_relocate_empty_clusters_kernel(
             )
             cluster_sizes[relocated_cluster_idx] = new_location_weight
 
-    return relocate_empty_clusters[NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        dpex.call_kernel(
+            relocate_empty_clusters, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -108,7 +113,12 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
 
         centroid_shifts[sample_idx] = squared_centroid_diff
 
-    return centroid_shifts[dpex.NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        dpex.call_kernel(
+            centroid_shifts, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -167,9 +177,12 @@ def make_reduce_centroid_data_kernel(
             )
             empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
-    reduce_centroid_data_kernel = _reduce_centroid_data_kernel[
-        NdRange((global_size,), (work_group_size,))
-    ]
+    def reduce_centroid_data_kernel(*args):
+        dpex.call_kernel(
+            _reduce_centroid_data_kernel,
+            NdRange((global_size,), (work_group_size,)),
+            *args,
+        )
 
     def reduce_centroid_data(
         cluster_sizes_private_copies,
@@ -208,11 +221,20 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
     def is_same_clustering(labels1, labels2):
         mapping = dpt.empty((n_clusters,), dtype=np.int32, device=device)
         result = dpt.asarray([1], dtype=np.int32, device=device)
-        _build_mapping[NdRange((global_size,), (work_group_size,))](
-            labels1, labels2, mapping
+        dpex.call_kernel(
+            _build_mapping,
+            NdRange((global_size,), (work_group_size,)),
+            labels1,
+            labels2,
+            mapping,
         )
-        _is_same_clustering[NdRange((global_size,), (work_group_size,))](
-            labels1, labels2, mapping, result
+        dpex.call_kernel(
+            _is_same_clustering,
+            NdRange((global_size,), (work_group_size,)),
+            labels1,
+            labels2,
+            mapping,
+            result,
         )
         return bool(result[0])
 
@@ -279,4 +301,10 @@ def make_get_nb_distinct_clusters_kernel(
             dpex.atomic.add(nb_distinct_clusters, zero_idx, one_incr)
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
-    return get_nb_distinct_clusters[NdRange((global_size,), (work_group_size,))]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            get_nb_distinct_clusters, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call

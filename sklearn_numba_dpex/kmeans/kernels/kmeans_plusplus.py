@@ -56,7 +56,13 @@ def make_kmeansplusplus_init_kernel(
             centers_t[feature_idx, zero_idx] = X_t[feature_idx, starting_center_id_]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return kmeansplusplus_init[NdRange((global_size,), (work_group_size,))]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            kmeansplusplus_init, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -101,7 +107,13 @@ def make_sample_center_candidates_kernel(
         candidates_id[local_trial_idx] = candidate_id
 
     global_size = (math.ceil(n_local_trials / work_group_size)) * work_group_size
-    return sample_center_candidates[NdRange((global_size,), (work_group_size,))]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            sample_center_candidates, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -260,4 +272,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         math.ceil(n_windows_for_samples / candidates_window_height)
         * candidates_window_height,
     )
-    return kmeansplusplus_single_step[NdRange((global_size,), (work_group_shape,))]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            kmeansplusplus_single_step, NdRange(global_size, work_group_shape), *args
+        )
+
+    return kernel_call

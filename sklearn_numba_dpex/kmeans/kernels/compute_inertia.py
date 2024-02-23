@@ -40,4 +40,10 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
         per_sample_inertia[sample_idx] = inertia * sample_weight[sample_idx]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return compute_inertia[NdRange((global_size,), (work_group_size,))]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            compute_inertia, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call

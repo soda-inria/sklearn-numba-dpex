@@ -51,7 +51,10 @@ def make_random_raw_kernel():
     def _get_random_raw_kernel(states, result):
         result[zero_idx] = _xoroshiro128pp_next(states, zero_idx)
 
-    return _get_random_raw_kernel[NdRange((1,), (1,))]
+    def kernel_call(*args):
+        dpex.call_kernel(_get_random_raw_kernel, NdRange((1,), (1,)), *args)
+
+    return kernel_call
 
 
 def make_rand_uniform_kernel_func(dtype):
@@ -261,7 +264,10 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
             # and jump forward 2**64 steps
             _xoroshiro128pp_jump(states, idx)
 
-    return init_xoroshiro128pp_states[NdRange((1,), (1,))]
+    def kernel_call(*args):
+        dpex.call_kernel(init_xoroshiro128pp_states, NdRange((1,), (1,)), *args)
+
+    return kernel_call
 
 
 _64_as_uint32 = uint32(64)

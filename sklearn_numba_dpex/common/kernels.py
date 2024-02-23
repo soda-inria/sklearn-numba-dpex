@@ -31,7 +31,9 @@ def make_apply_elementwise_func(shape, func, work_group_size):
 
     def elementwise_ops(data):
         data = dpt.reshape(data, (-1,))
-        elementwise_ops_kernel[NdRange((global_size,), (work_group_size,))](data)
+        dpex.call_kernel(
+            elementwise_ops_kernel, NdRange((global_size,), (work_group_size,)), data
+        )
 
     return elementwise_ops
 
@@ -53,7 +55,11 @@ def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
 
     def initialize_to_zeros(data):
         data = dpt.reshape(data, (-1,))
-        initialize_to_zeros_kernel[NdRange((global_size,), (work_group_size,))](data)
+        dpex.call_kernel(
+            initialize_to_zeros_kernel,
+            NdRange((global_size,), (work_group_size,)),
+            data,
+        )
 
     return initialize_to_zeros
 
@@ -80,7 +86,12 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
                 dividend_array[row_idx, col_idx] / divisor
             )
 
-    return broadcast_division[NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        return dpex.call_kernel(
+            broadcast_division, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -111,7 +122,12 @@ def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size):
                 left_operand_array[row_idx, col_idx], right_operand_vector[row_idx]
             )
 
-    return broadcast_ops[NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        return dpex.call_kernel(
+            broadcast_ops, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -143,4 +159,9 @@ def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
 
         result[col_idx] = l2_norm / two
 
-    return half_l2_norm[NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        return dpex.call_kernel(
+            half_l2_norm, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call

@@ -159,4 +159,10 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         math.ceil(n_windows_for_sample / centroids_window_height)
         * centroids_window_height,
     )
-    return compute_distances[NdRange(global_size, work_group_shape)]
+
+    def kernel_call(*args):
+        dpex.call_kernel(
+            compute_distances, NdRange(global_size, work_group_shape), *args
+        )
+
+    return kernel_call

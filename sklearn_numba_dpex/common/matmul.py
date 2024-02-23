@@ -487,7 +487,10 @@ def make_matmul_2d_kernel(
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
-    return matmul[NdRange((global_size,), (work_group_size,))]
+    def kernel_call(*args):
+        dpex.call_kernel(matmul, NdRange((global_size,), (work_group_size,)), *args)
+
+    return kernel_call
 
 
 def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multiply_fn):

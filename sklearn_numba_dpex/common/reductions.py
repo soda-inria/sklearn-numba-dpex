@@ -204,7 +204,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
 
     def argmin_reduction(values):
         for kernel, sizes, previous_result, result in kernels_and_empty_tensors_tuples:
-            kernel[NdRange(*sizes)](values, previous_result, result)
+            dpex.call_kernel(kernel, NdRange(*sizes), values, previous_result, result)
         return result
 
     return argmin_reduction
@@ -383,7 +383,7 @@ def make_sum_reduction_2d_kernel(
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, sizes, result in kernels_and_empty_tensors_pairs:
-            kernel[NdRange(*sizes)](summands, result)
+            dpex.call_kernel(kernel, NdRange(*sizes), summands, result)
             summands = result
 
         if is_1d:

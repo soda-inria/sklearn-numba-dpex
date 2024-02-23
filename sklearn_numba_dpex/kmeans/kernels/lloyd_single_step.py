@@ -419,7 +419,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         math.ceil(n_subgroups / centroids_window_height) * centroids_window_height,
     )
 
-    return (
-        n_centroids_private_copies,
-        fused_lloyd_single_step[NdRange(global_size, work_group_shape)],
-    )
+    def kernel_call(*args):
+        dpex.call_kernel(
+            fused_lloyd_single_step, NdRange(global_size, work_group_shape), *args
+        )
+
+    return (n_centroids_private_copies, kernel_call)

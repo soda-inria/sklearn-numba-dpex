@@ -183,4 +183,7 @@ def make_label_assignment_fixed_window_kernel(
         * centroids_window_height,
     )
 
-    return assignment[NdRange(global_size, work_group_shape)]
+    def kernel_call(*args):
+        dpex.call_kernel(assignment, NdRange(global_size, work_group_shape), *args)
+
+    return kernel_call
