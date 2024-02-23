@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -158,4 +159,4 @@ def make_compute_euclidean_distances_fixed_window_kernel(
         math.ceil(n_windows_for_sample / centroids_window_height)
         * centroids_window_height,
     )
-    return compute_distances[global_size, work_group_shape]
+    return compute_distances[NdRange(global_size, work_group_shape)]

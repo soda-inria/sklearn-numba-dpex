@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 
 @lru_cache
@@ -39,4 +40,4 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
         per_sample_inertia[sample_idx] = inertia * sample_weight[sample_idx]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return compute_inertia[global_size, work_group_size]
+    return compute_inertia[NdRange((global_size,), (work_group_size,))]

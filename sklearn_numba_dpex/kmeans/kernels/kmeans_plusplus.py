@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
@@ -55,7 +56,7 @@ def make_kmeansplusplus_init_kernel(
             centers_t[feature_idx, zero_idx] = X_t[feature_idx, starting_center_id_]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return kmeansplusplus_init[global_size, work_group_size]
+    return kmeansplusplus_init[NdRange((global_size,), (work_group_size,))]
 
 
 @lru_cache
@@ -100,7 +101,7 @@ def make_sample_center_candidates_kernel(
         candidates_id[local_trial_idx] = candidate_id
 
     global_size = (math.ceil(n_local_trials / work_group_size)) * work_group_size
-    return sample_center_candidates[global_size, work_group_size]
+    return sample_center_candidates[NdRange((global_size,), (work_group_size,))]
 
 
 @lru_cache
@@ -259,4 +260,4 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         math.ceil(n_windows_for_samples / candidates_window_height)
         * candidates_window_height,
     )
-    return kmeansplusplus_single_step[global_size, work_group_shape]
+    return kmeansplusplus_single_step[NdRange((global_size,), (work_group_shape,))]

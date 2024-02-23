@@ -12,6 +12,7 @@ from functools import lru_cache
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import (
     _enforce_matmul_like_work_group_geometry,
@@ -976,7 +977,7 @@ def _make_create_radix_histogram_kernel(
             n_active_rows,
             n_local_histograms * n_work_groups_per_row,
         )
-        create_radix_histogram[global_shape, work_group_shape](
+        create_radix_histogram[NdRange(global_shape, work_group_shape)](
             array_in_uint,
             active_rows_mapping,
             mask_for_desired_value,
@@ -1108,7 +1109,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         n_active_rows_ = int(n_active_rows[0])
         global_size = math.ceil(n_active_rows_ / work_group_size) * work_group_size
 
-        check_radix_histogram[global_size, work_group_size](
+        check_radix_histogram[NdRange((global_size,), (work_group_size,))](
             counts,
             active_rows_mapping,
             n_active_rows,
@@ -1120,7 +1121,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
             new_n_active_rows,
         )
 
-    return update_radix_position[1, 1], _check_radix_histogram
+    return update_radix_position[NdRange((1,), (1,))], _check_radix_histogram
 
 
 @lru_cache
@@ -1243,7 +1244,7 @@ def _make_gather_topk_kernel(
         result_col_idx_ = dpex.atomic.add(result_col_idx, row_idx, count_one_as_an_int)
         result[row_idx, result_col_idx_] = item
 
-    return gather_topk[global_shape, work_group_shape]
+    return gather_topk[NdRange(global_shape, work_group_shape)]
 
 
 @lru_cache
@@ -1362,4 +1363,4 @@ def _make_gather_topk_idx_kernel(
             )
             result[row_idx, result_col_idx_] = col_idx
 
-    return gather_topk_idx[global_shape, work_group_shape]
+    return gather_topk_idx[NdRange(global_shape, work_group_shape)]

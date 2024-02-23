@@ -4,6 +4,7 @@ from functools import lru_cache
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
@@ -194,7 +195,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     previous_result = dpt.empty((1,), dtype=np.int32, device=device)
     while n_groups > 1:
         n_groups = math.ceil(n_groups / (2 * work_group_size))
-        sizes = (n_groups * work_group_size, work_group_size)
+        sizes = ((n_groups * work_group_size,), (work_group_size,))
         result = dpt.empty(n_groups, dtype=np.int32, device=device)
         kernels_and_empty_tensors_tuples.append(
             (partial_argmin_reduction, sizes, previous_result, result)
@@ -203,7 +204,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
 
     def argmin_reduction(values):
         for kernel, sizes, previous_result, result in kernels_and_empty_tensors_tuples:
-            kernel[sizes](values, previous_result, result)
+            kernel[NdRange(*sizes)](values, previous_result, result)
         return result
 
     return argmin_reduction
@@ -382,7 +383,7 @@ def make_sum_reduction_2d_kernel(
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, sizes, result in kernels_and_empty_tensors_pairs:
-            kernel[sizes](summands, result)
+            kernel[NdRange(*sizes)](summands, result)
             summands = result
 
         if is_1d:

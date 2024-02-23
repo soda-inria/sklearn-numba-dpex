@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -182,4 +183,4 @@ def make_label_assignment_fixed_window_kernel(
         * centroids_window_height,
     )
 
-    return assignment[global_size, work_group_shape]
+    return assignment[NdRange(global_size, work_group_shape)]

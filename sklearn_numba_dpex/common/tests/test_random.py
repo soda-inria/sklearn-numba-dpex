@@ -5,6 +5,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 import pytest
+from numba_dpex.kernel_api import NdRange
 from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.common.random import (
@@ -138,7 +139,7 @@ def _get_single_rand_value(random_state, dtype):
     """Return a single rand value sampled uniformly in [0, 1)"""
     _get_single_rand_value_kernel = _make_get_single_rand_value_kernel(dtype)
     single_rand_value = dpt.empty(1, dtype=dtype)
-    _get_single_rand_value_kernel[1, 1](random_state, single_rand_value)
+    _get_single_rand_value_kernel[NdRange((1,), (1,))](random_state, single_rand_value)
     return dpt.asnumpy(single_rand_value)[0]
 
 
@@ -154,7 +155,7 @@ def _rand_uniform(size, dtype, seed, n_work_items=1000):
         math.ceil(size / (size_per_work_item * work_group_size)) * work_group_size
     )
     states = create_xoroshiro128pp_states(n_states=global_size, seed=seed)
-    _rand_uniform_kernel[global_size, work_group_size](states, out)
+    _rand_uniform_kernel[NdRange((global_size,), (work_group_size,))](states, out)
     return out
 
 

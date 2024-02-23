@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 from sklearn_numba_dpex.common._utils import _enforce_matmul_like_work_group_geometry
 
@@ -486,7 +487,7 @@ def make_matmul_2d_kernel(
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
-    return matmul[global_size, work_group_size]
+    return matmul[NdRange((global_size,), (work_group_size,))]
 
 
 def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multiply_fn):

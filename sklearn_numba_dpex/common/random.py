@@ -6,6 +6,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
 from numba import float32, float64, int64, uint32, uint64
+from numba_dpex.kernel_api import NdRange
 
 from ._utils import _get_sequential_processing_device
 
@@ -50,7 +51,7 @@ def make_random_raw_kernel():
     def _get_random_raw_kernel(states, result):
         result[zero_idx] = _xoroshiro128pp_next(states, zero_idx)
 
-    return _get_random_raw_kernel[1, 1]
+    return _get_random_raw_kernel[NdRange((1,), (1,))]
 
 
 def make_rand_uniform_kernel_func(dtype):
@@ -260,7 +261,7 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
             # and jump forward 2**64 steps
             _xoroshiro128pp_jump(states, idx)
 
-    return init_xoroshiro128pp_states[1, 1]
+    return init_xoroshiro128pp_states[NdRange((1,), (1,))]
 
 
 _64_as_uint32 = uint32(64)

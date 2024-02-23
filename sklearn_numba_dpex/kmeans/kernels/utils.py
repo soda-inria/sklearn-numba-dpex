@@ -4,6 +4,7 @@ from functools import lru_cache
 import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numpy as np
+from numba_dpex.kernel_api import NdRange
 
 zero_idx = np.int64(0)
 
@@ -73,7 +74,7 @@ def make_relocate_empty_clusters_kernel(
             )
             cluster_sizes[relocated_cluster_idx] = new_location_weight
 
-    return relocate_empty_clusters[global_size, work_group_size]
+    return relocate_empty_clusters[NdRange((global_size,), (work_group_size,))]
 
 
 @lru_cache
@@ -107,7 +108,7 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
 
         centroid_shifts[sample_idx] = squared_centroid_diff
 
-    return centroid_shifts[global_size, work_group_size]
+    return centroid_shifts[dpex.NdRange((global_size,), (work_group_size,))]
 
 
 @lru_cache
@@ -167,7 +168,7 @@ def make_reduce_centroid_data_kernel(
             empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
     reduce_centroid_data_kernel = _reduce_centroid_data_kernel[
-        global_size, work_group_size
+        NdRange((global_size,), (work_group_size,))
     ]
 
     def reduce_centroid_data(
@@ -207,8 +208,10 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
     def is_same_clustering(labels1, labels2):
         mapping = dpt.empty((n_clusters,), dtype=np.int32, device=device)
         result = dpt.asarray([1], dtype=np.int32, device=device)
-        _build_mapping[global_size, work_group_size](labels1, labels2, mapping)
-        _is_same_clustering[global_size, work_group_size](
+        _build_mapping[NdRange((global_size,), (work_group_size,))](
+            labels1, labels2, mapping
+        )
+        _is_same_clustering[NdRange((global_size,), (work_group_size,))](
             labels1, labels2, mapping, result
         )
         return bool(result[0])
@@ -276,4 +279,4 @@ def make_get_nb_distinct_clusters_kernel(
             dpex.atomic.add(nb_distinct_clusters, zero_idx, one_incr)
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
-    return get_nb_distinct_clusters[global_size, work_group_size]
+    return get_nb_distinct_clusters[NdRange((global_size,), (work_group_size,))]
