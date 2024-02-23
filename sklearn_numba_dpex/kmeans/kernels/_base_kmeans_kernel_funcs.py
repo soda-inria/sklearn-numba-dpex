@@ -1,4 +1,4 @@
-import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 
 zero_as_a_long = np.int64(0)
@@ -79,7 +79,7 @@ def make_pairwise_ops_base_kernel_funcs(
         )
     )
 
-    @dpex.func
+    @dpex_exp.device_func
     def accumulate_dot_products(
         sample_idx,
         first_feature_idx,
@@ -130,7 +130,7 @@ def make_pairwise_ops_base_kernel_funcs(
         last_window_n_centroids
     )
 
-    @dpex.func
+    @dpex_exp.device_func
     def initialize_window_half_l2_norm(
         local_row_idx,
         local_col_idx,
@@ -184,7 +184,7 @@ class _KMeansKernelFuncFactory:
         self.dtype = dtype
 
     def make_initialize_window_half_l2_norm_kernel_func(self, window_n_centroids):
-        @dpex.func
+        @dpex_exp.device_func
         # fmt: off
         def _initialize_window_of_centroids(
             local_row_idx,                      # PARAM
@@ -224,7 +224,7 @@ class _KMeansKernelFuncFactory:
 
         zero = self.dtype(0.0)
 
-        @dpex.func
+        @dpex_exp.device_func
         # fmt: off
         def _load_window_of_centroids_and_features(
             first_feature_idx,              # PARAM
@@ -261,7 +261,7 @@ class _KMeansKernelFuncFactory:
         n_samples = self.n_samples
         accumulate_dot_product = self.accumulate_dot_product
 
-        @dpex.func
+        @dpex_exp.device_func
         # fmt: off
         def _accumulate_sum_of_ops(
             sample_idx,          # PARAM
@@ -315,7 +315,7 @@ def make_update_closest_centroid_kernel_func(n_clusters, window_n_centroids):
         last_window_n_centroids
     )
 
-    @dpex.func
+    @dpex_exp.device_func
     def update_closest_centroid(
         first_centroid_idx,
         min_idx,
@@ -346,7 +346,7 @@ def make_update_closest_centroid_kernel_func(n_clusters, window_n_centroids):
 
 
 def _make_update_closest_centroid_kernel_func(window_n_centroids):
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def update_closest_centroid(
         first_centroid_idx,                  # PARAM

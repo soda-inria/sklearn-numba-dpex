@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -11,10 +12,10 @@ zero_idx = np.int64(0)
 
 @lru_cache
 def make_apply_elementwise_func(shape, func, work_group_size):
-    func = dpex.func(func)
+    func = dpex_exp.device_func(func)
     n_items = math.prod(shape)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def elementwise_ops_kernel(
         data,                    # INOUT    (n_items,)
@@ -31,7 +32,7 @@ def make_apply_elementwise_func(shape, func, work_group_size):
 
     def elementwise_ops(data):
         data = dpt.reshape(data, (-1,))
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             elementwise_ops_kernel, NdRange((global_size,), (work_group_size,)), data
         )
 
@@ -44,7 +45,7 @@ def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
     global_size = math.ceil(n_items / work_group_size) * work_group_size
     zero = dtype(0.0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     def initialize_to_zeros_kernel(data):
         item_idx = dpex.get_global_id(zero_idx)
 
@@ -55,7 +56,7 @@ def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
 
     def initialize_to_zeros(data):
         data = dpt.reshape(data, (-1,))
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             initialize_to_zeros_kernel,
             NdRange((global_size,), (work_group_size,)),
             data,
@@ -72,7 +73,7 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
-    @dpex.kernel
+    @dpex_exp.kernel
     def broadcast_division(dividend_array, divisor_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
@@ -87,7 +88,7 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
             )
 
     def kernel_call(*args):
-        return dpex.call_kernel(
+        return dpex_exp.call_kernel(
             broadcast_division, NdRange((global_size,), (work_group_size,)), *args
         )
 
@@ -97,20 +98,21 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
 @lru_cache
 def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size):
     """
-    ops must be a function that will be interpreted as a dpex.func and is subject to
-    the same rules. It is expected to take two scalar arguments and return one scalar
-    value. lambda functions are advised against since the cache will not work with lamda
-    functions. sklearn_numba_dpex.common._utils expose some pre-defined `ops`.
+    ops must be a function that will be interpreted as a dpex_exp.device_func and is
+    subject to the same rules. It is expected to take two scalar arguments and return
+    one scalar value. lambda functions are advised against since the cache will not
+    work with lamda functions. sklearn_numba_dpex.common._utils expose some
+    pre-defined `ops`.
     """
     n_rows, n_cols = shape
 
     global_size = math.ceil(n_cols / work_group_size) * work_group_size
-    ops = dpex.func(ops)
+    ops = dpex_exp.device_func(ops)
 
     # NB: the left operand is modified inplace, the right operand is only read into.
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
-    @dpex.kernel
+    @dpex_exp.kernel
     def broadcast_ops(left_operand_array, right_operand_vector):
         col_idx = dpex.get_global_id(zero_idx)
 
@@ -123,7 +125,7 @@ def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size):
             )
 
     def kernel_call(*args):
-        return dpex.call_kernel(
+        return dpex_exp.call_kernel(
             broadcast_ops, NdRange((global_size,), (work_group_size,)), *args
         )
 
@@ -139,7 +141,7 @@ def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
 
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def half_l2_norm(
         data,    # IN        (size0, size1)
@@ -160,7 +162,7 @@ def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
         result[col_idx] = l2_norm / two
 
     def kernel_call(*args):
-        return dpex.call_kernel(
+        return dpex_exp.call_kernel(
             half_l2_norm, NdRange((global_size,), (work_group_size,)), *args
         )
 

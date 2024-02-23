@@ -2,6 +2,7 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -73,7 +74,7 @@ def make_label_assignment_fixed_window_kernel(
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def assignment(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
@@ -169,7 +170,7 @@ def make_label_assignment_fixed_window_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     def _setitem_if(condition, index, value, array):
         if condition:
             array[index] = value
@@ -184,6 +185,6 @@ def make_label_assignment_fixed_window_kernel(
     )
 
     def kernel_call(*args):
-        dpex.call_kernel(assignment, NdRange(global_size, work_group_shape), *args)
+        dpex_exp.call_kernel(assignment, NdRange(global_size, work_group_shape), *args)
 
     return kernel_call

@@ -2,6 +2,7 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -61,7 +62,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def compute_distances(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
@@ -132,7 +133,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
             dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _save_distance(
         sample_idx,                 # PARAM
@@ -161,7 +162,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     )
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             compute_distances, NdRange(global_size, work_group_shape), *args
         )
 

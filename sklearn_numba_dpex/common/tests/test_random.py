@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
 from numba_dpex.kernel_api import NdRange
@@ -139,7 +140,7 @@ def _get_single_rand_value(random_state, dtype):
     """Return a single rand value sampled uniformly in [0, 1)"""
     _get_single_rand_value_kernel = _make_get_single_rand_value_kernel(dtype)
     single_rand_value = dpt.empty(1, dtype=dtype)
-    dpex.call_kernel(
+    dpex_exp.call_kernel(
         _get_single_rand_value_kernel,
         NdRange((1,), (1,)),
         random_state,
@@ -160,7 +161,7 @@ def _rand_uniform(size, dtype, seed, n_work_items=1000):
         math.ceil(size / (size_per_work_item * work_group_size)) * work_group_size
     )
     states = create_xoroshiro128pp_states(n_states=global_size, seed=seed)
-    dpex.call_kernel(
+    dpex_exp.call_kernel(
         _rand_uniform_kernel, NdRange((global_size,), (work_group_size,)), states, out
     )
     return out
@@ -171,7 +172,7 @@ def _make_get_single_rand_value_kernel(dtype):
     rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
     zero_idx = np.int64(0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def get_single_rand_value(
         random_state,                     # IN             (1, 2)
@@ -188,7 +189,7 @@ def _make_rand_uniform_kernel(size, dtype, size_per_work_item):
     rand_uniform_kernel_func = make_rand_uniform_kernel_func(np.dtype(dtype))
     private_states_shape = (1, 2)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def _rand_uniform_kernel(
         states,                           # IN               (global_size, 2)

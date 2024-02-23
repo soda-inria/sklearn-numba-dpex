@@ -2,6 +2,7 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -140,14 +141,15 @@ def make_lloyd_single_step_fixed_window_kernel(
     # inputs such as X_t it is generally regarded as faster. Once support is available
     # (NB: it's already supported by numba.cuda) X_t should be an input to the factory
     # rather than an input to the kernel.
-    # XXX: parts of the kernels are factorized using `dpex.func` namespace that allow
+    # XXX: parts of the kernels are factorized using `dpex_exp.device_func` namespace
+    # that allow
     # defining device functions that can be used within `dpex.kernel` definitions.
-    # Howver, `dpex.func` functions does not support dpex.barrier calls nor
+    # Howver, `dpex_exp.device_func` functions does not support dpex.barrier calls nor
     # creating local or private arrays. As a consequence, factorizing the kmeans kernels
     # remains a best effort and some code patternsd remain duplicated, In particular
     # the following kernel definition contains a lot of inline comments but those
     # comments are not repeated in the similar patterns in the other kernels
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def fused_lloyd_single_step(
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
@@ -336,7 +338,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _update_result_data(
         sample_idx,                         # PARAM
@@ -420,7 +422,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     )
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             fused_lloyd_single_step, NdRange(global_size, work_group_shape), *args
         )
 

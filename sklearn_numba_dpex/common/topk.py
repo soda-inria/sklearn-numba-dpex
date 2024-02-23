@@ -11,6 +11,7 @@ from functools import lru_cache
 
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -87,7 +88,7 @@ def _make_lexicographical_mapping_kernel_func(dtype):
     uint_type = uint_type_mapping[dtype]
     sign_mask = uint_type(2 ** (sign_bit_idx))
 
-    @dpex.func
+    @dpex_exp.device_func
     def lexicographical_mapping(item):
         mask = (-(item >> sign_bit_idx)) | sign_mask
         return item ^ mask
@@ -102,7 +103,7 @@ def _make_lexicographical_unmapping_kernel_func(dtype):
     one_as_uint_dtype = uint_type(1)
     sign_mask = uint_type(2 ** (sign_bit_idx))
 
-    @dpex.func
+    @dpex_exp.device_func
     def lexicographical_unmapping(item):
         mask = ((item >> sign_bit_idx) - one_as_uint_dtype) | sign_mask
         return item ^ mask
@@ -619,7 +620,7 @@ def _make_create_radix_histogram_kernel(
         one_as_uint_dtype << np.uint32(radix_bits)
     ) - one_as_uint_dtype
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def create_radix_histogram(
         array_in_uint,                # IN READ-ONLY  (n_rows, n_items)
@@ -771,13 +772,13 @@ def _make_create_radix_histogram_kernel(
             privatized_counts
         )
 
-    # HACK 906: all instructions inbetween barriers must be defined in `dpex.func`
-    # device functions.
+    # HACK 906: all instructions inbetween barriers must be defined in
+    # `dpex_exp.device_func` device functions.
     # See sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
 
     # HACK 906: start
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def compute_radixes(
         row_idx,                    # PARAM
@@ -842,7 +843,7 @@ def _make_create_radix_histogram_kernel(
         # `sub_group_size` here.
         col_idx_increment_per_step = n_sub_groups_for_local_histograms * sub_group_size
 
-        @dpex.func
+        @dpex_exp.device_func
         # fmt: off
         def compute_private_histogram(
             col_idx,                    # PARAM
@@ -876,7 +877,7 @@ def _make_create_radix_histogram_kernel(
         # always divisible by `n_local_histograms` here.
         n_iter_for_radixes = sub_group_size // n_local_histograms
 
-        @dpex.func
+        @dpex_exp.device_func
         # fmt: off
         def compute_private_histogram(
             col_idx,                    # PARAM
@@ -902,7 +903,7 @@ def _make_create_radix_histogram_kernel(
                             current_col_idx += n_local_histograms
                     starting_col_idx += sub_group_size
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def share_private_histograms(
         local_subgroup,             # PARAM
@@ -924,7 +925,7 @@ def _make_create_radix_histogram_kernel(
                 ] = private_counts[col_idx]
                 col_idx = (col_idx + one_idx) % sub_group_size
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def partial_local_histograms_reduction(
         local_subgroup,                 # PARAM
@@ -938,7 +939,7 @@ def _make_create_radix_histogram_kernel(
                 local_subgroup + reduction_active_subgroups, local_subgroup_work_id
             ]
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def merge_histogram_in_global_memory(
         row_idx,                    # PARAM
@@ -977,7 +978,7 @@ def _make_create_radix_histogram_kernel(
             n_active_rows,
             n_local_histograms * n_work_groups_per_row,
         )
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             create_radix_histogram,
             NdRange(global_shape, work_group_shape),
             array_in_uint,
@@ -1003,7 +1004,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
     uint_type = uint_type_mapping[dtype]
     zero_as_uint_dtype = uint_type(0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def check_radix_histogram(
         counts,                        # IN           (n_rows, radix_size,)
@@ -1084,7 +1085,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
 
         desired_masked_value[row_idx] = desired_masked_value_
 
-    @dpex.kernel
+    @dpex_exp.kernel
     def update_radix_position(radix_position, mask_for_desired_value):
         # The current partial analysis with the current radixes seen was not enough
         # to find the k-th element. Let's inspect the next `radix_bits`.
@@ -1111,7 +1112,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         n_active_rows_ = int(n_active_rows[0])
         global_size = math.ceil(n_active_rows_ / work_group_size) * work_group_size
 
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             check_radix_histogram,
             NdRange((global_size,), (work_group_size,)),
             counts,
@@ -1126,7 +1127,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         )
 
     def kernel_call(*args):
-        dpex.call_kernel(update_radix_position, NdRange((1,), (1,)), *args)
+        dpex_exp.call_kernel(update_radix_position, NdRange((1,), (1,)), *args)
 
     return kernel_call, _check_radix_histogram
 
@@ -1148,7 +1149,7 @@ def _make_gather_topk_kernel(
     work_group_shape = (1, work_group_size)
     global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def gather_topk(
         array_in,                           # IN READONLY    (n_rows, n_cols)
@@ -1194,7 +1195,7 @@ def _make_gather_topk_kernel(
     # in the top-k values are known. When those two numbers are equal, the kernel can
     # be written more efficient and much simpler, and the condition is not unusual.
     # Let's write a separate kernel for this special case.
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def gather_topk_include_all_threshold_occurences(
         row_idx,                           # PARAM
@@ -1218,7 +1219,7 @@ def _make_gather_topk_kernel(
                 result_col_idx, row_idx, count_one_as_an_int)
             result[row_idx, result_col_idx_] = item
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def gather_topk_generic(
         row_idx,                       # PARAM
@@ -1252,7 +1253,9 @@ def _make_gather_topk_kernel(
         result[row_idx, result_col_idx_] = item
 
     def kernel_call(*args):
-        dpex.call_kernel(gather_topk, NdRange(global_shape, work_group_shape), *args)
+        dpex_exp.call_kernel(
+            gather_topk, NdRange(global_shape, work_group_shape), *args
+        )
 
     return kernel_call
 
@@ -1269,7 +1272,7 @@ def _make_gather_topk_idx_kernel(
     work_group_shape = (1, work_group_size)
     global_shape = (n_rows, n_work_groups_per_row * work_group_size)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def gather_topk_idx(
         array_in,                           # IN READONLY    (n_rows, n_cols)
@@ -1307,7 +1310,7 @@ def _make_gather_topk_idx_kernel(
                 result,
             )
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def gather_topk_idx_include_all_threshold_occurences(
         row_idx,                           # PARAM
@@ -1331,7 +1334,7 @@ def _make_gather_topk_idx_kernel(
                 result_col_idx, row_idx, count_one_as_an_int)
             result[row_idx, result_col_idx_] = col_idx
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def gather_topk_idx_generic(
         row_idx,                       # PARAM
@@ -1374,7 +1377,7 @@ def _make_gather_topk_idx_kernel(
             result[row_idx, result_col_idx_] = col_idx
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             gather_topk_idx, NdRange(global_shape, work_group_shape), *args
         )
 

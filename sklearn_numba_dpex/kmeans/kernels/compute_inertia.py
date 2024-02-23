@@ -2,6 +2,7 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -12,7 +13,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     zero_idx = np.int64(0)
     zero_init = dtype(0.0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def compute_inertia(
         X_t,                          # IN READ-ONLY   (n_features, n_samples)
@@ -42,7 +43,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             compute_inertia, NdRange((global_size,), (work_group_size,)), *args
         )
 

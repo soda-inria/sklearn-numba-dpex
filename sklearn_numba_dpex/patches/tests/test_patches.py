@@ -1,6 +1,7 @@
 import dpctl
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
 
@@ -26,14 +27,14 @@ def test_need_to_workaround_numba_dpex_906():
 
     The hack consist in wrapping instructions that are suspected of triggering the
     bug (basically all write operations in kernels that also contain a barrier) in
-    `dpex.func` device functions.
+    `dpex_exp.device_func` device functions.
 
     This hack makes the code significantly harder to read and should be reverted ASAP.
     """
 
     dtype = np.float32
 
-    @dpex.kernel
+    @dpex_exp.kernel
     def kernel(result):
         local_idx = dpex.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
@@ -58,7 +59,7 @@ def test_need_to_workaround_numba_dpex_906():
     assert dpt.asnumpy(result)[0] != 10, rationale
 
     # Test that highlight how the hack works
-    @dpex.kernel
+    @dpex_exp.kernel
     def kernel(result):
         local_idx = dpex.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
@@ -79,7 +80,7 @@ def test_need_to_workaround_numba_dpex_906():
 
 # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
 def make_setitem_if_kernel_func():
-    @dpex.func
+    @dpex_exp.device_func
     def _setitem_if(condition, index, value, array):
         if condition:
             array[index] = value

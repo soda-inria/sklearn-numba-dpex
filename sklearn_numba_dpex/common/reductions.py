@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -42,8 +43,8 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     # TODO: the first call of partial_argmin_reduction in the final loop should be
     # written with only two arguments since "previous_result" does not exist yet.
     # It seems it's not possible to get a good factoring of the code to avoid copying
-    # most of the code for this with @dpex.kernel, for now we resort to branching.
-    @dpex.kernel
+    # most of the code for this with @dpex_exp.kernel, for now we resort to branching.
+    @dpex_exp.kernel
     # fmt: off
     def partial_argmin_reduction(
         values,             # IN        (size,)
@@ -101,7 +102,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_work_id,              # PARAM
@@ -145,7 +146,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_values[local_work_id] = y
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _local_iteration(
         local_work_id,              # PARAM
@@ -170,7 +171,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_argmin[local_x_idx] = local_argmin[local_y_idx]
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _register_result(
         first_work_id,          # PARAM
@@ -204,7 +205,9 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
 
     def argmin_reduction(values):
         for kernel, sizes, previous_result, result in kernels_and_empty_tensors_tuples:
-            dpex.call_kernel(kernel, NdRange(*sizes), values, previous_result, result)
+            dpex_exp.call_kernel(
+                kernel, NdRange(*sizes), values, previous_result, result
+            )
         return result
 
     return argmin_reduction
@@ -262,7 +265,7 @@ def make_sum_reduction_2d_kernel(
     If `fused_elementwise_func` is not None, it will be applied element-wise
     once to each element of the input array at the beginning of the the first
     kernel invocation. This function is compiled and fused into the first
-    kernel as a device function with the help of `dpex.func`. This comes with
+    kernel as a device function with the help of `dpex_exp.device_func`. This comes with
     limitations as explained in:
 
     https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
@@ -383,7 +386,7 @@ def make_sum_reduction_2d_kernel(
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, sizes, result in kernels_and_empty_tensors_pairs:
-            dpex.call_kernel(kernel, NdRange(*sizes), summands, result)
+            dpex_exp.call_kernel(kernel, NdRange(*sizes), summands, result)
             summands = result
 
         if is_1d:
@@ -401,12 +404,12 @@ def _prepare_sum_reduction_2d_axis0(
 
     if fused_elementwise_func is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def fused_elementwise_func_(x):
             return x
 
     else:
-        fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+        fused_elementwise_func_ = dpex_exp.device_func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -482,7 +485,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
         summands,    # IN        (sum_axis_size, n_cols)
@@ -611,7 +614,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_row_idx,      # PARAM
@@ -647,12 +650,12 @@ def _prepare_sum_reduction_2d_axis1(
 
     if fused_elementwise_func is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def fused_elementwise_func_(x):
             return x
 
     else:
-        fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+        fused_elementwise_func_ = dpex_exp.device_func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -716,7 +719,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     _sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
         summands,    # IN        (n_rows, n_cols)
@@ -843,7 +846,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_work_id,          # PARAM
@@ -872,7 +875,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
 # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
 def _make_sum_and_set_items_if_kernel_func():
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def set_sum_of_items_kernel_func(
             condition,          # PARAM

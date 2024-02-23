@@ -2,6 +2,7 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba_dpex.kernel_api import NdRange
 
@@ -25,7 +26,7 @@ def make_kmeansplusplus_init_kernel(
     zero_idx = np.int64(0)
     zero_init = dtype(0.0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_init(
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
@@ -58,7 +59,7 @@ def make_kmeansplusplus_init_kernel(
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             kmeansplusplus_init, NdRange((global_size,), (work_group_size,)), *args
         )
 
@@ -81,7 +82,7 @@ def make_sample_center_candidates_kernel(
     zero_init = dtype(0.0)
     max_candidate_id = np.int32(n_samples - 1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def sample_center_candidates(
         closest_dist_sq,          # IN             (n_features, n_samples)
@@ -109,7 +110,7 @@ def make_sample_center_candidates_kernel(
     global_size = (math.ceil(n_local_trials / work_group_size)) * work_group_size
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             sample_center_candidates, NdRange((global_size,), (work_group_size,)), *args
         )
 
@@ -164,7 +165,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_single_step(
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
@@ -243,7 +244,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
             dpex.barrier(dpex.LOCAL_MEM_FENCE)
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _save_sq_distances(
         sample_idx,             # PARAM
@@ -274,7 +275,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     )
 
     def kernel_call(*args):
-        dpex.call_kernel(
+        dpex_exp.call_kernel(
             kmeansplusplus_single_step, NdRange(global_size, work_group_shape), *args
         )
 
