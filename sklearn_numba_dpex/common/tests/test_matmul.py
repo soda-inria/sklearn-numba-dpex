@@ -162,3 +162,7 @@ def test_matmul_raise_on_invalid_size_parameters(
             work_group_size=work_group_size,
             sub_group_size=sub_group_size,
         )
+
+
+if __name__ == "__main__":
+    _test_matmul_2d(((4, 4), (4, 4)), "arange", 1, 1, np.float32)
