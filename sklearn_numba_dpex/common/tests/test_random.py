@@ -6,7 +6,7 @@ import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 from sklearn.utils._testing import assert_allclose
 
 from sklearn_numba_dpex.common.random import (
@@ -192,11 +192,12 @@ def _make_rand_uniform_kernel(size, dtype, size_per_work_item):
     @dpex_exp.kernel
     # fmt: off
     def _rand_uniform_kernel(
+        nd_item: NdItem,
         states,                           # IN               (global_size, 2)
         out,                              # OUT              (size,)
     ):
         # fmt: on
-        item_idx = dpex.get_global_id(0)
+        item_idx = nd_item.get_global_id(0)
         out_idx = item_idx * size_per_work_item
 
         private_states = dpex.private.array(shape=private_states_shape, dtype=np.uint64)

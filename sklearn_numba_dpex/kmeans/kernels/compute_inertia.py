@@ -1,10 +1,9 @@
 import math
 from functools import lru_cache
 
-import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 
 @lru_cache
@@ -16,6 +15,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     @dpex_exp.kernel
     # fmt: off
     def compute_inertia(
+        nd_item: NdItem,
         X_t,                          # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                # IN READ-ONLY   (n_features,)
         centroids_t,                  # IN READ-ONLY   (n_features, n_clusters)
@@ -24,7 +24,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     ):
         # fmt: on
 
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
 
         if sample_idx >= n_samples:
             return

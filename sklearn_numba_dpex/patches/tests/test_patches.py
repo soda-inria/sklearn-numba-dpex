@@ -4,6 +4,7 @@ import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
+from numba_dpex.kernel_api import NdItem
 
 
 # TODO: remove this test after going through the code base and reverting unnecessary
@@ -35,8 +36,8 @@ def test_need_to_workaround_numba_dpex_906():
     dtype = np.float32
 
     @dpex_exp.kernel
-    def kernel(result):
-        local_idx = dpex.get_local_id(0)
+    def kernel(nd_item: NdItem, result):
+        local_idx = nd_item.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
 
         if local_idx < 1:
@@ -60,8 +61,8 @@ def test_need_to_workaround_numba_dpex_906():
 
     # Test that highlight how the hack works
     @dpex_exp.kernel
-    def kernel(result):
-        local_idx = dpex.get_local_id(0)
+    def kernel(nd_item: NdItem, result):
+        local_idx = nd_item.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
 
         _setitem_if((local_idx < 1), 0, 1, local_values)

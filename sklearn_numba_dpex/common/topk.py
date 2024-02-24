@@ -13,7 +13,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import (
     _enforce_matmul_like_work_group_geometry,
@@ -623,6 +623,7 @@ def _make_create_radix_histogram_kernel(
     @dpex_exp.kernel
     # fmt: off
     def create_radix_histogram(
+        nd_item: NdItem,
         array_in_uint,                # IN READ-ONLY  (n_rows, n_items)
         active_rows_mapping,          # IN            (n_rows,)
         mask_for_desired_value,       # IN            (1,)
@@ -656,15 +657,15 @@ def _make_create_radix_histogram_kernel(
         """
         # Row and column indices of the value in `array_in_uint` whose radix will be
         # computed by the current work item
-        row_idx = active_rows_mapping[dpex.get_global_id(one_idx)]
-        col_idx = dpex.get_global_id(zero_idx) + (
-            sub_group_size * dpex.get_global_id(two_idx))
+        row_idx = active_rows_mapping[nd_item.get_global_id(one_idx)]
+        col_idx = nd_item.get_global_id(zero_idx) + (
+            sub_group_size * nd_item.get_global_id(two_idx))
 
         # Index of the subgroup and position within this sub group. Incidentally, this
         # also indexes the location to which the radix value will be written in the
         # shared memory buffer.
-        local_subgroup = dpex.get_local_id(two_idx)
-        local_subgroup_work_id = dpex.get_local_id(zero_idx)
+        local_subgroup = nd_item.get_local_id(two_idx)
+        local_subgroup_work_id = nd_item.get_local_id(zero_idx)
 
         # Like `col_idx`, but where the first value of `array_in_uint` covered by the
         # current work group is indexed with zero.
@@ -1007,6 +1008,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
     @dpex_exp.kernel
     # fmt: off
     def check_radix_histogram(
+        nd_item: NdItem,
         counts,                        # IN           (n_rows, radix_size,)
         radix_position,                # IN           (1,)
         n_active_rows,                 # IN           (1,)
@@ -1018,7 +1020,7 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
         new_active_rows_mapping,       # OUT          (n_rows,)
     ):
         # fmt: on
-        work_item_idx = dpex.get_global_id(zero_idx)
+        work_item_idx = nd_item.get_global_id(zero_idx)
         if work_item_idx >= n_active_rows[zero_idx]:
             return
 
@@ -1152,6 +1154,7 @@ def _make_gather_topk_kernel(
     @dpex_exp.kernel
     # fmt: off
     def gather_topk(
+        nd_item: NdItem,
         array_in,                           # IN READONLY    (n_rows, n_cols)
         threshold,                          # IN             (n_rows,)
         n_threshold_occurences_in_topk,     # IN             (n_rows,)
@@ -1160,8 +1163,8 @@ def _make_gather_topk_kernel(
         result,                             # OUT            (n_rows, k)
     ):
         # fmt: on
-        row_idx = dpex.get_global_id(zero_idx)
-        col_idx = dpex.get_global_id(one_idx)
+        row_idx = nd_item.get_global_id(zero_idx)
+        col_idx = nd_item.get_global_id(one_idx)
 
         n_threshold_occurences_in_topk_ = n_threshold_occurences_in_topk[row_idx]
 
@@ -1275,6 +1278,7 @@ def _make_gather_topk_idx_kernel(
     @dpex_exp.kernel
     # fmt: off
     def gather_topk_idx(
+        nd_item: NdItem,
         array_in,                           # IN READONLY    (n_rows, n_cols)
         threshold,                          # IN             (n_rows,)
         n_threshold_occurences_in_topk,     # IN             (n_rows,)
@@ -1283,8 +1287,8 @@ def _make_gather_topk_idx_kernel(
         result,                             # OUT            (n_rows, k)
     ):
         # fmt: on
-        row_idx = dpex.get_global_id(zero_idx)
-        col_idx = dpex.get_global_id(one_idx)
+        row_idx = nd_item.get_global_id(zero_idx)
+        col_idx = nd_item.get_global_id(one_idx)
 
         n_threshold_occurences_in_topk_ = n_threshold_occurences_in_topk[row_idx]
 

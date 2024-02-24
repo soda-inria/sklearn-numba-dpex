@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
@@ -29,6 +29,7 @@ def make_kmeansplusplus_init_kernel(
     @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_init(
+        nd_item: NdItem,
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         sample_weight,            # IN READ-ONLY   (n_samples,)
         centers_t,                # OUT            (n_features, n_clusters)
@@ -36,7 +37,7 @@ def make_kmeansplusplus_init_kernel(
         closest_dist_sq,          # OUT            (n_samples,)
     ):
         # fmt: on
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
 
@@ -85,13 +86,14 @@ def make_sample_center_candidates_kernel(
     @dpex_exp.kernel
     # fmt: off
     def sample_center_candidates(
+        nd_item: NdItem,
         closest_dist_sq,          # IN             (n_features, n_samples)
         total_potential,          # IN             (1,)
         random_state,             # INOUT          (n_local_trials, 2)
         candidates_id,            # OUT            (n_local_trials,)
     ):
         # fmt: on
-        local_trial_idx = dpex.get_global_id(zero_idx)
+        local_trial_idx = nd_item.get_global_id(zero_idx)
         if local_trial_idx >= n_local_trials:
             return
         random_value = (rand_uniform_kernel_func(random_state, local_trial_idx)
@@ -168,6 +170,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_single_step(
+        nd_item: NdItem,
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                     # IN READ-ONLY   (n_samples,)
         candidates_ids,                    # IN             (n_candidates,)
@@ -181,13 +184,13 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
         first_candidate_idx = zero_idx
 
-        local_col_idx = dpex.get_local_id(zero_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
 
-        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        window_loading_feature_offset = nd_item.get_local_id(one_idx)
         window_loading_candidate_idx = local_col_idx
 
         sample_idx = (
-            (dpex.get_global_id(one_idx) * sub_group_size)
+            (nd_item.get_global_id(one_idx) * sub_group_size)
             + local_col_idx
         )
 

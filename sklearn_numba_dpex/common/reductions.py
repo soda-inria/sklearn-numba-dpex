@@ -5,7 +5,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
@@ -47,6 +47,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     @dpex_exp.kernel
     # fmt: off
     def partial_argmin_reduction(
+        nd_item: NdItem,
         values,             # IN        (size,)
         previous_result,    # IN        (current_size,)
         argmin_indices,     # OUT       (math.ceil(
@@ -55,8 +56,8 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
                             #            ))
     ):
         # fmt: on
-        group_id = dpex.get_group_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        group_id = nd_item.get_group().get_group_id(zero_idx)
+        local_work_id = nd_item.get_local_id(zero_idx)
         first_work_id = local_work_id == zero_idx
 
         previous_result_size = previous_result.shape[zero_idx]
@@ -488,6 +489,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
     @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
+        nd_item: NdItem,
         summands,    # IN        (sum_axis_size, n_cols)
         result,      # OUT       (math.ceil(size / (2 * reduction_block_size), n_cols)
     ):
@@ -508,13 +510,13 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
         # The work groups are indexed in row-major order. From this let's deduce the
         # position of the window within the column...
-        local_block_id_in_col = dpex.get_group_id(one_idx)
+        local_block_id_in_col = nd_item.get_group().get_group_id(one_idx)
 
         # Let's map the current work item to an index in a 2D grid, where the
         # `work_group_size` work items are mapped in row-major order to the array
         # of size `(n_sub_groups_per_work_group, sub_group_size)`.
-        local_row_idx = dpex.get_local_id(one_idx)     # 2D idx, first coordinate
-        local_col_idx = dpex.get_local_id(zero_idx)    # 2D idx, second coordinate
+        local_row_idx = nd_item.get_local_id(one_idx)     # 2D idx, first coordinate
+        local_col_idx = nd_item.get_local_id(zero_idx)    # 2D idx, second coordinate
 
         # This way, each row in the 2D index can be seen as mapped to two rows in the
         # corresponding window of items of the input `summands`, with the first row of
@@ -554,8 +556,9 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # The current work item use the following second coordinate (given by the
         # position of the window in the grid of windows, and by the local position of
         # the work item in the 2D index):
+        zero_group_idx = nd_item.get_group().get_group_id(zero_idx)
         col_idx = (
-            (dpex.get_group_id(zero) * sub_group_size) + local_col_idx
+            (zero_group_idx * sub_group_size) + local_col_idx
         )
 
         sum_axis_size = summands.shape[zero_idx]
@@ -722,6 +725,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
     @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
+        nd_item: NdItem,
         summands,    # IN        (n_rows, n_cols)
         result,      # OUT       (n_rows, math.ceil(n_cols / (2 * work_group_size),)
     ):
@@ -739,12 +743,12 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
         # The work groups are indexed in row-major order, from that let's deduce the
         # row of `summands` to process by work items in `group_id`...
-        row_idx = dpex.get_group_id(one_idx)
+        row_idx = nd_item.get_group().get_group_id(one_idx)
 
         # ... and the position of the window within this row, ranging from 0
         # (first window in the row) to `n_work_groups_per_row - 1` (last window
         # in the row):
-        local_work_group_id_in_row = dpex.get_group_id(zero_idx)
+        local_work_group_id_in_row = nd_item.get_group().get_group_id(zero_idx)
 
         # Since all windows have size `reduction_block_size`, the position of the first
         # item in the window is given by:
@@ -758,7 +762,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # The current work item is indexed locally within the group of work items, with
         # index `local_work_id` that can range from `0` (first item in the work group)
         # to `work_group_size - 1` (last item in the work group)
-        local_work_id = dpex.get_local_id(zero_idx)
+        local_work_id = nd_item.get_local_id(zero_idx)
 
         # Let's remember the size of the array to ensure that the last window in the
         # row do not try to access items outside the buffer.

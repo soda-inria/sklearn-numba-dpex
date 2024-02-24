@@ -5,7 +5,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 zero_idx = np.int64(0)
 
@@ -23,6 +23,7 @@ def make_relocate_empty_clusters_kernel(
     @dpex_exp.kernel
     # fmt: off
     def relocate_empty_clusters(
+        nd_item: NdItem,
         X_t,                        # IN READ-ONLY   (n_features, n_samples)
         sample_weight,              # IN READ-ONLY   (n_samples,)
         assignments_idx,            # IN             (n_samples,)
@@ -33,8 +34,8 @@ def make_relocate_empty_clusters_kernel(
         cluster_sizes               # INOUT          (n_clusters,)
     ):
         # fmt: on
-        group_idx = dpex.get_group_id(zero_idx)
-        item_idx = dpex.get_local_id(zero_idx)
+        group_idx = nd_item.get_group().get_group_id(zero_idx)
+        item_idx = nd_item.get_local_id(zero_idx)
         relocated_idx = group_idx // n_work_groups_for_cluster
         feature_idx = (
             ((group_idx % n_work_groups_for_cluster) * work_group_size) + item_idx
@@ -93,12 +94,13 @@ def make_centroid_shifts_kernel(n_clusters, n_features, work_group_size, dtype):
     @dpex_exp.kernel
     # fmt: off
     def centroid_shifts(
+        nd_item: NdItem,
         centroids_t,        # IN    (n_features, n_clusters)
         new_centroids_t,    # IN    (n_features, n_clusters)
         centroid_shifts,    # OUT   (n_clusters,)
     ):
         # fmt: on
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
 
         if sample_idx >= n_clusters:
             return
@@ -142,6 +144,7 @@ def make_reduce_centroid_data_kernel(
     @dpex_exp.kernel
     # fmt: off
     def _reduce_centroid_data_kernel(
+        nd_item: NdItem,
         cluster_sizes_private_copies,            # IN      (n_copies, n_clusters)
         centroids_t_private_copies_reshaped,     # IN      (n_copies, n_features * n_clusters)  # noqa
         cluster_sizes,                           # OUT     (n_clusters,)
@@ -150,7 +153,7 @@ def make_reduce_centroid_data_kernel(
         n_empty_clusters,                        # OUT     (1,)
     ):
         # fmt: on
-        item_idx = dpex.get_global_id(zero_idx)
+        item_idx = nd_item.get_global_id(zero_idx)
         if item_idx >= n_sums:
             return
 
@@ -242,12 +245,13 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
     @dpex_exp.kernel
     # fmt: off
     def _build_mapping(
+        nd_item: NdItem,
         labels1,            # IN      (n_samples,)
         labels2,            # IN      (n_samples,)
         mapping,            # BUFFER  (n_clusters,)
     ):
         # fmt: on
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
 
@@ -258,6 +262,7 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
     @dpex_exp.kernel
     # fmt: off
     def _is_same_clustering(
+        nd_item: NdItem,
         labels1,
         labels2,
         mapping,
@@ -267,7 +272,7 @@ def make_is_same_clustering_kernel(n_samples, n_clusters, work_group_size, devic
         """`result` is expected to be an empty array with dtype int32 of size (1,)
         initialized with value 1.
         """
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
 
@@ -286,8 +291,10 @@ def make_get_nb_distinct_clusters_kernel(
     one_incr = np.int32(1)
 
     @dpex_exp.kernel
-    def get_nb_distinct_clusters(labels, clusters_seen, nb_distinct_clusters):
-        sample_idx = dpex.get_global_id(zero_idx)
+    def get_nb_distinct_clusters(
+        nd_item: NdItem, labels, clusters_seen, nb_distinct_clusters
+    ):
+        sample_idx = nd_item.get_global_id(zero_idx)
 
         if sample_idx >= n_samples:
             return

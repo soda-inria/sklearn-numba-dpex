@@ -2,10 +2,9 @@ import math
 from functools import lru_cache
 
 import dpctl.tensor as dpt
-import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 zero_idx = np.int64(0)
 
@@ -18,10 +17,11 @@ def make_apply_elementwise_func(shape, func, work_group_size):
     @dpex_exp.kernel
     # fmt: off
     def elementwise_ops_kernel(
+        nd_item: NdItem,
         data,                    # INOUT    (n_items,)
     ):
         # fmt: on
-        item_idx = dpex.get_global_id(zero_idx)
+        item_idx = nd_item.get_global_id(zero_idx)
         if item_idx >= n_items:
             return
 
@@ -46,8 +46,8 @@ def make_initialize_to_zeros_kernel(shape, work_group_size, dtype):
     zero = dtype(0.0)
 
     @dpex_exp.kernel
-    def initialize_to_zeros_kernel(data):
-        item_idx = dpex.get_global_id(zero_idx)
+    def initialize_to_zeros_kernel(nd_item: NdItem, data):
+        item_idx = nd_item.get_global_id(zero_idx)
 
         if item_idx >= n_items:
             return
@@ -74,8 +74,8 @@ def make_broadcast_division_1d_2d_axis0_kernel(shape, work_group_size):
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
     @dpex_exp.kernel
-    def broadcast_division(dividend_array, divisor_vector):
-        col_idx = dpex.get_global_id(zero_idx)
+    def broadcast_division(nd_item: NdItem, dividend_array, divisor_vector):
+        col_idx = nd_item.get_global_id(zero_idx)
 
         if col_idx >= n_cols:
             return
@@ -113,8 +113,8 @@ def make_broadcast_ops_1d_2d_axis1_kernel(shape, ops, work_group_size):
     # Optimized for C-contiguous array and for
     # size1 >> preferred_work_group_size_multiple
     @dpex_exp.kernel
-    def broadcast_ops(left_operand_array, right_operand_vector):
-        col_idx = dpex.get_global_id(zero_idx)
+    def broadcast_ops(nd_item: NdItem, left_operand_array, right_operand_vector):
+        col_idx = nd_item.get_global_id(zero_idx)
 
         if col_idx >= n_cols:
             return
@@ -144,11 +144,12 @@ def make_half_l2_norm_2d_axis0_kernel(shape, work_group_size, dtype):
     @dpex_exp.kernel
     # fmt: off
     def half_l2_norm(
+        nd_item: NdItem,
         data,    # IN        (size0, size1)
         result,  # OUT       (size1,)
     ):
         # fmt: on
-        col_idx = dpex.get_global_id(zero_idx)
+        col_idx = nd_item.get_global_id(zero_idx)
 
         if col_idx >= n_cols:
             return

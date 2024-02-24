@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -65,6 +65,7 @@ def make_compute_euclidean_distances_fixed_window_kernel(
     @dpex_exp.kernel
     # fmt: off
     def compute_distances(
+        nd_item: NdItem,
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         current_centroids_t,      # IN READ-ONLY   (n_features, n_clusters)
         euclidean_distances_t,    # OUT            (n_clusters, n_samples)
@@ -77,13 +78,13 @@ def make_compute_euclidean_distances_fixed_window_kernel(
 
         first_centroid_idx = zero_idx
 
-        local_col_idx = dpex.get_local_id(zero_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
 
-        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        window_loading_feature_offset = nd_item.get_local_id(one_idx)
         window_loading_centroid_idx = local_col_idx
 
         sample_idx = (
-            (dpex.get_global_id(one_idx) * sub_group_size)
+            (nd_item.get_global_id(one_idx) * sub_group_size)
             + local_col_idx
         )
 

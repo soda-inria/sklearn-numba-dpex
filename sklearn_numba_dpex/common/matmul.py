@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import _enforce_matmul_like_work_group_geometry
 
@@ -273,18 +273,19 @@ def make_matmul_2d_kernel(
     @dpex_exp.kernel
     # fmt: off
     def matmul(
+            nd_item: NdItem,
             X,                          # IN      (X_n_rows, n_cols)
             Y_t,                        # IN      (Y_t_n_rows, n_cols)
             result                      # OUT     (X_n_rows, Y_t_n_rows)
     ):
         # fmt: on
-        work_item_idx = dpex.get_local_id(zero_idx)
+        work_item_idx = nd_item.get_local_id(zero_idx)
 
         # Index the work items in the base sliding window:
         work_item_row_idx = work_item_idx // sub_group_size
         work_item_col_idx = work_item_idx % sub_group_size
 
-        group_idx = dpex.get_group_id(zero_idx)
+        group_idx = nd_item.get_group().get_group_id(zero_idx)
 
         # Get indices of the row and the column of the top-left corner of the sub-array
         # of results covered by this work group

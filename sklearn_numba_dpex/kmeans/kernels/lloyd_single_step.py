@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdRange
+from numba_dpex.kernel_api import NdItem, NdRange
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -152,6 +152,7 @@ def make_lloyd_single_step_fixed_window_kernel(
     @dpex_exp.kernel
     # fmt: off
     def fused_lloyd_single_step(
+        nd_item: NdItem,
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
@@ -192,9 +193,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         # reads like a SYCL kernel that maps 2D group size with a row-major order,
         # despite that `numba_dpex` chose to mimic the column-major order style of
         # mapping 2D group sizes in cuda.
-        sub_group_idx = dpex.get_global_id(one_idx)
-        local_row_idx = dpex.get_local_id(one_idx)
-        local_col_idx = dpex.get_local_id(zero_idx)
+        sub_group_idx = nd_item.get_global_id(one_idx)
+        local_row_idx = nd_item.get_local_id(one_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
 
         # Let's start by remapping the 2D grid of work items to a 1D grid that reflect
         # how contiguous work items address one contiguoue sample_idx:
