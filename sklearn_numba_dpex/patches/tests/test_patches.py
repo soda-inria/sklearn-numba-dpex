@@ -4,7 +4,7 @@ import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
-from numba_dpex.kernel_api import MemoryScope, NdItem, group_barrier
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 
 # TODO: remove this test after going through the code base and reverting unnecessary
@@ -49,7 +49,7 @@ def test_need_to_workaround_numba_dpex_906():
             result[0] = 10
 
     result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
-    kernel[32, 32](result)
+    dpex_exp.call_kernel(kernel, NdRange((32,), (32,)), result)
 
     rationale = """If this test fails, it means that the bug reported at
     https://github.com/IntelPython/numba-dpex/issues/906 has been fixed, and all the
@@ -74,7 +74,7 @@ def test_need_to_workaround_numba_dpex_906():
     _setitem_if = make_setitem_if_kernel_func()
 
     result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
-    kernel[32, 32](result)
+    dpex_exp.call_kernel(kernel, NdRange((32,), (32,)), result)
 
     assert dpt.asnumpy(result)[0] == 10
 
