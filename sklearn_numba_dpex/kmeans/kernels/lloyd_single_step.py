@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -282,7 +282,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -300,7 +300,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
                 # operations in the current iteration to be over for all work items.
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
@@ -319,7 +319,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.

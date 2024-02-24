@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -132,7 +132,7 @@ def make_label_assignment_fixed_window_kernel(
                     centroids_window,
                 )
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -147,7 +147,7 @@ def make_label_assignment_fixed_window_kernel(
 
                 first_feature_idx += centroids_window_height
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
@@ -160,7 +160,7 @@ def make_label_assignment_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _setitem_if(
             sample_idx < n_samples,

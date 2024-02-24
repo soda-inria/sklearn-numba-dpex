@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _enforce_matmul_like_work_group_geometry
 
@@ -355,7 +355,7 @@ def make_matmul_2d_kernel(
             )
             window_loaded_col_idx += sub_group_size
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             _accumulate_private_windows(
                 first_private_loaded_sliding_X_value_idx,
@@ -368,7 +368,7 @@ def make_matmul_2d_kernel(
                 private_result
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _write_result(
             group_first_row_idx + first_private_loaded_sliding_X_value_idx,

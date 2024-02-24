@@ -4,7 +4,7 @@ import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
-from numba_dpex.kernel_api import NdItem
+from numba_dpex.kernel_api import MemoryScope, NdItem, group_barrier
 
 
 # TODO: remove this test after going through the code base and reverting unnecessary
@@ -43,7 +43,7 @@ def test_need_to_workaround_numba_dpex_906():
         if local_idx < 1:
             local_values[0] = 1
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         if local_idx < 1:
             result[0] = 10
@@ -67,7 +67,7 @@ def test_need_to_workaround_numba_dpex_906():
 
         _setitem_if((local_idx < 1), 0, 1, local_values)
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _setitem_if((local_idx < 1), 0, 10, result)
 

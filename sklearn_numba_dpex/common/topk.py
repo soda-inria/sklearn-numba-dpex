@@ -13,7 +13,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import (
     _enforce_matmul_like_work_group_geometry,
@@ -705,7 +705,7 @@ def _make_create_radix_histogram_kernel(
             radix_values
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # The first `n_local_histograms` work items read `sub_group_size`
         # values each and compute the histogram of their occurences in private memory.
@@ -724,7 +724,7 @@ def _make_create_radix_histogram_kernel(
             private_counts
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # The first `n_local_histograms` work items  write their private histogram
         # into the shared memory buffer, effectively sharing it with all other work
@@ -738,7 +738,7 @@ def _make_create_radix_histogram_kernel(
             local_counts
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # This is the merge step, where all shared histograms are summed
         # together into the first buffer local_counts[0], in a bracket manner.
@@ -755,7 +755,7 @@ def _make_create_radix_histogram_kernel(
                 # OUT
                 local_counts
             )
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # The current histogram is local to the current work group. Summing right away
         # all histograms to a unique, global histogram in global memory might give poor

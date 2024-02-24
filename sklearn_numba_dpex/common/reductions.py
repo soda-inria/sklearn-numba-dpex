@@ -5,7 +5,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
@@ -80,7 +80,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
             local_values,
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
         n_active_work_items = work_group_size
         for i in range(n_local_iterations):
             n_active_work_items = n_active_work_items // two_as_a_long
@@ -91,7 +91,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
                 local_values,
                 local_argmin
             )
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _register_result(
             first_work_id,
@@ -574,7 +574,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             local_values
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # Then, the sums of two scalars that have been written in `local_array` are
         # further summed together into `local_array[0, :]`. At each iteration, half
@@ -602,7 +602,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
                 local_values
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # At this point local_values[0, :] + local_values[1, :] is equal to the sum of
         # all elements in summands that have been covered by the work group, we write
@@ -804,7 +804,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             local_values
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # Then, the sums of two scalars that have been written in `local_array` are
         # further summed together into `local_array[0]`. At each iteration, half
@@ -834,7 +834,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 local_values
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # At this point local_values[0] + local_values[1] is equal to the sum of all
         # elements in summands that have been covered by the work group, we write it
