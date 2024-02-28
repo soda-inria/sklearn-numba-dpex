@@ -2,7 +2,9 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 from sklearn_numba_dpex.common.random import make_rand_uniform_kernel_func
@@ -24,9 +26,10 @@ def make_kmeansplusplus_init_kernel(
     zero_idx = np.int64(0)
     zero_init = dtype(0.0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_init(
+        nd_item: NdItem,
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         sample_weight,            # IN READ-ONLY   (n_samples,)
         centers_t,                # OUT            (n_features, n_clusters)
@@ -34,7 +37,7 @@ def make_kmeansplusplus_init_kernel(
         closest_dist_sq,          # OUT            (n_samples,)
     ):
         # fmt: on
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
         if sample_idx >= n_samples:
             return
 
@@ -55,7 +58,13 @@ def make_kmeansplusplus_init_kernel(
             centers_t[feature_idx, zero_idx] = X_t[feature_idx, starting_center_id_]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return kmeansplusplus_init[global_size, work_group_size]
+
+    def kernel_call(*args):
+        dpex_exp.call_kernel(
+            kmeansplusplus_init, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -74,16 +83,17 @@ def make_sample_center_candidates_kernel(
     zero_init = dtype(0.0)
     max_candidate_id = np.int32(n_samples - 1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def sample_center_candidates(
+        nd_item: NdItem,
         closest_dist_sq,          # IN             (n_features, n_samples)
         total_potential,          # IN             (1,)
         random_state,             # INOUT          (n_local_trials, 2)
         candidates_id,            # OUT            (n_local_trials,)
     ):
         # fmt: on
-        local_trial_idx = dpex.get_global_id(zero_idx)
+        local_trial_idx = nd_item.get_global_id(zero_idx)
         if local_trial_idx >= n_local_trials:
             return
         random_value = (rand_uniform_kernel_func(random_state, local_trial_idx)
@@ -100,7 +110,13 @@ def make_sample_center_candidates_kernel(
         candidates_id[local_trial_idx] = candidate_id
 
     global_size = (math.ceil(n_local_trials / work_group_size)) * work_group_size
-    return sample_center_candidates[global_size, work_group_size]
+
+    def kernel_call(*args):
+        dpex_exp.call_kernel(
+            sample_center_candidates, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call
 
 
 @lru_cache
@@ -151,9 +167,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def kmeansplusplus_single_step(
+        nd_item: NdItem,
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                     # IN READ-ONLY   (n_samples,)
         candidates_ids,                    # IN             (n_candidates,)
@@ -167,13 +184,13 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
         first_candidate_idx = zero_idx
 
-        local_col_idx = dpex.get_local_id(zero_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
 
-        window_loading_feature_offset = dpex.get_local_id(one_idx)
+        window_loading_feature_offset = nd_item.get_local_id(one_idx)
         window_loading_candidate_idx = local_col_idx
 
         sample_idx = (
-            (dpex.get_global_id(one_idx) * sub_group_size)
+            (nd_item.get_global_id(one_idx) * sub_group_size)
             + local_col_idx
         )
 
@@ -199,7 +216,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
                     candidates_window,
                 )
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
                 accumulate_sq_distances(
                     sample_idx,
@@ -213,7 +230,7 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
                 first_feature_idx += candidates_window_height
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             _save_sq_distances(
                 sample_idx,
@@ -227,10 +244,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
 
             first_candidate_idx += window_n_candidates
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _save_sq_distances(
         sample_idx,             # PARAM
@@ -259,4 +276,10 @@ def make_kmeansplusplus_single_step_fixed_window_kernel(
         math.ceil(n_windows_for_samples / candidates_window_height)
         * candidates_window_height,
     )
-    return kmeansplusplus_single_step[global_size, work_group_shape]
+
+    def kernel_call(*args):
+        dpex_exp.call_kernel(
+            kmeansplusplus_single_step, NdRange(global_size, work_group_shape), *args
+        )
+
+    return kernel_call

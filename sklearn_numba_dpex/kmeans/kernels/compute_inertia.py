@@ -1,8 +1,9 @@
 import math
 from functools import lru_cache
 
-import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import NdItem, NdRange
 
 
 @lru_cache
@@ -11,9 +12,10 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     zero_idx = np.int64(0)
     zero_init = dtype(0.0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def compute_inertia(
+        nd_item: NdItem,
         X_t,                          # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                # IN READ-ONLY   (n_features,)
         centroids_t,                  # IN READ-ONLY   (n_features, n_clusters)
@@ -22,7 +24,7 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
     ):
         # fmt: on
 
-        sample_idx = dpex.get_global_id(zero_idx)
+        sample_idx = nd_item.get_global_id(zero_idx)
 
         if sample_idx >= n_samples:
             return
@@ -39,4 +41,10 @@ def make_compute_inertia_kernel(n_samples, n_features, work_group_size, dtype):
         per_sample_inertia[sample_idx] = inertia * sample_weight[sample_idx]
 
     global_size = (math.ceil(n_samples / work_group_size)) * (work_group_size)
-    return compute_inertia[global_size, work_group_size]
+
+    def kernel_call(*args):
+        dpex_exp.call_kernel(
+            compute_inertia, NdRange((global_size,), (work_group_size,)), *args
+        )
+
+    return kernel_call

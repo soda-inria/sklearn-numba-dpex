@@ -2,7 +2,9 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -72,19 +74,20 @@ def make_label_assignment_fixed_window_kernel(
     zero_idx = np.int64(0)
     one_idx = np.int64(1)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def assignment(
+        nd_item: NdItem,
         X_t,                      # IN READ-ONLY   (n_features, n_samples)
         centroids_t,              # IN READ-ONLY   (n_features, n_clusters)
         centroids_half_l2_norm,   # IN             (n_clusters,)
         assignments_idx,          # OUT            (n_samples,)
     ):
         # fmt: on
-        local_row_idx = dpex.get_local_id(one_idx)
-        local_col_idx = dpex.get_local_id(zero_idx)
+        local_row_idx = nd_item.get_local_id(one_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
         sample_idx = (
-            (dpex.get_global_id(one_idx) * sub_group_size)
+            (nd_item.get_global_id(one_idx) * sub_group_size)
             + local_col_idx
         )
 
@@ -129,7 +132,7 @@ def make_label_assignment_fixed_window_kernel(
                     centroids_window,
                 )
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -144,7 +147,7 @@ def make_label_assignment_fixed_window_kernel(
 
                 first_feature_idx += centroids_window_height
 
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             min_idx, min_sample_pseudo_inertia = update_closest_centroid(
                 first_centroid_idx,
@@ -157,7 +160,7 @@ def make_label_assignment_fixed_window_kernel(
 
             first_centroid_idx += window_n_centroids
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _setitem_if(
             sample_idx < n_samples,
@@ -168,7 +171,7 @@ def make_label_assignment_fixed_window_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     def _setitem_if(condition, index, value, array):
         if condition:
             array[index] = value
@@ -182,4 +185,7 @@ def make_label_assignment_fixed_window_kernel(
         * centroids_window_height,
     )
 
-    return assignment[global_size, work_group_shape]
+    def kernel_call(*args):
+        dpex_exp.call_kernel(assignment, NdRange(global_size, work_group_shape), *args)
+
+    return kernel_call

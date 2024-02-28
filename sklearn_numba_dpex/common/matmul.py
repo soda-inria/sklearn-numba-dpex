@@ -2,7 +2,9 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _enforce_matmul_like_work_group_geometry
 
@@ -54,7 +56,7 @@ def make_matmul_2d_kernel(
     If `out_fused_elementwise_fn` is not None, it will be applied element-wise once to
     each element of the output array right before it is returned. This function is
     compiled and fused into the first kernel as a device function with the help of
-    `dpex.func`. This comes with limitations as explained in:
+    `dpex_exp.device_func`. This comes with limitations as explained in:
 
     https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
 
@@ -147,21 +149,21 @@ def make_matmul_2d_kernel(
 
     if multiply_fn is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def multiply_fn_(x, y):
             return x * y
 
     else:
-        multiply_fn_ = dpex.func(multiply_fn)
+        multiply_fn_ = dpex_exp.device_func(multiply_fn)
 
     if out_fused_elementwise_fn is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def out_fused_elementwise_fn(x):
             return x
 
     else:
-        out_fused_elementwise_fn = dpex.func(out_fused_elementwise_fn)
+        out_fused_elementwise_fn = dpex_exp.device_func(out_fused_elementwise_fn)
 
     # Under the same assumption, this value is equal to the number of results computed
     # by a single work group
@@ -268,21 +270,22 @@ def make_matmul_2d_kernel(
     grid_n_groups = global_grid_n_rows * global_grid_n_cols
     global_size = grid_n_groups * work_group_size
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def matmul(
+            nd_item: NdItem,
             X,                          # IN      (X_n_rows, n_cols)
             Y_t,                        # IN      (Y_t_n_rows, n_cols)
             result                      # OUT     (X_n_rows, Y_t_n_rows)
     ):
         # fmt: on
-        work_item_idx = dpex.get_local_id(zero_idx)
+        work_item_idx = nd_item.get_local_id(zero_idx)
 
         # Index the work items in the base sliding window:
         work_item_row_idx = work_item_idx // sub_group_size
         work_item_col_idx = work_item_idx % sub_group_size
 
-        group_idx = dpex.get_group_id(zero_idx)
+        group_idx = nd_item.get_group().get_group_id(zero_idx)
 
         # Get indices of the row and the column of the top-left corner of the sub-array
         # of results covered by this work group
@@ -352,7 +355,7 @@ def make_matmul_2d_kernel(
             )
             window_loaded_col_idx += sub_group_size
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             _accumulate_private_windows(
                 first_private_loaded_sliding_X_value_idx,
@@ -365,7 +368,7 @@ def make_matmul_2d_kernel(
                 private_result
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _write_result(
             group_first_row_idx + first_private_loaded_sliding_X_value_idx,
@@ -376,7 +379,7 @@ def make_matmul_2d_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _load_sliding_windows(
         work_item_row_idx,          # PARAM
@@ -419,7 +422,7 @@ def make_matmul_2d_kernel(
             Y_t_loaded_row_idx += base_result_window_side
             Y_t_local_loaded_row_idx += base_result_window_side
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _accumulate_private_windows(
         private_first_loaded_sliding_X_value_idx,    # PARAM
@@ -465,7 +468,7 @@ def make_matmul_2d_kernel(
 
             private_array_first_col += private_Y_t_sliding_window_width
 
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _write_result(
         result_first_row_idx,    # PARAM
@@ -486,14 +489,17 @@ def make_matmul_2d_kernel(
                         result_col_idx += nb_work_items_for_Y_t_window
             result_row_idx += nb_work_items_for_X_window
 
-    return matmul[global_size, work_group_size]
+    def kernel_call(*args):
+        dpex_exp.call_kernel(matmul, NdRange((global_size,), (work_group_size,)), *args)
+
+    return kernel_call
 
 
 def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multiply_fn):
 
     if private_result_array_width == 1:
 
-        @dpex.func
+        @dpex_exp.device_func
         def _accumulate_step_unrolled(
             i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
         ):
@@ -503,7 +509,7 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
 
     elif private_result_array_width == 2:
 
-        @dpex.func
+        @dpex_exp.device_func
         def _accumulate_step_unrolled(
             i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
         ):
@@ -516,7 +522,7 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
 
     elif private_result_array_width == 4:
 
-        @dpex.func
+        @dpex_exp.device_func
         def _accumulate_step_unrolled(
             i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
         ):
@@ -535,7 +541,7 @@ def _make_accumulate_step_unrolled_kernel_func(private_result_array_width, multi
 
     elif private_result_array_width == 8:
 
-        @dpex.func
+        @dpex_exp.device_func
         def _accumulate_step_unrolled(
             i, j, private_loaded_X_value, private_Y_t_sliding_window, private_result
         ):

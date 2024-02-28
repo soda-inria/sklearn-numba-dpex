@@ -1,8 +1,10 @@
 import dpctl
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 import pytest
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 
 # TODO: remove this test after going through the code base and reverting unnecessary
@@ -26,28 +28,28 @@ def test_need_to_workaround_numba_dpex_906():
 
     The hack consist in wrapping instructions that are suspected of triggering the
     bug (basically all write operations in kernels that also contain a barrier) in
-    `dpex.func` device functions.
+    `dpex_exp.device_func` device functions.
 
     This hack makes the code significantly harder to read and should be reverted ASAP.
     """
 
     dtype = np.float32
 
-    @dpex.kernel
-    def kernel(result):
-        local_idx = dpex.get_local_id(0)
+    @dpex_exp.kernel
+    def kernel(nd_item: NdItem, result):
+        local_idx = nd_item.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
 
         if local_idx < 1:
             local_values[0] = 1
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         if local_idx < 1:
             result[0] = 10
 
     result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
-    kernel[32, 32](result)
+    dpex_exp.call_kernel(kernel, NdRange((32,), (32,)), result)
 
     rationale = """If this test fails, it means that the bug reported at
     https://github.com/IntelPython/numba-dpex/issues/906 has been fixed, and all the
@@ -58,28 +60,28 @@ def test_need_to_workaround_numba_dpex_906():
     assert dpt.asnumpy(result)[0] != 10, rationale
 
     # Test that highlight how the hack works
-    @dpex.kernel
-    def kernel(result):
-        local_idx = dpex.get_local_id(0)
+    @dpex_exp.kernel
+    def kernel(nd_item: NdItem, result):
+        local_idx = nd_item.get_local_id(0)
         local_values = dpex.local.array((1,), dtype=dtype)
 
         _setitem_if((local_idx < 1), 0, 1, local_values)
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _setitem_if((local_idx < 1), 0, 10, result)
 
     _setitem_if = make_setitem_if_kernel_func()
 
     result = dpt.zeros((1), dtype=dtype, device=dpctl.SyclDevice("cpu"))
-    kernel[32, 32](result)
+    dpex_exp.call_kernel(kernel, NdRange((32,), (32,)), result)
 
     assert dpt.asnumpy(result)[0] == 10
 
 
 # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
 def make_setitem_if_kernel_func():
-    @dpex.func
+    @dpex_exp.device_func
     def _setitem_if(condition, index, value, array):
         if condition:
             array[index] = value

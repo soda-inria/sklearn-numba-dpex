@@ -3,7 +3,9 @@ from functools import lru_cache
 
 import dpctl.tensor as dpt
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import (
     _check_max_work_group_size,
@@ -41,10 +43,11 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     # TODO: the first call of partial_argmin_reduction in the final loop should be
     # written with only two arguments since "previous_result" does not exist yet.
     # It seems it's not possible to get a good factoring of the code to avoid copying
-    # most of the code for this with @dpex.kernel, for now we resort to branching.
-    @dpex.kernel
+    # most of the code for this with @dpex_exp.kernel, for now we resort to branching.
+    @dpex_exp.kernel
     # fmt: off
     def partial_argmin_reduction(
+        nd_item: NdItem,
         values,             # IN        (size,)
         previous_result,    # IN        (current_size,)
         argmin_indices,     # OUT       (math.ceil(
@@ -53,8 +56,8 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
                             #            ))
     ):
         # fmt: on
-        group_id = dpex.get_group_id(zero_idx)
-        local_work_id = dpex.get_local_id(zero_idx)
+        group_id = nd_item.get_group().get_group_id(zero_idx)
+        local_work_id = nd_item.get_local_id(zero_idx)
         first_work_id = local_work_id == zero_idx
 
         previous_result_size = previous_result.shape[zero_idx]
@@ -77,7 +80,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
             local_values,
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
         n_active_work_items = work_group_size
         for i in range(n_local_iterations):
             n_active_work_items = n_active_work_items // two_as_a_long
@@ -88,7 +91,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
                 local_values,
                 local_argmin
             )
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         _register_result(
             first_work_id,
@@ -100,7 +103,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_work_id,              # PARAM
@@ -144,7 +147,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_values[local_work_id] = y
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _local_iteration(
         local_work_id,              # PARAM
@@ -169,7 +172,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
         local_argmin[local_x_idx] = local_argmin[local_y_idx]
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906 # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _register_result(
         first_work_id,          # PARAM
@@ -194,7 +197,7 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
     previous_result = dpt.empty((1,), dtype=np.int32, device=device)
     while n_groups > 1:
         n_groups = math.ceil(n_groups / (2 * work_group_size))
-        sizes = (n_groups * work_group_size, work_group_size)
+        sizes = ((n_groups * work_group_size,), (work_group_size,))
         result = dpt.empty(n_groups, dtype=np.int32, device=device)
         kernels_and_empty_tensors_tuples.append(
             (partial_argmin_reduction, sizes, previous_result, result)
@@ -203,7 +206,9 @@ def make_argmin_reduction_1d_kernel(size, device, dtype, work_group_size="max"):
 
     def argmin_reduction(values):
         for kernel, sizes, previous_result, result in kernels_and_empty_tensors_tuples:
-            kernel[sizes](values, previous_result, result)
+            dpex_exp.call_kernel(
+                kernel, NdRange(*sizes), values, previous_result, result
+            )
         return result
 
     return argmin_reduction
@@ -261,7 +266,7 @@ def make_sum_reduction_2d_kernel(
     If `fused_elementwise_func` is not None, it will be applied element-wise
     once to each element of the input array at the beginning of the the first
     kernel invocation. This function is compiled and fused into the first
-    kernel as a device function with the help of `dpex.func`. This comes with
+    kernel as a device function with the help of `dpex_exp.device_func`. This comes with
     limitations as explained in:
 
     https://intelpython.github.io/numba-dpex/latest/user_guides/kernel_programming_guide/device-functions.html # noqa
@@ -382,7 +387,7 @@ def make_sum_reduction_2d_kernel(
 
         # TODO: manually dispatch the kernels with a SyclQueue
         for kernel, sizes, result in kernels_and_empty_tensors_pairs:
-            kernel[sizes](summands, result)
+            dpex_exp.call_kernel(kernel, NdRange(*sizes), summands, result)
             summands = result
 
         if is_1d:
@@ -400,12 +405,12 @@ def _prepare_sum_reduction_2d_axis0(
 
     if fused_elementwise_func is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def fused_elementwise_func_(x):
             return x
 
     else:
-        fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+        fused_elementwise_func_ = dpex_exp.device_func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -481,9 +486,10 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
     # ???: how does this strategy compares to having each thread reducing N contiguous
     # items ?
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
+        nd_item: NdItem,
         summands,    # IN        (sum_axis_size, n_cols)
         result,      # OUT       (math.ceil(size / (2 * reduction_block_size), n_cols)
     ):
@@ -504,13 +510,13 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
 
         # The work groups are indexed in row-major order. From this let's deduce the
         # position of the window within the column...
-        local_block_id_in_col = dpex.get_group_id(one_idx)
+        local_block_id_in_col = nd_item.get_group().get_group_id(one_idx)
 
         # Let's map the current work item to an index in a 2D grid, where the
         # `work_group_size` work items are mapped in row-major order to the array
         # of size `(n_sub_groups_per_work_group, sub_group_size)`.
-        local_row_idx = dpex.get_local_id(one_idx)     # 2D idx, first coordinate
-        local_col_idx = dpex.get_local_id(zero_idx)    # 2D idx, second coordinate
+        local_row_idx = nd_item.get_local_id(one_idx)     # 2D idx, first coordinate
+        local_col_idx = nd_item.get_local_id(zero_idx)    # 2D idx, second coordinate
 
         # This way, each row in the 2D index can be seen as mapped to two rows in the
         # corresponding window of items of the input `summands`, with the first row of
@@ -550,8 +556,9 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         # The current work item use the following second coordinate (given by the
         # position of the window in the grid of windows, and by the local position of
         # the work item in the 2D index):
+        zero_group_idx = nd_item.get_group().get_group_id(zero_idx)
         col_idx = (
-            (dpex.get_group_id(zero) * sub_group_size) + local_col_idx
+            (zero_group_idx * sub_group_size) + local_col_idx
         )
 
         sum_axis_size = summands.shape[zero_idx]
@@ -567,7 +574,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
             local_values
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # Then, the sums of two scalars that have been written in `local_array` are
         # further summed together into `local_array[0, :]`. At each iteration, half
@@ -595,7 +602,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
                 local_values
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # At this point local_values[0, :] + local_values[1, :] is equal to the sum of
         # all elements in summands that have been covered by the work group, we write
@@ -610,7 +617,7 @@ def _make_partial_sum_reduction_2d_axis0_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_row_idx,      # PARAM
@@ -646,12 +653,12 @@ def _prepare_sum_reduction_2d_axis1(
 
     if fused_elementwise_func is None:
 
-        @dpex.func
+        @dpex_exp.device_func
         def fused_elementwise_func_(x):
             return x
 
     else:
-        fused_elementwise_func_ = dpex.func(fused_elementwise_func)
+        fused_elementwise_func_ = dpex_exp.device_func(fused_elementwise_func)
 
     input_work_group_size = work_group_size
     work_group_size = _check_max_work_group_size(
@@ -715,9 +722,10 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
     _sum_and_set_items_if = _make_sum_and_set_items_if_kernel_func()
 
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def partial_sum_reduction(
+        nd_item: NdItem,
         summands,    # IN        (n_rows, n_cols)
         result,      # OUT       (n_rows, math.ceil(n_cols / (2 * work_group_size),)
     ):
@@ -735,12 +743,12 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
         # The work groups are indexed in row-major order, from that let's deduce the
         # row of `summands` to process by work items in `group_id`...
-        row_idx = dpex.get_group_id(one_idx)
+        row_idx = nd_item.get_group().get_group_id(one_idx)
 
         # ... and the position of the window within this row, ranging from 0
         # (first window in the row) to `n_work_groups_per_row - 1` (last window
         # in the row):
-        local_work_group_id_in_row = dpex.get_group_id(zero_idx)
+        local_work_group_id_in_row = nd_item.get_group().get_group_id(zero_idx)
 
         # Since all windows have size `reduction_block_size`, the position of the first
         # item in the window is given by:
@@ -754,7 +762,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         # The current work item is indexed locally within the group of work items, with
         # index `local_work_id` that can range from `0` (first item in the work group)
         # to `work_group_size - 1` (last item in the work group)
-        local_work_id = dpex.get_local_id(zero_idx)
+        local_work_id = nd_item.get_local_id(zero_idx)
 
         # Let's remember the size of the array to ensure that the last window in the
         # row do not try to access items outside the buffer.
@@ -796,7 +804,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
             local_values
         )
 
-        dpex.barrier(dpex.LOCAL_MEM_FENCE)
+        group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # Then, the sums of two scalars that have been written in `local_array` are
         # further summed together into `local_array[0]`. At each iteration, half
@@ -826,7 +834,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
                 local_values
             )
 
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # At this point local_values[0] + local_values[1] is equal to the sum of all
         # elements in summands that have been covered by the work group, we write it
@@ -842,7 +850,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _prepare_local_memory(
         local_work_id,          # PARAM
@@ -871,7 +879,7 @@ def _make_partial_sum_reduction_2d_axis1_kernel(
 
 # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
 def _make_sum_and_set_items_if_kernel_func():
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def set_sum_of_items_kernel_func(
             condition,          # PARAM

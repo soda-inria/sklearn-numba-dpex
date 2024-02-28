@@ -2,7 +2,9 @@ import math
 from functools import lru_cache
 
 import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
+from numba_dpex.kernel_api import AtomicRef, MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -139,16 +141,18 @@ def make_lloyd_single_step_fixed_window_kernel(
     # inputs such as X_t it is generally regarded as faster. Once support is available
     # (NB: it's already supported by numba.cuda) X_t should be an input to the factory
     # rather than an input to the kernel.
-    # XXX: parts of the kernels are factorized using `dpex.func` namespace that allow
+    # XXX: parts of the kernels are factorized using `dpex_exp.device_func` namespace
+    # that allow
     # defining device functions that can be used within `dpex.kernel` definitions.
-    # Howver, `dpex.func` functions does not support dpex.barrier calls nor
+    # Howver, `dpex_exp.device_func` functions does not support dpex.barrier calls nor
     # creating local or private arrays. As a consequence, factorizing the kmeans kernels
     # remains a best effort and some code patternsd remain duplicated, In particular
     # the following kernel definition contains a lot of inline comments but those
     # comments are not repeated in the similar patterns in the other kernels
-    @dpex.kernel
+    @dpex_exp.kernel
     # fmt: off
     def fused_lloyd_single_step(
+        nd_item: NdItem,
         X_t,                               # IN READ-ONLY   (n_features, n_samples)
         sample_weight,                     # IN READ-ONLY   (n_features,)
         current_centroids_t,               # IN             (n_features, n_clusters)
@@ -189,9 +193,9 @@ def make_lloyd_single_step_fixed_window_kernel(
         # reads like a SYCL kernel that maps 2D group size with a row-major order,
         # despite that `numba_dpex` chose to mimic the column-major order style of
         # mapping 2D group sizes in cuda.
-        sub_group_idx = dpex.get_global_id(one_idx)
-        local_row_idx = dpex.get_local_id(one_idx)
-        local_col_idx = dpex.get_local_id(zero_idx)
+        sub_group_idx = nd_item.get_global_id(one_idx)
+        local_row_idx = nd_item.get_local_id(one_idx)
+        local_col_idx = nd_item.get_local_id(zero_idx)
 
         # Let's start by remapping the 2D grid of work items to a 1D grid that reflect
         # how contiguous work items address one contiguoue sample_idx:
@@ -278,7 +282,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # Since other work items are responsible for loading the relevant data
                 # for the next step, we need to wait for completion of all work items
                 # before going forward
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
                 accumulate_dot_products(
                     sample_idx,
@@ -296,7 +300,7 @@ def make_lloyd_single_step_fixed_window_kernel(
                 # When the next iteration starts work items will overwrite shared memory
                 # with new values, so before that we must wait for all reading
                 # operations in the current iteration to be over for all work items.
-                dpex.barrier(dpex.LOCAL_MEM_FENCE)
+                group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
             # End of inner loop. The pseudo inertia is now computed for all centroids
             # in the window, we can coalesce it to the accumulation of the min pseudo
@@ -315,7 +319,7 @@ def make_lloyd_single_step_fixed_window_kernel(
             # When the next iteration starts work items will overwrite shared memory
             # with new values, so before that we must wait for all reading
             # operations in the current iteration to be over for all work items.
-            dpex.barrier(dpex.LOCAL_MEM_FENCE)
+            group_barrier(nd_item.get_group(), MemoryScope.WORK_GROUP)
 
         # End of outer loop. By now min_idx and min_sample_pseudo_inertia
         # contains the expected values.
@@ -335,7 +339,7 @@ def make_lloyd_single_step_fixed_window_kernel(
         )
 
     # HACK 906: see sklearn_numba_dpex.patches.tests.test_patches.test_need_to_workaround_numba_dpex_906  # noqa
-    @dpex.func
+    @dpex_exp.device_func
     # fmt: off
     def _update_result_data(
         sample_idx,                         # PARAM
@@ -400,25 +404,25 @@ def make_lloyd_single_step_fixed_window_kernel(
         privatization_idx = sub_group_idx % n_centroids_private_copies
         weight = sample_weight[sample_idx]
 
-        dpex.atomic.add(
+        AtomicRef(
             cluster_sizes_private_copies,
             (privatization_idx, min_idx),
-            weight
-        )
+        ).fetch_add(weight)
 
         for feature_idx in range(n_features):
-            dpex.atomic.add(
+            AtomicRef(
                 new_centroids_t_private_copies,
                 (privatization_idx, feature_idx, min_idx),
-                X_t[feature_idx, sample_idx] * weight,
-            )
+            ).fetch_add(X_t[feature_idx, sample_idx] * weight)
 
     global_size = (
         window_n_centroids,
         math.ceil(n_subgroups / centroids_window_height) * centroids_window_height,
     )
 
-    return (
-        n_centroids_private_copies,
-        fused_lloyd_single_step[global_size, work_group_shape],
-    )
+    def kernel_call(*args):
+        dpex_exp.call_kernel(
+            fused_lloyd_single_step, NdRange(global_size, work_group_shape), *args
+        )
+
+    return (n_centroids_private_copies, kernel_call)

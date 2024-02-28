@@ -3,9 +3,10 @@ from functools import lru_cache
 
 import dpctl
 import dpctl.tensor as dpt
-import numba_dpex as dpex
+import numba_dpex.experimental as dpex_exp
 import numpy as np
 from numba import float32, float64, int64, uint32, uint64
+from numba_dpex.kernel_api import NdRange
 
 from ._utils import _get_sequential_processing_device
 
@@ -46,11 +47,14 @@ def make_random_raw_kernel():
     Note, this always uses and updates state states[0].
     """
 
-    @dpex.kernel
+    @dpex_exp.kernel
     def _get_random_raw_kernel(states, result):
         result[zero_idx] = _xoroshiro128pp_next(states, zero_idx)
 
-    return _get_random_raw_kernel[1, 1]
+    def kernel_call(*args):
+        dpex_exp.call_kernel(_get_random_raw_kernel, NdRange((1,), (1,)), *args)
+
+    return kernel_call
 
 
 def make_rand_uniform_kernel_func(dtype):
@@ -80,7 +84,7 @@ def make_rand_uniform_kernel_func(dtype):
         convert_const = float64(uint64(1) << uint32(53))
         convert_const_one = float64(1)
 
-        @dpex.func
+        @dpex_exp.device_func
         def uint64_to_unit_float(x):
             """Convert uint64 to float64 value in the range [0.0, 1.0)"""
             return float64(x >> convert_rshift) * (convert_const_one / convert_const)
@@ -90,7 +94,7 @@ def make_rand_uniform_kernel_func(dtype):
         convert_const = float32(uint32(1) << uint32(24))
         convert_const_one = float32(1)
 
-        @dpex.func
+        @dpex_exp.device_func
         def uint64_to_unit_float(x):
             """Convert uint64 to float32 value in the range [0.0, 1.0)
 
@@ -109,7 +113,7 @@ def make_rand_uniform_kernel_func(dtype):
             f"dtype.name == {dtype.name}"
         )
 
-    @dpex.func
+    @dpex_exp.device_func
     def xoroshiro128pp_uniform(states, state_idx):
         """Return one random float in [0, 1)
 
@@ -195,7 +199,7 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
     splitmix64_rshift_2 = uint32(27)
     splitmix64_rshift_3 = uint32(31)
 
-    @dpex.func
+    @dpex_exp.device_func
     def _splitmix64_next(state):
         new_state = z = state + splitmix64_const_1
         z = (z ^ (z >> splitmix64_rshift_1)) * splitmix64_const_2
@@ -209,7 +213,7 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
     long_2 = int64(2)
     long_64 = int64(64)
 
-    @dpex.func
+    @dpex_exp.device_func
     def _xoroshiro128pp_jump(states, state_idx):
         """Advance the RNG in ``states[state_idx]`` by 2**64 steps."""
         s0 = jump_init
@@ -231,7 +235,7 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
 
     init_const_1 = np.uint64(0)
 
-    @dpex.kernel
+    @dpex_exp.kernel
     def init_xoroshiro128pp_states(states, seed):
         """
         Use SplitMix64 to generate an xoroshiro128p state from a uint64 seed.
@@ -260,13 +264,16 @@ def _make_init_xoroshiro128pp_states_kernel(n_states, subsequence_start):
             # and jump forward 2**64 steps
             _xoroshiro128pp_jump(states, idx)
 
-    return init_xoroshiro128pp_states[1, 1]
+    def kernel_call(*args):
+        dpex_exp.call_kernel(init_xoroshiro128pp_states, NdRange((1,), (1,)), *args)
+
+    return kernel_call
 
 
 _64_as_uint32 = uint32(64)
 
 
-@dpex.func
+@dpex_exp.device_func
 def _rotl(x, k):
     """Left rotate x by k bits. x is expected to be a uint64 integer."""
     return (x << k) | (x >> (_64_as_uint32 - k))
@@ -278,7 +285,7 @@ next_rot_3 = uint32(28)
 shift_1 = uint32(21)
 
 
-@dpex.func
+@dpex_exp.device_func
 def _xoroshiro128pp_next(states, state_idx):
     """Return the next random uint64 and advance the RNG in states[state_idx]."""
     s0 = states[state_idx, zero_idx]
