@@ -13,7 +13,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
+from numba_dpex.kernel_api import AtomicRef, MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import (
     _enforce_matmul_like_work_group_geometry,
@@ -955,11 +955,10 @@ def _make_create_radix_histogram_kernel(
         privatization_idx = (col_idx // work_group_size) % n_counts_private_copies
 
         if local_subgroup == zero_idx:
-            dpex.atomic.add(
+            AtomicRef(
                 privatized_counts,
                 (privatization_idx, row_idx, local_subgroup_work_id),
-                local_counts[zero_idx, local_subgroup_work_id],
-            )
+            ).fetch_add(local_counts[zero_idx, local_subgroup_work_id])
 
     # HACK 906: end
 
@@ -1080,9 +1079,9 @@ def _make_check_radix_histogram_kernel(radix_size, dtype, work_group_size):
             desired_masked_value_ = lexicographical_unmapping(desired_masked_value_)
 
         else:
-            new_active_row_idx = dpex.atomic.add(
-                new_n_active_rows, zero_idx, count_one_as_an_int
-            )
+            new_active_row_idx = AtomicRef(
+                new_n_active_rows, zero_idx,
+            ).fetch_add(np.int64(count_one_as_an_int))
             new_active_rows_mapping[new_active_row_idx] = row_idx
 
         desired_masked_value[row_idx] = desired_masked_value_
@@ -1218,8 +1217,9 @@ def _make_gather_topk_kernel(
         item = array_in[row_idx, col_idx]
 
         if item >= threshold:
-            result_col_idx_ = dpex.atomic.add(
-                result_col_idx, row_idx, count_one_as_an_int)
+            result_col_idx_ = AtomicRef(
+                result_col_idx, row_idx,
+            ).fetch_add(count_one_as_an_int)
             result[row_idx, result_col_idx_] = item
 
     @dpex_exp.device_func
@@ -1252,7 +1252,9 @@ def _make_gather_topk_kernel(
         if item <= threshold:
             return
 
-        result_col_idx_ = dpex.atomic.add(result_col_idx, row_idx, count_one_as_an_int)
+        result_col_idx_ = AtomicRef(
+            result_col_idx, row_idx,
+        ).fetch_add(count_one_as_an_int)
         result[row_idx, result_col_idx_] = item
 
     def kernel_call(*args):
@@ -1334,8 +1336,9 @@ def _make_gather_topk_idx_kernel(
         item = array_in[row_idx, col_idx]
 
         if item >= threshold:
-            result_col_idx_ = dpex.atomic.add(
-                result_col_idx, row_idx, count_one_as_an_int)
+            result_col_idx_ = AtomicRef(
+                result_col_idx, row_idx,
+            ).fetch_add(count_one_as_an_int)
             result[row_idx, result_col_idx_] = col_idx
 
     @dpex_exp.device_func
@@ -1362,9 +1365,9 @@ def _make_gather_topk_idx_kernel(
             return
 
         if item > threshold:
-            result_col_idx_ = dpex.atomic.add(
-                result_col_idx, row_idx, count_one_as_an_int
-            )
+            result_col_idx_ = AtomicRef(
+                result_col_idx, row_idx,
+            ).fetch_add(count_one_as_an_int)
             result[row_idx, result_col_idx_] = col_idx
             return
 
@@ -1375,9 +1378,9 @@ def _make_gather_topk_idx_kernel(
             n_threshold_occurences, row_idx, count_one_as_an_int)
 
         if remaining_n_threshold_occurences > zero_idx:
-            result_col_idx_ = dpex.atomic.add(
-                result_col_idx, row_idx, count_one_as_an_int
-            )
+            result_col_idx_ = AtomicRef(
+                result_col_idx, row_idx,
+            ).fetch_add(count_one_as_an_int)
             result[row_idx, result_col_idx_] = col_idx
 
     def kernel_call(*args):

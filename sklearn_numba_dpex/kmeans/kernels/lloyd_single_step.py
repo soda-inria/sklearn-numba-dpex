@@ -4,7 +4,7 @@ from functools import lru_cache
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import MemoryScope, NdItem, NdRange, group_barrier
+from numba_dpex.kernel_api import AtomicRef, MemoryScope, NdItem, NdRange, group_barrier
 
 from sklearn_numba_dpex.common._utils import _check_max_work_group_size
 
@@ -404,18 +404,16 @@ def make_lloyd_single_step_fixed_window_kernel(
         privatization_idx = sub_group_idx % n_centroids_private_copies
         weight = sample_weight[sample_idx]
 
-        dpex.atomic.add(
+        AtomicRef(
             cluster_sizes_private_copies,
             (privatization_idx, min_idx),
-            weight
-        )
+        ).fetch_add(weight)
 
         for feature_idx in range(n_features):
-            dpex.atomic.add(
+            AtomicRef(
                 new_centroids_t_private_copies,
                 (privatization_idx, feature_idx, min_idx),
-                X_t[feature_idx, sample_idx] * weight,
-            )
+            ).fetch_add(X_t[feature_idx, sample_idx] * weight)
 
     global_size = (
         window_n_centroids,

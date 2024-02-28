@@ -5,7 +5,7 @@ import dpctl.tensor as dpt
 import numba_dpex as dpex
 import numba_dpex.experimental as dpex_exp
 import numpy as np
-from numba_dpex.kernel_api import NdItem, NdRange
+from numba_dpex.kernel_api import AtomicRef, NdItem, NdRange
 
 zero_idx = np.int64(0)
 
@@ -176,9 +176,9 @@ def make_reduce_centroid_data_kernel(
 
         # register empty clusters
         if sum_ == zero:
-            current_n_empty_clusters = dpex.atomic.add(
-                n_empty_clusters, zero_idx, one_incr
-            )
+            current_n_empty_clusters = AtomicRef(
+                n_empty_clusters, zero_idx,
+            ).fetch_add(one_incr)
             empty_clusters_list[current_n_empty_clusters] = cluster_idx
 
     def reduce_centroid_data_kernel(*args):
@@ -304,9 +304,9 @@ def make_get_nb_distinct_clusters_kernel(
         if clusters_seen[label] > zero_idx:
             return
 
-        previous_value = dpex.atomic.add(clusters_seen, label, one_incr)
+        previous_value = AtomicRef(clusters_seen, label).fetch_add(one_incr)
         if previous_value == zero_idx:
-            dpex.atomic.add(nb_distinct_clusters, zero_idx, one_incr)
+            AtomicRef(nb_distinct_clusters, zero_idx).fetch_add(one_incr)
 
     global_size = math.ceil(n_samples / work_group_size) * work_group_size
 
